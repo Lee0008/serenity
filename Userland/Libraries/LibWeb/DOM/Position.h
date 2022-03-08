@@ -18,8 +18,6 @@ public:
     Position() { }
     Position(Node&, unsigned offset);
 
-    ~Position();
-
     bool is_valid() const { return m_node; }
 
     Node* node() { return m_node; }
@@ -53,9 +51,9 @@ private:
 namespace AK {
 template<>
 struct Formatter<Web::DOM::Position> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const Web::DOM::Position& value)
+    ErrorOr<void> format(FormatBuilder& builder, Web::DOM::Position const& value)
     {
-        Formatter<StringView>::format(builder, value.to_string());
+        return Formatter<StringView>::format(builder, value.to_string());
     }
 };
 

@@ -21,6 +21,7 @@ public:
     enum class StackingContextPaintPhase {
         BackgroundAndBorders,
         Floats,
+        BackgroundAndBordersForInlineLevelAndReplaced,
         Foreground,
         FocusAndOverlay,
     };
@@ -35,6 +36,8 @@ private:
     Box& m_box;
     StackingContext* const m_parent { nullptr };
     Vector<StackingContext*> m_children;
+
+    void paint_internal(PaintContext&);
 };
 
 }

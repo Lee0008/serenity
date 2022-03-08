@@ -8,6 +8,7 @@
 
 #include <AK/String.h>
 #include <AK/Types.h>
+#include <LibCpp/Parser.h>
 #include <LibGUI/AutocompleteProvider.h>
 #include <LibIPC/Decoder.h>
 #include <LibIPC/Encoder.h>
@@ -18,57 +19,40 @@ template<>
 inline bool encode(IPC::Encoder& encoder, const GUI::AutocompleteProvider::Entry& response)
 {
     encoder << response.completion;
-    encoder << (u64)response.partial_input_length;
-    encoder << (u32)response.kind;
-    encoder << (u32)response.language;
+    encoder << response.partial_input_length;
+    encoder << response.language;
+    encoder << response.display_text;
+    encoder << response.hide_autocomplete_after_applying;
     return true;
 }
 
 template<>
-inline bool decode(IPC::Decoder& decoder, GUI::AutocompleteProvider::Entry& response)
+inline ErrorOr<void> decode(IPC::Decoder& decoder, GUI::AutocompleteProvider::Entry& response)
 {
-    u32 kind = 0;
-    u32 language = 0;
-    u64 partial_input_length = 0;
-    bool ok = decoder.decode(response.completion)
-        && decoder.decode(partial_input_length)
-        && decoder.decode(kind)
-        && decoder.decode(language);
-
-    if (ok) {
-        response.kind = static_cast<GUI::AutocompleteProvider::CompletionKind>(kind);
-        response.language = static_cast<GUI::AutocompleteProvider::Language>(language);
-        response.partial_input_length = partial_input_length;
-    }
-
-    return ok;
+    TRY(decoder.decode(response.completion));
+    TRY(decoder.decode(response.partial_input_length));
+    TRY(decoder.decode(response.language));
+    TRY(decoder.decode(response.display_text));
+    TRY(decoder.decode(response.hide_autocomplete_after_applying));
+    return {};
 }
 
 template<>
 inline bool encode(Encoder& encoder, const GUI::AutocompleteProvider::ProjectLocation& location)
 {
     encoder << location.file;
-    encoder << (u64)location.line;
-    encoder << (u64)location.column;
+    encoder << location.line;
+    encoder << location.column;
     return true;
 }
 
 template<>
-inline bool decode(Decoder& decoder, GUI::AutocompleteProvider::ProjectLocation& location)
+inline ErrorOr<void> decode(Decoder& decoder, GUI::AutocompleteProvider::ProjectLocation& location)
 {
-    u64 line = 0;
-    u64 column = 0;
-    if (!decoder.decode(location.file))
-        return false;
-    if (!decoder.decode(line))
-        return false;
-    if (!decoder.decode(column))
-        return false;
-
-    location.line = line;
-    location.column = column;
-
-    return true;
+    TRY(decoder.decode(location.file));
+    TRY(decoder.decode(location.line));
+    TRY(decoder.decode(location.column));
+    return {};
 }
 
 template<>
@@ -77,29 +61,66 @@ inline bool encode(Encoder& encoder, const GUI::AutocompleteProvider::Declaratio
     encoder << declaration.name;
     if (!encode(encoder, declaration.position))
         return false;
-    encoder << (u32)declaration.type;
+    encoder << declaration.type;
     encoder << declaration.scope;
     return true;
 }
 
 template<>
-inline bool decode(Decoder& decoder, GUI::AutocompleteProvider::Declaration& declaration)
+inline ErrorOr<void> decode(Decoder& decoder, GUI::AutocompleteProvider::Declaration& declaration)
 {
-    if (!decoder.decode(declaration.name))
-        return false;
+    TRY(decoder.decode(declaration.name));
+    TRY(decoder.decode(declaration.position));
+    TRY(decoder.decode(declaration.type));
+    TRY(decoder.decode(declaration.scope));
+    return {};
+}
 
-    if (!decode(decoder, declaration.position))
-        return false;
-
-    u32 type;
-    if (!decoder.decode(type))
-        return false;
-
-    if (!decoder.decode(declaration.scope))
-        return false;
-
-    declaration.type = static_cast<GUI::AutocompleteProvider::DeclarationType>(type);
+template<>
+inline bool encode(Encoder& encoder, Cpp::Parser::TodoEntry const& entry)
+{
+    encoder << entry.content;
+    encoder << entry.filename;
+    encoder << entry.line;
+    encoder << entry.column;
     return true;
+}
+
+template<>
+inline ErrorOr<void> decode(Decoder& decoder, Cpp::Parser::TodoEntry& entry)
+{
+    TRY(decoder.decode(entry.content));
+    TRY(decoder.decode(entry.filename));
+    TRY(decoder.decode(entry.line));
+    TRY(decoder.decode(entry.column));
+    return {};
+}
+
+template<>
+inline bool encode(Encoder& encoder, const GUI::AutocompleteProvider::TokenInfo& location)
+{
+    encoder << (u32)location.type;
+    static_assert(sizeof(location.type) == sizeof(u32));
+    encoder << location.start_line;
+    encoder << location.start_column;
+    encoder << location.end_line;
+    encoder << location.end_column;
+    return true;
+}
+
+template<>
+inline ErrorOr<void> decode(Decoder& decoder, GUI::AutocompleteProvider::TokenInfo& entry)
+{
+    u32 semantic_type { 0 };
+    static_assert(sizeof(semantic_type) == sizeof(entry.type));
+
+    TRY(decoder.decode(semantic_type));
+    entry.type = static_cast<GUI::AutocompleteProvider::TokenInfo::SemanticType>(semantic_type);
+    TRY(decoder.decode(entry.start_line));
+    TRY(decoder.decode(entry.start_column));
+    TRY(decoder.decode(entry.end_line));
+    TRY(decoder.decode(entry.end_column));
+    return {};
 }
 
 }

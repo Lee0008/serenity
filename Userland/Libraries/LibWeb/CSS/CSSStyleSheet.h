@@ -6,16 +6,21 @@
 
 #pragma once
 
+#include <AK/Function.h>
 #include <AK/NonnullRefPtrVector.h>
-#include <AK/TypeCasts.h>
-#include <LibWeb/CSS/CSSImportRule.h>
 #include <LibWeb/CSS/CSSRule.h>
+#include <LibWeb/CSS/CSSRuleList.h>
+#include <LibWeb/CSS/CSSStyleRule.h>
 #include <LibWeb/CSS/StyleSheet.h>
 #include <LibWeb/Loader/Resource.h>
 
 namespace Web::CSS {
 
-class CSSStyleSheet final : public StyleSheet {
+class CSSImportRule;
+
+class CSSStyleSheet final
+    : public StyleSheet
+    , public Weakable<CSSStyleSheet> {
 public:
     using WrapperType = Bindings::CSSStyleSheetWrapper;
 
@@ -26,47 +31,31 @@ public:
 
     virtual ~CSSStyleSheet() override;
 
+    void set_owner_css_rule(CSSRule* rule) { m_owner_css_rule = rule; }
+
     virtual String type() const override { return "text/css"; }
 
-    const NonnullRefPtrVector<CSSRule>& rules() const { return m_rules; }
-    NonnullRefPtrVector<CSSRule>& rules() { return m_rules; }
+    CSSRuleList const& rules() const { return m_rules; }
+    CSSRuleList& rules() { return m_rules; }
+    void set_rules(NonnullRefPtr<CSSRuleList> rules) { m_rules = move(rules); }
 
-    template<typename Callback>
-    void for_each_effective_style_rule(Callback callback) const
-    {
-        for (auto& rule : m_rules)
-            if (rule.type() == CSSRule::Type::Style) {
-                callback(downcast<CSSStyleRule>(rule));
-            } else if (rule.type() == CSSRule::Type::Import) {
-                const auto& import_rule = downcast<CSSImportRule>(rule);
-                if (import_rule.has_import_result())
-                    import_rule.loaded_style_sheet()->for_each_effective_style_rule(callback);
-            }
-    }
+    CSSRuleList* css_rules() { return m_rules; }
+    CSSRuleList const* css_rules() const { return m_rules; }
 
-    template<typename Callback>
-    bool for_first_not_loaded_import_rule(Callback callback)
-    {
-        for (auto& rule : m_rules)
-            if (rule.type() == CSSRule::Type::Import) {
-                auto& import_rule = downcast<CSSImportRule>(rule);
-                if (!import_rule.has_import_result()) {
-                    callback(import_rule);
-                    return true;
-                }
+    DOM::ExceptionOr<unsigned> insert_rule(StringView rule, unsigned index);
+    DOM::ExceptionOr<void> remove_rule(unsigned index);
+    DOM::ExceptionOr<void> delete_rule(unsigned index);
 
-                if (import_rule.loaded_style_sheet()->for_first_not_loaded_import_rule(callback)) {
-                    return true;
-                }
-            }
-
-        return false;
-    }
+    void for_each_effective_style_rule(Function<void(CSSStyleRule const&)> const& callback) const;
+    // Returns whether the match state of any media queries changed after evaluation.
+    bool evaluate_media_queries(HTML::Window const&);
 
 private:
     explicit CSSStyleSheet(NonnullRefPtrVector<CSSRule>);
 
-    NonnullRefPtrVector<CSSRule> m_rules;
+    NonnullRefPtr<CSSRuleList> m_rules;
+
+    WeakPtr<CSSRule> m_owner_css_rule;
 };
 
 }

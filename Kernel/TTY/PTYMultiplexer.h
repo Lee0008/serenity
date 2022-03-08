@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,43 +8,34 @@
 
 #include <AK/Badge.h>
 #include <Kernel/Devices/CharacterDevice.h>
-#include <Kernel/Lock.h>
 
 namespace Kernel {
 
 class MasterPTY;
 
 class PTYMultiplexer final : public CharacterDevice {
-    AK_MAKE_ETERNAL
 public:
     PTYMultiplexer();
     virtual ~PTYMultiplexer() override;
 
-    static void initialize()
-    {
-        the();
-    }
+    static void initialize();
     static PTYMultiplexer& the();
 
     // ^CharacterDevice
-    virtual KResultOr<NonnullRefPtr<FileDescription>> open(int options) override;
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override { return 0; }
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return 0; }
-    virtual bool can_read(const FileDescription&, size_t) const override { return true; }
-    virtual bool can_write(const FileDescription&, size_t) const override { return true; }
+    virtual ErrorOr<NonnullRefPtr<OpenFileDescription>> open(int options) override;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override { return 0; }
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return 0; }
+    virtual bool can_read(const OpenFileDescription&, u64) const override { return true; }
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return true; }
 
     void notify_master_destroyed(Badge<MasterPTY>, unsigned index);
 
-    // ^Device
-    virtual mode_t required_mode() const override { return 0666; }
-    virtual String device_name() const override { return "ptmx"; }
-
 private:
     // ^CharacterDevice
-    virtual const char* class_name() const override { return "PTYMultiplexer"; }
+    virtual StringView class_name() const override { return "PTYMultiplexer"sv; }
 
-    Lock m_lock { "PTYMultiplexer" };
-    Vector<unsigned> m_freelist;
+    static constexpr size_t max_pty_pairs = 64;
+    SpinlockProtected<Vector<unsigned, max_pty_pairs>> m_freelist;
 };
 
 }

@@ -98,3 +98,48 @@ describe("errors", () => {
         }).toThrowWithMessage(TypeError, "[object Object] is not iterable");
     });
 });
+
+test("allow binding patterns", () => {
+    let counter = 0;
+    for (let [a, b] of [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]) {
+        expect(a + 1).toBe(b);
+        counter++;
+    }
+    expect(counter).toBe(3);
+});
+
+describe("special left hand sides", () => {
+    test("allow member expression as variable", () => {
+        const f = {};
+        for (f.a of "abc");
+        expect(f.a).toBe("c");
+    });
+
+    test("allow member expression of function call", () => {
+        const b = {};
+        function f() {
+            return b;
+        }
+
+        for (f().a of "abc");
+
+        expect(f().a).toBe("c");
+    });
+
+    test("call function is allowed in parsing but fails in runtime", () => {
+        function f() {
+            expect().fail();
+        }
+
+        // Does not fail since it does not iterate but prettier does not like it so we use eval.
+        expect("for (f() of []);").toEvalTo(undefined);
+
+        expect(() => {
+            eval("for (f() of [0]) { expect().fail() }");
+        }).toThrowWithMessage(ReferenceError, "Invalid left-hand side in assignment");
+    });
+});

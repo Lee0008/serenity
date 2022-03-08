@@ -5,6 +5,7 @@
  */
 
 #include <AK/Endian.h>
+#include <AK/Memory.h>
 #include <AK/Types.h>
 #include <LibCrypto/Hash/SHA1.h>
 
@@ -63,7 +64,7 @@ inline void SHA1::transform(const u8* data)
     c = 0;
     d = 0;
     e = 0;
-    __builtin_memset(blocks, 0, 16 * sizeof(u32));
+    secure_zero(blocks, 16 * sizeof(u32));
 }
 
 void SHA1::update(const u8* message, size_t length)

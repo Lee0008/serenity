@@ -17,7 +17,7 @@ namespace Cipher {
 template<typename T>
 class Mode {
 public:
-    virtual ~Mode() { }
+    virtual ~Mode() = default;
 
     virtual void encrypt(ReadonlyBytes in, Bytes& out, ReadonlyBytes ivec = {}, Bytes* ivec_out = nullptr) = 0;
     virtual void decrypt(ReadonlyBytes in, Bytes& out, ReadonlyBytes ivec = {}) = 0;
@@ -26,7 +26,7 @@ public:
 
     const T& cipher() const { return m_cipher; }
 
-    ByteBuffer create_aligned_buffer(size_t input_size) const
+    ErrorOr<ByteBuffer> create_aligned_buffer(size_t input_size) const
     {
         size_t remainder = (input_size + T::block_size()) % T::block_size();
         if (remainder == 0)
@@ -35,8 +35,14 @@ public:
             return ByteBuffer::create_uninitialized(input_size + T::block_size() - remainder);
     }
 
+#ifndef KERNEL
     virtual String class_name() const = 0;
-    T& cipher() { return m_cipher; }
+#endif
+
+    T& cipher()
+    {
+        return m_cipher;
+    }
 
 protected:
     virtual void prune_padding(Bytes& data)

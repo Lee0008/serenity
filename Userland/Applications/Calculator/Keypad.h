@@ -1,11 +1,13 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include "KeypadValue.h"
 #include <AK/String.h>
 
 // This type implements number typing and
@@ -15,15 +17,15 @@
 
 class Keypad final {
 public:
-    Keypad();
-    ~Keypad();
+    Keypad() = default;
+    ~Keypad() = default;
 
     void type_digit(int digit);
     void type_decimal_point();
     void type_backspace();
 
-    double value() const;
-    void set_value(double);
+    KeypadValue value() const;
+    void set_value(KeypadValue);
 
     String to_string() const;
 

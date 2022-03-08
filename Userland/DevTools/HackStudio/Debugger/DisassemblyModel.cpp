@@ -1,27 +1,28 @@
 /*
  * Copyright (c) 2020, Luke Wilde <lukew@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "DisassemblyModel.h"
-#include <AK/MappedFile.h>
 #include <AK/StringBuilder.h>
+#include <LibCore/MappedFile.h>
 #include <LibDebug/DebugSession.h>
 #include <LibELF/Image.h>
+#include <LibSymbolication/Symbolication.h>
 #include <LibX86/Disassembler.h>
 #include <LibX86/ELFSymbolProvider.h>
-#include <ctype.h>
 #include <stdio.h>
 
 namespace HackStudio {
 
 DisassemblyModel::DisassemblyModel(const Debug::DebugSession& debug_session, const PtraceRegisters& regs)
 {
-    auto lib = debug_session.library_at(regs.eip);
+    auto lib = debug_session.library_at(regs.ip());
     if (!lib)
         return;
-    auto containing_function = lib->debug_info->get_containing_function(regs.eip - lib->base_address);
+    auto containing_function = lib->debug_info->get_containing_function(regs.ip() - lib->base_address);
     if (!containing_function.has_value()) {
         dbgln("Cannot disassemble as the containing function was not found.");
         return;
@@ -30,8 +31,10 @@ DisassemblyModel::DisassemblyModel(const Debug::DebugSession& debug_session, con
     OwnPtr<ELF::Image> kernel_elf;
     const ELF::Image* elf = nullptr;
 
-    if (containing_function.value().address_low >= 0xc0000000) {
-        auto file_or_error = MappedFile::map("/boot/Kernel");
+    auto maybe_kernel_base = Symbolication::kernel_base();
+
+    if (maybe_kernel_base.has_value() && containing_function.value().address_low >= maybe_kernel_base.value()) {
+        auto file_or_error = Core::MappedFile::map("/boot/Kernel.debug");
         if (file_or_error.is_error())
             return;
         kernel_elf = make<ELF::Image>(file_or_error.value()->bytes());
@@ -63,10 +66,6 @@ DisassemblyModel::DisassemblyModel(const Debug::DebugSession& debug_session, con
 
         offset_into_symbol += insn.value().length();
     }
-}
-
-DisassemblyModel::~DisassemblyModel()
-{
 }
 
 int DisassemblyModel::row_count(const GUI::ModelIndex&) const
@@ -107,11 +106,6 @@ GUI::Variant DisassemblyModel::data(const GUI::ModelIndex& index, GUI::ModelRole
         return {};
     }
     return {};
-}
-
-void DisassemblyModel::update()
-{
-    did_update();
 }
 
 }

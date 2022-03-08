@@ -7,10 +7,12 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/ComboBox.h>
 #include <LibGUI/Desktop.h>
+#include <LibGUI/Event.h>
 #include <LibGUI/ListView.h>
 #include <LibGUI/Model.h>
 #include <LibGUI/Scrollbar.h>
 #include <LibGUI/TextBox.h>
+#include <LibGUI/TextEditor.h>
 #include <LibGUI/Window.h>
 
 REGISTER_WIDGET(GUI, ComboBox)
@@ -34,7 +36,17 @@ private:
         if (!is_focused())
             set_focus(true);
         if (on_mousewheel)
-            on_mousewheel(event.wheel_delta());
+            on_mousewheel(event.wheel_delta_y());
+    }
+
+    virtual void keydown_event(KeyEvent& event) override
+    {
+        if (event.key() == Key_Escape) {
+            if (is_focused())
+                set_focus(false);
+            event.accept();
+        } else
+            TextEditor::keydown_event(event);
     }
 };
 
@@ -75,7 +87,8 @@ ComboBox::ComboBox()
     };
 
     m_open_button = add<Button>();
-    m_open_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/downward-triangle.png"));
+    m_open_button->set_button_style(Gfx::ButtonStyle::ThickCap);
+    m_open_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/downward-triangle.png").release_value_but_fixme_should_propagate_errors());
     m_open_button->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_open_button->on_click = [this](auto) {
         if (m_list_window->is_visible())
@@ -110,7 +123,7 @@ ComboBox::ComboBox()
     };
 
     m_list_view->on_activation = [this](auto& index) {
-        deferred_invoke([this, index](auto&) {
+        deferred_invoke([this, index] {
             selection_updated(index);
             if (on_change)
                 on_change(m_editor->text(), index);
@@ -128,7 +141,7 @@ ComboBox::~ComboBox()
 {
 }
 
-void ComboBox::set_editor_placeholder(const StringView& placeholder)
+void ComboBox::set_editor_placeholder(StringView placeholder)
 {
     m_editor->set_placeholder(placeholder);
 }
@@ -188,12 +201,15 @@ void ComboBox::set_model(NonnullRefPtr<Model> model)
     m_list_view->set_model(move(model));
 }
 
-void ComboBox::set_selected_index(size_t index)
+void ComboBox::set_selected_index(size_t index, AllowCallback allow_callback)
 {
     if (!m_list_view->model())
         return;
+    size_t previous_index = selected_index();
     TemporaryChange change(m_updating_model, true);
     m_list_view->set_cursor(m_list_view->model()->index(index, 0), AbstractView::SelectionUpdate::Set);
+    if (previous_index != selected_index() && on_change && allow_callback == AllowCallback::Yes)
+        on_change(m_editor->text(), m_list_view->cursor_index());
 }
 
 size_t ComboBox::selected_index() const
@@ -238,7 +254,7 @@ void ComboBox::open()
     // Change direction and go upwards to prevent the list from becoming
     // infinitesimally small when pushed up against the screen edge.
     auto minimum_height = min(3, model()->row_count()) * m_list_view->item_height() + m_list_view->frame_thickness() * 2;
-    bool go_upwards_instead = list_window_rect.height() <= minimum_height;
+    bool go_upwards_instead = list_window_rect.height() < minimum_height;
     if (go_upwards_instead) {
         auto origin_point = my_screen_rect.top_left();
         list_window_rect = { Gfx::IntPoint { origin_point.x(), origin_point.y() - size.height() }, size };

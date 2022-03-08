@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,7 +16,7 @@
 
 class PagemapPaintingDelegate final : public GUI::TableCellPaintingDelegate {
 public:
-    virtual ~PagemapPaintingDelegate() override { }
+    virtual ~PagemapPaintingDelegate() override = default;
 
     virtual void paint(GUI::Painter& painter, const Gfx::IntRect& a_rect, const Gfx::Palette&, const GUI::ModelIndex& index) override
     {
@@ -47,13 +48,13 @@ public:
 ProcessMemoryMapWidget::ProcessMemoryMapWidget()
 {
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 4, 4, 4, 4 });
+    layout()->set_margins(4);
     m_table_view = add<GUI::TableView>();
     Vector<GUI::JsonArrayModel::FieldSpec> pid_vm_fields;
     pid_vm_fields.empend(
         "Address", Gfx::TextAlignment::CenterLeft,
-        [](auto& object) { return String::formatted("{:p}", object.get("address").to_u32()); },
-        [](auto& object) { return object.get("address").to_u32(); });
+        [](auto& object) { return String::formatted("{:p}", object.get("address").to_u64()); },
+        [](auto& object) { return object.get("address").to_u64(); });
     pid_vm_fields.empend("size", "Size", Gfx::TextAlignment::CenterRight);
     pid_vm_fields.empend("amount_resident", "Resident", Gfx::TextAlignment::CenterRight);
     pid_vm_fields.empend("amount_dirty", "Dirty", Gfx::TextAlignment::CenterRight);
@@ -99,16 +100,12 @@ ProcessMemoryMapWidget::ProcessMemoryMapWidget()
     pid_vm_fields.empend("cow_pages", "# CoW", Gfx::TextAlignment::CenterRight);
     pid_vm_fields.empend("name", "Name", Gfx::TextAlignment::CenterLeft);
     m_json_model = GUI::JsonArrayModel::create({}, move(pid_vm_fields));
-    m_table_view->set_model(GUI::SortingProxyModel::create(*m_json_model));
+    m_table_view->set_model(MUST(GUI::SortingProxyModel::create(*m_json_model)));
 
     m_table_view->set_column_painting_delegate(7, make<PagemapPaintingDelegate>());
 
     m_table_view->set_key_column_and_sort_order(0, GUI::SortOrder::Ascending);
     m_timer = add<Core::Timer>(1000, [this] { refresh(); });
-}
-
-ProcessMemoryMapWidget::~ProcessMemoryMapWidget()
-{
 }
 
 void ProcessMemoryMapWidget::set_pid(pid_t pid)
@@ -122,5 +119,5 @@ void ProcessMemoryMapWidget::set_pid(pid_t pid)
 void ProcessMemoryMapWidget::refresh()
 {
     if (m_pid != -1)
-        m_json_model->update();
+        m_json_model->invalidate();
 }

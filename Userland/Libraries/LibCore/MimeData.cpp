@@ -50,7 +50,7 @@ void MimeData::set_text(const String& text)
     set_data("text/plain", text.to_byte_buffer());
 }
 
-String guess_mime_type_based_on_filename(const StringView& path)
+String guess_mime_type_based_on_filename(StringView path)
 {
     if (path.ends_with(".pbm", CaseSensitivity::CaseInsensitive))
         return "image/x‑portable‑bitmap";
@@ -66,6 +66,8 @@ String guess_mime_type_based_on_filename(const StringView& path)
         return "image/bmp";
     if (path.ends_with(".jpg", CaseSensitivity::CaseInsensitive) || path.ends_with(".jpeg", CaseSensitivity::CaseInsensitive))
         return "image/jpeg";
+    if (path.ends_with(".qoi", CaseSensitivity::CaseInsensitive))
+        return "image/x-qoi";
     if (path.ends_with(".svg", CaseSensitivity::CaseInsensitive))
         return "image/svg+xml";
     if (path.ends_with(".md", CaseSensitivity::CaseInsensitive))
@@ -112,6 +114,7 @@ String guess_mime_type_based_on_filename(const StringView& path)
     __ENUMERATE_MIME_TYPE_HEADER(png, "image/png", 0, 8, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)                                            \
     __ENUMERATE_MIME_TYPE_HEADER(ppm, "image/x-portable-pixmap", 0, 3, 0x50, 0x33, 0x0A)                                                         \
     __ENUMERATE_MIME_TYPE_HEADER(qcow, "extra/qcow", 0, 3, 'Q', 'F', 'I')                                                                        \
+    __ENUMERATE_MIME_TYPE_HEADER(qoi, "image/x-qoi", 0, 4, 'q', 'o', 'i', 'f')                                                                   \
     __ENUMERATE_MIME_TYPE_HEADER(rtf, "application/rtf", 0, 6, 0x7B, 0x5C, 0x72, 0x74, 0x66, 0x31)                                               \
     __ENUMERATE_MIME_TYPE_HEADER(sevenzip, "application/x-7z-compressed", 0, 6, 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C)                              \
     __ENUMERATE_MIME_TYPE_HEADER(shell, "text/x-shellscript", 0, 10, '#', '!', '/', 'b', 'i', 'n', '/', 's', 'h', '\n')                          \
@@ -137,7 +140,7 @@ String guess_mime_type_based_on_filename(const StringView& path)
 ENUMERATE_HEADER_CONTENTS
 #undef __ENUMERATE_MIME_TYPE_HEADER
 
-Optional<String> guess_mime_type_based_on_sniffed_bytes(const ReadonlyBytes& bytes)
+Optional<String> guess_mime_type_based_on_sniffed_bytes(ReadonlyBytes bytes)
 {
 #define __ENUMERATE_MIME_TYPE_HEADER(var_name, mime_type, pattern_offset, pattern_size, ...)                       \
     if (static_cast<ssize_t>(bytes.size()) >= pattern_offset && bytes.slice(pattern_offset).starts_with(var_name)) \

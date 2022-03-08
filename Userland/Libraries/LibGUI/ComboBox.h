@@ -32,7 +32,7 @@ public:
     void set_model(NonnullRefPtr<Model>);
 
     size_t selected_index() const;
-    void set_selected_index(size_t index);
+    void set_selected_index(size_t index, AllowCallback = AllowCallback::Yes);
 
     bool only_allow_values_from_model() const { return m_only_allow_values_from_model; }
     void set_only_allow_values_from_model(bool);
@@ -40,7 +40,7 @@ public:
     int model_column() const;
     void set_model_column(int);
 
-    void set_editor_placeholder(const StringView& placeholder);
+    void set_editor_placeholder(StringView placeholder);
     const String& editor_placeholder() const;
 
     Function<void(const String&, const ModelIndex&)> on_change;

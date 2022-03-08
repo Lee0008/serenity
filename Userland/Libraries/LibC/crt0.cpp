@@ -14,16 +14,25 @@
 #ifndef _DYNAMIC_LOADER
 extern "C" {
 
-extern u32 __stack_chk_guard;
+extern size_t __stack_chk_guard;
+extern bool s_global_initializers_ran;
 
 int main(int, char**, char**);
 
 // Tell the compiler that this may be called from somewhere else.
-int _start(int argc, char** argv, char** env);
+int _entry(int argc, char** argv, char** env) __attribute__((used));
+void _start(int, char**, char**) __attribute__((used));
 
-int _start(int argc, char** argv, char** env)
+NAKED void _start(int, char**, char**)
 {
-    u32 original_stack_chk = __stack_chk_guard;
+    asm(
+        "push $0\n"
+        "jmp _entry@plt\n");
+}
+
+int _entry(int argc, char** argv, char** env)
+{
+    size_t original_stack_chk = __stack_chk_guard;
     arc4random_buf(&__stack_chk_guard, sizeof(__stack_chk_guard));
 
     if (__stack_chk_guard == 0)
@@ -31,6 +40,9 @@ int _start(int argc, char** argv, char** env)
 
     environ = env;
     __environ_is_malloced = false;
+    __begin_atexit_locking();
+
+    s_global_initializers_ran = true;
 
     _init();
 

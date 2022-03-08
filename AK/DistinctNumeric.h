@@ -52,9 +52,7 @@ class DistinctNumeric {
     using Self = DistinctNumeric<T, X, Incr, Cmp, Bool, Flags, Shift, Arith>;
 
 public:
-    constexpr DistinctNumeric()
-    {
-    }
+    constexpr DistinctNumeric() = default;
 
     constexpr DistinctNumeric(T value)
         : m_value { value }
@@ -131,7 +129,7 @@ public:
         return !this->m_value;
     }
     // Intentionally don't define `operator bool() const` here. C++ is a bit
-    // overzealos, and whenever there would be a type error, C++ instead tries
+    // overzealous, and whenever there would be a type error, C++ instead tries
     // to convert to a common int-ish type first. `bool` is int-ish, so
     // `operator bool() const` would defy the entire point of this class.
 
@@ -272,10 +270,10 @@ private:
 };
 
 template<typename T, typename X, bool Incr, bool Cmp, bool Bool, bool Flags, bool Shift, bool Arith>
-struct Formatter<DistinctNumeric<T, X, Incr, Cmp, Bool, Flags, Shift, Arith>> : Formatter<FormatString> {
-    void format(FormatBuilder& builder, DistinctNumeric<T, X, Incr, Cmp, Bool, Flags, Shift, Arith> value)
+struct Formatter<DistinctNumeric<T, X, Incr, Cmp, Bool, Flags, Shift, Arith>> : Formatter<T> {
+    ErrorOr<void> format(FormatBuilder& builder, DistinctNumeric<T, X, Incr, Cmp, Bool, Flags, Shift, Arith> value)
     {
-        return Formatter<FormatString>::format(builder, "{}", value.value());
+        return Formatter<T>::format(builder, value.value());
     }
 };
 

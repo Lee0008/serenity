@@ -6,8 +6,11 @@
 
 #pragma once
 
-#include <AK/String.h>
 #include <LibCrypto/Hash/HashFunction.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#endif
 
 namespace Crypto {
 namespace Hash {
@@ -25,16 +28,7 @@ constexpr static u32 RoundConstants[4] {
 
 }
 
-template<size_t Bytes>
-struct SHA1Digest {
-    u8 data[Bytes];
-    constexpr static size_t Size = Bytes;
-
-    const u8* immutable_data() const { return data; }
-    size_t data_length() const { return Bytes; }
-};
-
-class SHA1 final : public HashFunction<512, SHA1Digest<160 / 8>> {
+class SHA1 final : public HashFunction<512, 160> {
 public:
     using HashFunction::update;
 
@@ -56,12 +50,15 @@ public:
     }
 
     inline static DigestType hash(const ByteBuffer& buffer) { return hash(buffer.data(), buffer.size()); }
-    inline static DigestType hash(const StringView& buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
+    inline static DigestType hash(StringView buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         return "SHA1";
-    };
+    }
+#endif
+
     inline virtual void reset() override
     {
         m_data_length = 0;

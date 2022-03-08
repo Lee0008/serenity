@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/Array.h>
 #include <AK/Assertions.h>
 #include <AK/Platform.h>
 #include <AK/Types.h>
@@ -16,6 +17,19 @@ struct timeval;
 struct timespec;
 
 namespace AK {
+
+// Concept to detect types which look like timespec without requiring the type.
+template<typename T>
+concept TimeSpecType = requires(T t)
+{
+    t.tv_sec;
+    t.tv_nsec;
+};
+
+constexpr bool is_leap_year(int year)
+{
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+}
 
 // Month and day start at 1. Month must be >= 1 and <= 12.
 // The return value is 0-indexed, that is 0 is Sunday, 1 is Monday, etc.
@@ -28,22 +42,28 @@ unsigned day_of_week(int year, unsigned month, int day);
 // Day may be negative or larger than the number of days
 // in the given month. If day is negative enough, the result
 // can be negative.
-int day_of_year(int year, unsigned month, int day);
+constexpr int day_of_year(int year, unsigned month, int day)
+{
+    VERIFY(month >= 1 && month <= 12);
+
+    constexpr Array seek_table = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    int day_of_year = seek_table[month - 1] + day - 1;
+
+    if (is_leap_year(year) && month >= 3)
+        day_of_year++;
+
+    return day_of_year;
+}
 
 // Month starts at 1. Month must be >= 1 and <= 12.
 int days_in_month(int year, unsigned month);
 
-inline bool is_leap_year(int year)
+constexpr int days_in_year(int year)
 {
-    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    return 365 + (is_leap_year(year) ? 1 : 0);
 }
 
-inline unsigned days_in_year(int year)
-{
-    return 365 + is_leap_year(year);
-}
-
-inline int years_to_days_since_epoch(int year)
+constexpr int years_to_days_since_epoch(int year)
 {
     int days = 0;
     for (int current_year = 1970; current_year < year; ++current_year)
@@ -51,6 +71,28 @@ inline int years_to_days_since_epoch(int year)
     for (int current_year = year; current_year < 1970; ++current_year)
         days -= days_in_year(current_year);
     return days;
+}
+
+constexpr int days_since_epoch(int year, int month, int day)
+{
+    return years_to_days_since_epoch(year) + day_of_year(year, month, day);
+}
+
+constexpr i64 seconds_since_epoch_to_year(i64 seconds)
+{
+    constexpr double seconds_per_year = 60.0 * 60.0 * 24.0 * 365.2425;
+
+    // NOTE: We are not using floor() from <math.h> to avoid LibC / DynamicLoader dependency issues.
+    auto round_down = [](double value) -> i64 {
+        auto as_i64 = static_cast<i64>(value);
+
+        if ((value == as_i64) || (as_i64 >= 0))
+            return as_i64;
+        return as_i64 - 1;
+    };
+
+    auto years_since_epoch = static_cast<double>(seconds) / seconds_per_year;
+    return 1970 + round_down(years_since_epoch);
 }
 
 /*
@@ -105,48 +147,76 @@ private:
         i64 numerator_64 = numerator;
         i64 dividend = sane_mod(numerator_64, denominator);
         // Does not underflow: numerator can only become smaller.
-        numerator = numerator_64;
+        numerator = static_cast<i32>(numerator_64);
         // Does not overflow: Will be smaller than original value of 'numerator'.
-        return dividend;
+        return static_cast<i32>(dividend);
     }
 
 public:
-    constexpr static Time from_seconds(i64 seconds) { return Time(seconds, 0); }
-    constexpr static Time from_nanoseconds(i64 nanoseconds)
+    [[nodiscard]] constexpr static Time from_timestamp(i32 year, u8 month, u8 day, u8 hour, u8 minute, u8 second, u16 millisecond)
+    {
+        constexpr auto milliseconds_per_day = 86'400'000;
+        constexpr auto milliseconds_per_hour = 3'600'000;
+        constexpr auto milliseconds_per_minute = 60'000;
+        constexpr auto milliseconds_per_second = 1'000;
+
+        i64 milliseconds_since_epoch = days_since_epoch(year, month, day);
+        milliseconds_since_epoch *= milliseconds_per_day;
+
+        milliseconds_since_epoch += hour * milliseconds_per_hour;
+        milliseconds_since_epoch += minute * milliseconds_per_minute;
+        milliseconds_since_epoch += second * milliseconds_per_second;
+        milliseconds_since_epoch += millisecond;
+
+        return from_milliseconds(milliseconds_since_epoch);
+    }
+
+    [[nodiscard]] constexpr static Time from_seconds(i64 seconds) { return Time(seconds, 0); }
+    [[nodiscard]] constexpr static Time from_nanoseconds(i64 nanoseconds)
     {
         i64 seconds = sane_mod(nanoseconds, 1'000'000'000);
         return Time(seconds, nanoseconds);
     }
-    constexpr static Time from_microseconds(i64 microseconds)
+    [[nodiscard]] constexpr static Time from_microseconds(i64 microseconds)
     {
         i64 seconds = sane_mod(microseconds, 1'000'000);
         return Time(seconds, microseconds * 1'000);
     }
-    constexpr static Time from_milliseconds(i64 milliseconds)
+    [[nodiscard]] constexpr static Time from_milliseconds(i64 milliseconds)
     {
         i64 seconds = sane_mod(milliseconds, 1'000);
         return Time(seconds, milliseconds * 1'000'000);
     }
-    static Time from_timespec(const struct timespec&);
-    static Time from_timeval(const struct timeval&);
-    static Time min() { return Time(-0x8000'0000'0000'0000LL, 0); };
-    static Time zero() { return Time(0, 0); };
-    static Time max() { return Time(0x7fff'ffff'ffff'ffffLL, 999'999'999); };
+    [[nodiscard]] static Time from_ticks(clock_t, time_t);
+    [[nodiscard]] static Time from_timespec(const struct timespec&);
+    [[nodiscard]] static Time from_timeval(const struct timeval&);
+    // We don't pull in <stdint.h> for the pretty min/max definitions because this file is also included in the Kernel
+    [[nodiscard]] constexpr static Time min() { return Time(-__INT64_MAX__ - 1LL, 0); };
+    [[nodiscard]] constexpr static Time zero() { return Time(0, 0); };
+    [[nodiscard]] constexpr static Time max() { return Time(__INT64_MAX__, 999'999'999); };
+
+#ifndef KERNEL
+    [[nodiscard]] static Time now_realtime();
+    [[nodiscard]] static Time now_realtime_coarse();
+    [[nodiscard]] static Time now_monotonic();
+    [[nodiscard]] static Time now_monotonic_coarse();
+#endif
 
     // Truncates towards zero (2.8s to 2s, -2.8s to -2s).
-    i64 to_truncated_seconds() const;
-    i64 to_truncated_milliseconds() const;
-    i64 to_truncated_microseconds() const;
+    [[nodiscard]] i64 to_truncated_seconds() const;
+    [[nodiscard]] i64 to_truncated_milliseconds() const;
+    [[nodiscard]] i64 to_truncated_microseconds() const;
     // Rounds away from zero (2.3s to 3s, -2.3s to -3s).
-    i64 to_seconds() const;
-    i64 to_milliseconds() const;
-    i64 to_microseconds() const;
-    i64 to_nanoseconds() const;
-    timespec to_timespec() const;
+    [[nodiscard]] i64 to_seconds() const;
+    [[nodiscard]] i64 to_milliseconds() const;
+    [[nodiscard]] i64 to_microseconds() const;
+    [[nodiscard]] i64 to_nanoseconds() const;
+    [[nodiscard]] timespec to_timespec() const;
     // Rounds towards -inf (it was the easiest to implement).
-    timeval to_timeval() const;
+    [[nodiscard]] timeval to_timeval() const;
 
-    bool is_zero() const { return !m_seconds && !m_nanoseconds; }
+    [[nodiscard]] bool is_zero() const { return (m_seconds == 0) && (m_nanoseconds == 0); }
+    [[nodiscard]] bool is_negative() const { return m_seconds < 0; }
 
     bool operator==(const Time& other) const { return this->m_seconds == other.m_seconds && this->m_nanoseconds == other.m_nanoseconds; }
     bool operator!=(const Time& other) const { return !(*this == other); }
@@ -166,7 +236,7 @@ private:
     {
     }
 
-    static Time from_half_sanitized(i64 seconds, i32 extra_seconds, u32 nanoseconds);
+    [[nodiscard]] static Time from_half_sanitized(i64 seconds, i32 extra_seconds, u32 nanoseconds);
 
     i64 m_seconds { 0 };
     u32 m_nanoseconds { 0 }; // Always less than 1'000'000'000
@@ -241,38 +311,39 @@ inline void timespec_to_timeval(const TimespecType& ts, TimevalType& tv)
     tv.tv_usec = ts.tv_nsec / 1000;
 }
 
-template<typename TimespecType>
-inline bool operator>=(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator>=(const T& a, const T& b)
 {
     return a.tv_sec > b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec >= b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator>(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator>(const T& a, const T& b)
 {
     return a.tv_sec > b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec > b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator<(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator<(const T& a, const T& b)
 {
     return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec < b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator<=(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator<=(const T& a, const T& b)
+
 {
     return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec <= b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator==(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator==(const T& a, const T& b)
 {
     return a.tv_sec == b.tv_sec && a.tv_nsec == b.tv_nsec;
 }
 
-template<typename TimespecType>
-inline bool operator!=(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator!=(const T& a, const T& b)
 {
     return a.tv_sec != b.tv_sec || a.tv_nsec != b.tv_nsec;
 }
@@ -283,7 +354,9 @@ using AK::day_of_week;
 using AK::day_of_year;
 using AK::days_in_month;
 using AK::days_in_year;
+using AK::days_since_epoch;
 using AK::is_leap_year;
+using AK::seconds_since_epoch_to_year;
 using AK::Time;
 using AK::timespec_add;
 using AK::timespec_add_timeval;

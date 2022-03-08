@@ -5,21 +5,19 @@
  */
 
 #include <AK/Assertions.h>
-#include <AK/ByteBuffer.h>
-#include <AK/Demangle.h>
 #include <AK/HashMap.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/StringBuilder.h>
 #include <LibC/sys/arch/i386/regs.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
 #include <LibDebug/DebugSession.h>
 #include <LibELF/Image.h>
+#include <LibMain/Main.h>
 #include <LibX86/Disassembler.h>
 #include <LibX86/Instruction.h>
-#include <math.h>
 #include <signal.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syscall.h>
@@ -49,21 +47,31 @@ static void print_syscall(PtraceRegisters& regs, size_t depth)
     for (size_t i = 0; i < depth; ++i) {
         out("  ");
     }
-    const char* begin_color = g_should_output_color ? "\033[34;1m" : "";
-    const char* end_color = g_should_output_color ? "\033[0m" : "";
-    outln("=> {}SC_{}(0x{:x}, 0x{:x}, 0x{:x}){}",
+    StringView begin_color = g_should_output_color ? "\033[34;1m"sv : ""sv;
+    StringView end_color = g_should_output_color ? "\033[0m"sv : ""sv;
+#if ARCH(I386)
+    outln("=> {}SC_{}({:#x}, {:#x}, {:#x}){}",
         begin_color,
         Syscall::to_string((Syscall::Function)regs.eax),
         regs.edx,
         regs.ecx,
         regs.ebx,
         end_color);
+#else
+    outln("=> {}SC_{}({:#x}, {:#x}, {:#x}){}",
+        begin_color,
+        Syscall::to_string((Syscall::Function)regs.rax),
+        regs.rdx,
+        regs.rcx,
+        regs.rbx,
+        end_color);
+#endif
 }
 
-static NonnullOwnPtr<HashMap<void*, X86::Instruction>> instrument_code()
+static NonnullOwnPtr<HashMap<FlatPtr, X86::Instruction>> instrument_code()
 {
-    auto instrumented = make<HashMap<void*, X86::Instruction>>();
-    g_debug_session->for_each_loaded_library([&](const Debug::DebugSession::LoadedLibrary& lib) {
+    auto instrumented = make<HashMap<FlatPtr, X86::Instruction>>();
+    g_debug_session->for_each_loaded_library([&](const Debug::LoadedLibrary& lib) {
         lib.debug_info->elf().for_each_section_of_type(SHT_PROGBITS, [&](const ELF::Image::Section& section) {
             if (section.name() != ".text")
                 return IterationDecision::Continue;
@@ -72,7 +80,7 @@ static NonnullOwnPtr<HashMap<void*, X86::Instruction>> instrument_code()
             X86::Disassembler disassembler(stream);
             for (;;) {
                 auto offset = stream.offset();
-                void* instruction_address = (void*)(section.address() + offset + lib.base_address);
+                auto instruction_address = section.address() + offset + lib.base_address;
                 auto insn = disassembler.next();
                 if (!insn.has_value())
                     break;
@@ -88,22 +96,19 @@ static NonnullOwnPtr<HashMap<void*, X86::Instruction>> instrument_code()
     return instrumented;
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio proc exec rpath sigaction ptrace", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio proc exec rpath sigaction ptrace"));
 
     if (isatty(STDOUT_FILENO))
         g_should_output_color = true;
 
-    const char* command = nullptr;
+    StringView command;
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(command,
         "The program to be traced, along with its arguments",
         "program", Core::ArgsParser::Required::Yes);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     auto result = Debug::DebugSession::exec_and_attach(command);
     if (!result) {
@@ -117,7 +122,7 @@ int main(int argc, char** argv)
     struct sigaction sa;
     memset(&sa, 0, sizeof(struct sigaction));
     sa.sa_handler = handle_sigint;
-    sigaction(SIGINT, &sa, nullptr);
+    TRY(Core::System::sigaction(SIGINT, &sa, nullptr));
 
     size_t depth = 0;
     bool new_function = true;
@@ -133,13 +138,19 @@ int main(int argc, char** argv)
             return Debug::DebugSession::DebugDecision::ContinueBreakAtSyscall;
         }
 
+#if ARCH(I386)
+        const FlatPtr ip = regs.value().eip;
+#else
+        const FlatPtr ip = regs.value().rip;
+#endif
+
         if (new_function) {
-            auto function_name = g_debug_session->symbolicate(regs.value().eip);
+            auto function_name = g_debug_session->symbolicate(ip);
             print_function_call(function_name.value().symbol, depth);
             new_function = false;
             return Debug::DebugSession::ContinueBreakAtSyscall;
         }
-        auto instruction = instrumented->get((void*)regs.value().eip).value();
+        auto instruction = instrumented->get(ip).value();
 
         if (instruction.mnemonic() == "RET") {
             if (depth != 0)
@@ -155,4 +166,6 @@ int main(int argc, char** argv)
 
         return Debug::DebugSession::DebugDecision::SingleStep;
     });
+
+    return 0;
 }

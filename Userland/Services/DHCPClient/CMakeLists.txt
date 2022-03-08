@@ -1,3 +1,9 @@
+serenity_component(
+    DHCPClient
+    REQUIRED
+    TARGETS DHCPClient
+)
+
 set(SOURCES
     DHCPv4Client.cpp
     DHCPv4.cpp
@@ -5,4 +11,4 @@ set(SOURCES
 )
 
 serenity_bin(DHCPClient)
-target_link_libraries(DHCPClient LibCore)
+target_link_libraries(DHCPClient LibCore LibMain)

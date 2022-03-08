@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Nick Vella <nick@nxk.io>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -10,7 +11,6 @@
 #include <DevTools/HackStudio/ProjectTemplate.h>
 
 #include <AK/Result.h>
-#include <AK/Vector.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Dialog.h>
 #include <LibGUI/Label.h>
@@ -28,7 +28,7 @@ public:
 
 private:
     NewProjectDialog(GUI::Window* parent);
-    virtual ~NewProjectDialog() override;
+    virtual ~NewProjectDialog() override = default;
 
     void update_dialog();
     Optional<String> get_available_project_name();

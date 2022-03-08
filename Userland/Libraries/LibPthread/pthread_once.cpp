@@ -17,6 +17,7 @@ enum State : i32 {
     PERFORMING_WITH_WAITERS,
 };
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_once.html
 int pthread_once(pthread_once_t* self, void (*callback)(void))
 {
     auto& state = reinterpret_cast<Atomic<State>&>(*self);
@@ -45,7 +46,7 @@ int pthread_once(pthread_once_t* self, void (*callback)(void))
             // anyone.
             break;
         case State::PERFORMING_WITH_WAITERS:
-            futex(self, FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0);
+            futex_wake(self, INT_MAX);
             break;
         }
 
@@ -75,7 +76,7 @@ int pthread_once(pthread_once_t* self, void (*callback)(void))
             [[fallthrough]];
         case State::PERFORMING_WITH_WAITERS:
             // Let's wait for it.
-            futex(self, FUTEX_WAIT, state2, nullptr, nullptr, 0);
+            futex_wait(self, state2, nullptr, 0);
             // We have been woken up, but that might have been due to a signal
             // or something, so we have to reevaluate. We need acquire ordering
             // here for the same reason as above. Hopefully we'll just see

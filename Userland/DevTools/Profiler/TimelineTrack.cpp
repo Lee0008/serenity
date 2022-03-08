@@ -1,15 +1,15 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "TimelineTrack.h"
-#include "Histogram.h"
 #include "Profile.h"
 #include "TimelineView.h"
+#include <LibGUI/Application.h>
 #include <LibGUI/Painter.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/Palette.h>
 
 namespace Profiler {
@@ -26,10 +26,6 @@ TimelineTrack::TimelineTrack(TimelineView const& view, Profile const& profile, P
     set_frame_thickness(1);
 }
 
-TimelineTrack::~TimelineTrack()
-{
-}
-
 void TimelineTrack::set_scale(float scale)
 {
     set_fixed_width(m_profile.length_in_ms() / scale);
@@ -42,6 +38,7 @@ void TimelineTrack::event(Core::Event& event)
     case GUI::Event::MouseDown:
     case GUI::Event::MouseMove:
         event.ignore();
+        break;
     default:
         break;
     }
@@ -55,44 +52,22 @@ void TimelineTrack::paint_event(GUI::PaintEvent& event)
     GUI::Painter painter(*this);
     painter.add_clip_rect(event.rect());
 
-    const u64 start_of_trace = m_profile.first_timestamp();
-    const u64 end_of_trace = start_of_trace + m_profile.length_in_ms();
+    u64 const start_of_trace = m_profile.first_timestamp();
+    u64 const end_of_trace = start_of_trace + m_profile.length_in_ms();
 
-    const auto clamp_timestamp = [start_of_trace, end_of_trace](u64 timestamp) -> u64 {
+    auto const clamp_timestamp = [start_of_trace, end_of_trace](u64 timestamp) -> u64 {
         return min(end_of_trace, max(timestamp, start_of_trace));
     };
 
-    float column_width = (float)frame_inner_rect().width() / (float)m_profile.length_in_ms();
-    size_t columns = frame_inner_rect().width() / column_width;
+    recompute_histograms_if_needed({ start_of_trace, end_of_trace, (size_t)m_profile.length_in_ms() });
 
-    Histogram kernel_histogram { start_of_trace, end_of_trace, columns };
-    Histogram usermode_histogram { start_of_trace, end_of_trace, columns };
-    auto bucket_count = kernel_histogram.size();
+    float column_width = this->column_width();
+    float frame_height = (float)frame_inner_rect().height() / (float)m_max_value;
 
-    for (auto& event : m_profile.events()) {
-        if (event.pid != m_process.pid)
-            continue;
-
-        if (!m_process.valid_at(event.serial))
-            continue;
-
-        auto& histogram = event.in_kernel ? kernel_histogram : usermode_histogram;
-        histogram.insert(clamp_timestamp(event.timestamp), 1 + event.lost_samples);
-    }
-
-    decltype(kernel_histogram.at(0)) max_value = 0;
-    for (size_t bucket = 0; bucket < bucket_count; bucket++) {
-        auto value = kernel_histogram.at(bucket) + usermode_histogram.at(bucket);
-        if (value > max_value)
-            max_value = value;
-    }
-
-    float frame_height = (float)frame_inner_rect().height() / (float)max_value;
-
-    for (size_t bucket = 0; bucket < bucket_count; bucket++) {
-        auto kernel_value = kernel_histogram.at(bucket);
-        auto usermode_value = usermode_histogram.at(bucket);
-        if (kernel_value + usermode_value == 0)
+    for (size_t bucket = 0; bucket < m_kernel_histogram->size(); bucket++) {
+        auto kernel_value = m_kernel_histogram->at(bucket);
+        auto user_value = m_user_histogram->at(bucket);
+        if (kernel_value + user_value == 0)
             continue;
 
         auto t = bucket;
@@ -101,11 +76,11 @@ void TimelineTrack::paint_event(GUI::PaintEvent& event)
         int cw = max(1, (int)column_width);
 
         int kernel_column_height = frame_inner_rect().height() - (int)((float)kernel_value * frame_height);
-        int usermode_column_height = frame_inner_rect().height() - (int)((float)(kernel_value + usermode_value) * frame_height);
+        int user_column_height = frame_inner_rect().height() - (int)((float)(kernel_value + user_value) * frame_height);
 
         constexpr auto kernel_color = Color::from_rgb(0xc25e5a);
-        constexpr auto usermode_color = Color::from_rgb(0x5a65c2);
-        painter.fill_rect({ x, frame_thickness() + usermode_column_height, cw, height() - frame_thickness() * 2 }, usermode_color);
+        constexpr auto user_color = Color::from_rgb(0x5a65c2);
+        painter.fill_rect({ x, frame_thickness() + user_column_height, cw, height() - frame_thickness() * 2 }, user_color);
         painter.fill_rect({ x, frame_thickness() + kernel_column_height, cw, height() - frame_thickness() * 2 }, kernel_color);
     }
 
@@ -118,6 +93,95 @@ void TimelineTrack::paint_event(GUI::PaintEvent& event)
     int select_hover_x = (int)((float)(normalized_hover_time - start_of_trace) * column_width);
     painter.fill_rect({ select_start_x, frame_thickness(), select_end_x - select_start_x, height() - frame_thickness() * 2 }, Color(0, 0, 0, 60));
     painter.fill_rect({ select_hover_x, frame_thickness(), 1, height() - frame_thickness() * 2 }, Color::NamedColor::Black);
+
+    for_each_signpost([&](auto& signpost) {
+        int x = (int)((float)(signpost.timestamp - start_of_trace) * column_width);
+        int y1 = frame_thickness();
+        int y2 = height() - frame_thickness() * 2;
+
+        painter.draw_line({ x, y1 }, { x, y2 }, Color::Magenta);
+
+        return IterationDecision::Continue;
+    });
+}
+
+template<typename Callback>
+void TimelineTrack::for_each_signpost(Callback callback)
+{
+    m_profile.for_each_signpost([&](auto& signpost) {
+        if (signpost.pid != m_process.pid)
+            return IterationDecision::Continue;
+
+        if (!m_process.valid_at(signpost.serial))
+            return IterationDecision::Continue;
+
+        return callback(signpost);
+    });
+}
+
+void TimelineTrack::mousemove_event(GUI::MouseEvent& event)
+{
+    auto column_width = this->column_width();
+    bool hovering_a_signpost = false;
+
+    for_each_signpost([&](auto& signpost) {
+        int x = (int)((float)(signpost.timestamp - m_profile.first_timestamp()) * column_width);
+        constexpr int hoverable_padding = 2;
+        Gfx::IntRect hoverable_rect { x - hoverable_padding, frame_thickness(), hoverable_padding * 2, height() - frame_thickness() * 2 };
+        if (hoverable_rect.contains_horizontally(event.x())) {
+            auto const& data = signpost.data.template get<Profile::Event::SignpostData>();
+            GUI::Application::the()->show_tooltip_immediately(String::formatted("{}, {}", data.string, data.arg), this);
+            hovering_a_signpost = true;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+
+    if (!hovering_a_signpost)
+        GUI::Application::the()->hide_tooltip();
+}
+
+void TimelineTrack::recompute_histograms_if_needed(HistogramInputs const& inputs)
+{
+    if (m_cached_histogram_inputs == inputs && m_kernel_histogram.has_value())
+        return;
+
+    auto const clamp_timestamp = [&inputs](u64 timestamp) -> u64 {
+        return min(inputs.end, max(timestamp, inputs.start));
+    };
+
+    m_kernel_histogram = Histogram { inputs.start, inputs.end, inputs.columns };
+    m_user_histogram = Histogram { inputs.start, inputs.end, inputs.columns };
+
+    for (auto const& event : m_profile.events()) {
+        if (event.pid != m_process.pid)
+            continue;
+
+        if (!m_process.valid_at(event.serial))
+            continue;
+
+        auto& histogram = event.in_kernel ? *m_kernel_histogram : *m_user_histogram;
+        histogram.insert(clamp_timestamp(event.timestamp), 1 + event.lost_samples);
+    }
+
+    auto shorter_histogram_size = min(m_kernel_histogram->size(), m_user_histogram->size());
+    for (size_t bucket = 0; bucket < shorter_histogram_size; ++bucket) {
+        auto value = m_kernel_histogram->at(bucket) + m_user_histogram->at(bucket);
+        if (value > m_max_value)
+            m_max_value = value;
+    }
+
+    auto& longer_histogram = m_kernel_histogram->size() > m_user_histogram->size() ? *m_kernel_histogram : *m_user_histogram;
+    for (size_t bucket = shorter_histogram_size; bucket < longer_histogram.size(); ++bucket) {
+        auto value = longer_histogram.at(bucket);
+        if (value > m_max_value)
+            m_max_value = value;
+    }
+}
+
+float TimelineTrack::column_width() const
+{
+    return (float)frame_inner_rect().width() / (float)m_profile.length_in_ms();
 }
 
 }

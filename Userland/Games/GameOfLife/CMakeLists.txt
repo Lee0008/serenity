@@ -1,3 +1,9 @@
+serenity_component(
+    GameOfLife
+    RECOMMENDED
+    TARGETS GameOfLife
+)
+
 compile_gml(GameOfLife.gml GameOfLifeGML.h game_of_life_gml)
 
 set(SOURCES
@@ -9,4 +15,4 @@ set(SOURCES
 )
 
 serenity_app(GameOfLife ICON app-gameoflife)
-target_link_libraries(GameOfLife LibGUI)
+target_link_libraries(GameOfLife LibGUI LibMain LibDesktop)

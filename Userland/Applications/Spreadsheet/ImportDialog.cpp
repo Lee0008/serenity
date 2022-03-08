@@ -6,8 +6,6 @@
 
 #include "ImportDialog.h"
 #include "Spreadsheet.h"
-#include <AK/JsonArray.h>
-#include <AK/JsonObject.h>
 #include <AK/JsonParser.h>
 #include <AK/LexicalPath.h>
 #include <Applications/Spreadsheet/CSVImportGML.h>
@@ -21,7 +19,7 @@
 #include <LibGUI/StackWidget.h>
 #include <LibGUI/TableView.h>
 #include <LibGUI/TextBox.h>
-#include <LibGUI/Wizards/AbstractWizardPage.h>
+#include <LibGUI/Window.h>
 #include <LibGUI/Wizards/WizardDialog.h>
 #include <LibGUI/Wizards/WizardPage.h>
 
@@ -138,16 +136,16 @@ auto CSVImportDialogPage::make_reader() -> Optional<Reader::XSV>
         quote_escape,
     };
 
-    auto behaviours = Reader::default_behaviours() | Reader::ParserBehaviour::Lenient;
+    auto behaviors = Reader::default_behaviors() | Reader::ParserBehavior::Lenient;
 
     if (should_read_headers)
-        behaviours = behaviours | Reader::ParserBehaviour::ReadHeaders;
+        behaviors = behaviors | Reader::ParserBehavior::ReadHeaders;
     if (should_trim_leading)
-        behaviours = behaviours | Reader::ParserBehaviour::TrimLeadingFieldSpaces;
+        behaviors = behaviors | Reader::ParserBehavior::TrimLeadingFieldSpaces;
     if (should_trim_trailing)
-        behaviours = behaviours | Reader::ParserBehaviour::TrimTrailingFieldSpaces;
+        behaviors = behaviors | Reader::ParserBehavior::TrimTrailingFieldSpaces;
 
-    return Reader::XSV(m_csv, traits, behaviours);
+    return Reader::XSV(m_csv, move(traits), behaviors);
 };
 
 void CSVImportDialogPage::update_preview()
@@ -177,9 +175,9 @@ void CSVImportDialogPage::update_preview()
     m_data_preview_table_view->update();
 }
 
-Result<NonnullRefPtrVector<Sheet>, String> ImportDialog::make_and_run_for(StringView mime, Core::File& file, Workbook& workbook)
+Result<NonnullRefPtrVector<Sheet>, String> ImportDialog::make_and_run_for(GUI::Window& parent, StringView mime, Core::File& file, Workbook& workbook)
 {
-    auto wizard = GUI::WizardDialog::construct(GUI::Application::the()->active_window());
+    auto wizard = GUI::WizardDialog::construct(&parent);
     wizard->set_title("File Import Wizard");
     wizard->set_icon(GUI::Icon::default_icon("app-spreadsheet").bitmap_for_size(16));
 
@@ -195,6 +193,7 @@ Result<NonnullRefPtrVector<Sheet>, String> ImportDialog::make_and_run_for(String
             NonnullRefPtrVector<Sheet> sheets;
 
             if (reader.has_value()) {
+                reader->parse();
                 if (reader.value().has_error())
                     return String::formatted("CSV Import failed: {}", reader.value().error_string());
 
@@ -211,7 +210,7 @@ Result<NonnullRefPtrVector<Sheet>, String> ImportDialog::make_and_run_for(String
 
     auto import_worksheet = [&]() -> Result<NonnullRefPtrVector<Sheet>, String> {
         auto json_value_option = JsonParser(file.read_all()).parse();
-        if (!json_value_option.has_value()) {
+        if (json_value_option.is_error()) {
             StringBuilder sb;
             sb.append("Failed to parse ");
             sb.append(file.filename());
@@ -251,7 +250,7 @@ Result<NonnullRefPtrVector<Sheet>, String> ImportDialog::make_and_run_for(String
     } else {
         auto page = GUI::WizardPage::construct(
             "Import File Format",
-            String::formatted("Select the format you wish to import '{}' as", LexicalPath { file.filename() }.basename()));
+            String::formatted("Select the format you wish to import '{}' as", LexicalPath::basename(file.filename())));
 
         page->on_next_page = [] { return nullptr; };
 

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,7 +14,7 @@
 
 namespace GUI {
 
-static const char* s_arrow_bitmap_data = {
+static constexpr Gfx::CharacterBitmap s_arrow_bitmap {
     "         "
     "   #     "
     "   ##    "
@@ -22,10 +23,9 @@ static const char* s_arrow_bitmap_data = {
     "   ###   "
     "   ##    "
     "   #     "
-    "         "
+    "         ",
+    9, 9
 };
-static const int s_arrow_bitmap_width = 9;
-static const int s_arrow_bitmap_height = 9;
 
 ColumnsView::ColumnsView()
 {
@@ -105,7 +105,9 @@ void ColumnsView::paint_event(PaintEvent& event)
             }
 
             Gfx::IntRect row_rect { column_x, row * item_height(), column.width, item_height() };
-            painter.fill_rect(row_rect, background_color);
+
+            if (m_edit_index.row() != row)
+                painter.fill_rect(row_rect, background_color);
 
             auto icon = index.data(ModelRole::Icon);
             Gfx::IntRect icon_rect = { column_x + icon_spacing(), 0, icon_size(), icon_size() };
@@ -118,14 +120,15 @@ void ColumnsView::paint_event(PaintEvent& event)
                     } else if (m_hovered_index.is_valid() && m_hovered_index.parent() == index.parent() && m_hovered_index.row() == index.row()) {
                         painter.blit_brightened(icon_rect.location(), *bitmap, bitmap->rect());
                     } else {
-                        painter.blit(icon_rect.location(), *bitmap, bitmap->rect());
+                        auto opacity = index.data(ModelRole::IconOpacity).as_float_or(1.0f);
+                        painter.blit(icon_rect.location(), *bitmap, bitmap->rect(), opacity);
                     }
                 }
             }
 
             Gfx::IntRect text_rect = {
                 icon_rect.right() + 1 + icon_spacing(), row * item_height(),
-                column.width - icon_spacing() - icon_size() - icon_spacing() - icon_spacing() - s_arrow_bitmap_width - icon_spacing(), item_height()
+                column.width - icon_spacing() - icon_size() - icon_spacing() - icon_spacing() - static_cast<int>(s_arrow_bitmap.width()) - icon_spacing(), item_height()
             };
             draw_item_text(painter, index, is_selected_row, text_rect, index.data().to_string(), font_for_index(index), Gfx::TextAlignment::CenterLeft, Gfx::TextElision::None);
 
@@ -142,11 +145,10 @@ void ColumnsView::paint_event(PaintEvent& event)
             if (expandable) {
                 Gfx::IntRect arrow_rect = {
                     text_rect.right() + 1 + icon_spacing(), 0,
-                    s_arrow_bitmap_width, s_arrow_bitmap_height
+                    s_arrow_bitmap.width(), s_arrow_bitmap.height()
                 };
                 arrow_rect.center_vertically_within(row_rect);
-                static auto& arrow_bitmap = Gfx::CharacterBitmap::create_from_ascii(s_arrow_bitmap_data, s_arrow_bitmap_width, s_arrow_bitmap_height).leak_ref();
-                painter.draw_bitmap(arrow_rect.location(), arrow_bitmap, text_color);
+                painter.draw_bitmap(arrow_rect.location(), s_arrow_bitmap, text_color);
             }
         }
 
@@ -198,7 +200,7 @@ void ColumnsView::update_column_sizes()
             ModelIndex index = model()->index(row, m_model_column, column.parent_index);
             VERIFY(index.is_valid());
             auto text = index.data().to_string();
-            int row_width = icon_spacing() + icon_size() + icon_spacing() + font().width(text) + icon_spacing() + s_arrow_bitmap_width + icon_spacing();
+            int row_width = icon_spacing() + icon_size() + icon_spacing() + font().width(text) + icon_spacing() + s_arrow_bitmap.width() + icon_spacing();
             if (row_width > column.width)
                 column.width = row_width;
         }
@@ -243,7 +245,7 @@ void ColumnsView::mousedown_event(MouseEvent& event)
     if (!model())
         return;
 
-    if (event.button() != MouseButton::Left)
+    if (event.button() != MouseButton::Primary)
         return;
 
     auto index = index_at_event_position(event.position());
@@ -258,7 +260,6 @@ void ColumnsView::model_did_update(unsigned flags)
     AbstractView::model_did_update(flags);
 
     // FIXME: Don't drop the columns on minor updates.
-    dbgln("Model was updated; dropping columns :(");
     m_columns.clear();
     m_columns.append({ {}, 0 });
 
@@ -295,12 +296,12 @@ void ColumnsView::move_cursor(CursorMovement movement, SelectionUpdate selection
         break;
     case CursorMovement::Right:
         new_index = model.index(0, m_model_column, cursor_index());
-        if (model.is_valid(new_index)) {
-            if (model.is_valid(cursor_index()))
+        if (model.is_within_range(new_index)) {
+            if (model.is_within_range(cursor_index()))
                 push_column(cursor_index());
             update();
-            break;
         }
+        break;
     default:
         break;
     }
@@ -322,6 +323,14 @@ Gfx::IntRect ColumnsView::content_rect(const ModelIndex& index) const
     }
 
     return {};
+}
+
+Gfx::IntRect ColumnsView::paint_invalidation_rect(ModelIndex const& index) const
+{
+    auto rect = content_rect(index);
+    rect.translate_by(-icon_size(), 0);
+    rect.set_width(rect.width() + icon_size());
+    return rect;
 }
 
 }

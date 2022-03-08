@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <AK/String.h>
 #include <AK/Types.h>
 #include <Kernel/Devices/CharacterDevice.h>
 #include <Kernel/PhysicalAddress.h>
@@ -14,28 +13,25 @@
 namespace Kernel {
 
 class MemoryDevice final : public CharacterDevice {
-    AK_MAKE_ETERNAL
+    friend class DeviceManagement;
+
 public:
-    MemoryDevice();
+    static NonnullRefPtr<MemoryDevice> must_create();
     ~MemoryDevice();
 
-    virtual KResultOr<Region*> mmap(Process&, FileDescription&, const Range&, u64 offset, int prot, bool shared) override;
-
-    // ^Device
-    virtual mode_t required_mode() const override { return 0660; }
-    virtual String device_name() const override { return "mem"; };
+    virtual ErrorOr<Memory::Region*> mmap(Process&, OpenFileDescription&, Memory::VirtualRange const&, u64 offset, int prot, bool shared) override;
 
 private:
-    virtual const char* class_name() const override { return "MemoryDevice"; }
-    virtual bool can_read(const FileDescription&, size_t) const override { return true; }
-    virtual bool can_write(const FileDescription&, size_t) const override { return false; }
-    virtual bool is_seekable() const { return true; }
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return -EINVAL; }
+    MemoryDevice();
 
-    virtual void did_seek(FileDescription&, off_t) override;
+    virtual StringView class_name() const override { return "MemoryDevice"sv; }
+    virtual bool can_read(const OpenFileDescription&, u64) const override { return true; }
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return false; }
+    virtual bool is_seekable() const override { return true; }
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return EINVAL; }
 
-    bool is_allowed_range(PhysicalAddress, const Range&) const;
+    bool is_allowed_range(PhysicalAddress, Memory::VirtualRange const&) const;
 };
 
 }

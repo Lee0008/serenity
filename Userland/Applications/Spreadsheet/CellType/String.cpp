@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,22 +15,18 @@ StringCell::StringCell()
 {
 }
 
-StringCell::~StringCell()
+JS::ThrowCompletionOr<String> StringCell::display(Cell& cell, const CellTypeMetadata& metadata) const
 {
-}
-
-String StringCell::display(Cell& cell, const CellTypeMetadata& metadata) const
-{
-    auto string = cell.js_data().to_string_without_side_effects();
+    auto string = TRY(cell.js_data().to_string(cell.sheet().global_object()));
     if (metadata.length >= 0)
         return string.substring(0, metadata.length);
 
     return string;
 }
 
-JS::Value StringCell::js_value(Cell& cell, const CellTypeMetadata& metadata) const
+JS::ThrowCompletionOr<JS::Value> StringCell::js_value(Cell& cell, const CellTypeMetadata& metadata) const
 {
-    auto string = display(cell, metadata);
+    auto string = TRY(display(cell, metadata));
     return JS::js_string(cell.sheet().interpreter().heap(), string);
 }
 

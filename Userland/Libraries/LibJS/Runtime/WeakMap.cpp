@@ -23,10 +23,18 @@ WeakMap::~WeakMap()
 {
 }
 
-void WeakMap::remove_sweeped_cells(Badge<Heap>, Vector<Cell*>& cells)
+void WeakMap::remove_dead_cells(Badge<Heap>)
 {
-    for (auto* cell : cells)
-        m_values.remove(cell);
+    m_values.remove_all_matching([](Cell* key, Value) {
+        return key->state() != Cell::State::Live;
+    });
+}
+
+void WeakMap::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    for (auto& entry : m_values)
+        visitor.visit(entry.value);
 }
 
 }

@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/CoreDump.h>
-#include <Kernel/FileSystem/FileDescription.h>
-#include <Kernel/FileSystem/VirtualFileSystem.h>
+#include <Kernel/Coredump.h>
 #include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/Time/TimeManagement.h>
 
 namespace Kernel {
@@ -17,21 +16,31 @@ bool g_profiling_all_threads;
 PerformanceEventBuffer* g_global_perf_events;
 u64 g_profiling_event_mask;
 
-KResultOr<int> Process::sys$profiling_enable(pid_t pid, u64 event_mask)
+// NOTE: event_mask needs to be passed as a pointer as u64
+//       does not fit into a register on 32bit architectures.
+ErrorOr<FlatPtr> Process::sys$profiling_enable(pid_t pid, Userspace<u64 const*> userspace_event_mask)
 {
-    REQUIRE_NO_PROMISES;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_no_promises());
+
+    const auto event_mask = TRY(copy_typed_from_user(userspace_event_mask));
 
     if (pid == -1) {
         if (!is_superuser())
             return EPERM;
         ScopedCritical critical;
         g_profiling_event_mask = PERF_EVENT_PROCESS_CREATE | PERF_EVENT_THREAD_CREATE | PERF_EVENT_MMAP;
-        if (g_global_perf_events)
+        if (g_global_perf_events) {
             g_global_perf_events->clear();
-        else
+        } else {
             g_global_perf_events = PerformanceEventBuffer::try_create_with_size(32 * MiB).leak_ptr();
+            if (!g_global_perf_events) {
+                g_profiling_event_mask = 0;
+                return ENOMEM;
+            }
+        }
 
-        ScopedSpinLock lock(g_processes_lock);
+        SpinlockLocker lock(g_profiling_lock);
         if (!TimeManagement::the().enable_profile_timer())
             return ENOTSUP;
         g_profiling_all_threads = true;
@@ -44,7 +53,6 @@ KResultOr<int> Process::sys$profiling_enable(pid_t pid, u64 event_mask)
         return 0;
     }
 
-    ScopedSpinLock lock(g_processes_lock);
     auto process = Process::from_pid(pid);
     if (!process)
         return ESRCH;
@@ -52,6 +60,7 @@ KResultOr<int> Process::sys$profiling_enable(pid_t pid, u64 event_mask)
         return ESRCH;
     if (!is_superuser() && process->uid() != euid())
         return EPERM;
+    SpinlockLocker lock(g_profiling_lock);
     g_profiling_event_mask = PERF_EVENT_PROCESS_CREATE | PERF_EVENT_THREAD_CREATE | PERF_EVENT_MMAP;
     process->set_profiling(true);
     if (!process->create_perf_events_buffer_if_needed()) {
@@ -66,9 +75,10 @@ KResultOr<int> Process::sys$profiling_enable(pid_t pid, u64 event_mask)
     return 0;
 }
 
-KResultOr<int> Process::sys$profiling_disable(pid_t pid)
+ErrorOr<FlatPtr> Process::sys$profiling_disable(pid_t pid)
 {
-    REQUIRE_NO_PROMISES;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_no_promises());
 
     if (pid == -1) {
         if (!is_superuser())
@@ -80,12 +90,12 @@ KResultOr<int> Process::sys$profiling_disable(pid_t pid)
         return 0;
     }
 
-    ScopedSpinLock lock(g_processes_lock);
     auto process = Process::from_pid(pid);
     if (!process)
         return ESRCH;
     if (!is_superuser() && process->uid() != euid())
         return EPERM;
+    SpinlockLocker lock(g_profiling_lock);
     if (!process->is_profiling())
         return EINVAL;
     // FIXME: If we enabled the profile timer and it's not supported, how do we disable it now?
@@ -95,9 +105,10 @@ KResultOr<int> Process::sys$profiling_disable(pid_t pid)
     return 0;
 }
 
-KResultOr<int> Process::sys$profiling_free_buffer(pid_t pid)
+ErrorOr<FlatPtr> Process::sys$profiling_free_buffer(pid_t pid)
 {
-    REQUIRE_NO_PROMISES;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_no_promises());
 
     if (pid == -1) {
         if (!is_superuser())
@@ -115,12 +126,12 @@ KResultOr<int> Process::sys$profiling_free_buffer(pid_t pid)
         return 0;
     }
 
-    ScopedSpinLock lock(g_processes_lock);
     auto process = Process::from_pid(pid);
     if (!process)
         return ESRCH;
     if (!is_superuser() && process->uid() != euid())
         return EPERM;
+    SpinlockLocker lock(g_profiling_lock);
     if (process->is_profiling())
         return EINVAL;
     process->delete_perf_events_buffer();

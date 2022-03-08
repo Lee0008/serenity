@@ -6,27 +6,24 @@
 
 #pragma once
 
+#include <Kernel/Arch/x86/IO.h>
 #include <Kernel/Devices/CharacterDevice.h>
-#include <Kernel/IO.h>
 
 namespace Kernel {
 
-#define SERIAL_COM1_ADDR 0x3F8
-#define SERIAL_COM2_ADDR 0x2F8
-#define SERIAL_COM3_ADDR 0x3E8
-#define SERIAL_COM4_ADDR 0x2E8
-
 class SerialDevice final : public CharacterDevice {
-    AK_MAKE_ETERNAL
+    friend class DeviceManagement;
+
 public:
-    SerialDevice(IOAddress base_addr, unsigned minor);
+    static NonnullRefPtr<SerialDevice> must_create(size_t com_number);
+
     virtual ~SerialDevice() override;
 
     // ^CharacterDevice
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
 
     void put_char(char);
 
@@ -106,15 +103,13 @@ public:
         DataReady = 0x01 << 0
     };
 
-    // ^Device
-    virtual mode_t required_mode() const override { return 0620; }
-    virtual String device_name() const override;
-
 private:
+    SerialDevice(IOAddress base_addr, unsigned minor);
+
     friend class PCISerialDevice;
 
     // ^CharacterDevice
-    virtual const char* class_name() const override { return "SerialDevice"; }
+    virtual StringView class_name() const override { return "SerialDevice"sv; }
 
     void initialize();
     void set_interrupts(bool interrupt_enable);
@@ -135,7 +130,7 @@ private:
     bool m_break_enable { false };
     u8 m_modem_control { 0 };
     bool m_last_put_char_was_carriage_return { false };
-    SpinLock<u8> m_serial_lock;
+    Spinlock m_serial_lock;
 };
 
 }

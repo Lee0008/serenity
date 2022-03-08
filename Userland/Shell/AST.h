@@ -10,7 +10,6 @@
 #include "Job.h"
 #include "NodeVisitor.h"
 #include <AK/Format.h>
-#include <AK/InlineLinkedList.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
@@ -21,14 +20,10 @@
 
 namespace Shell::AST {
 
-template<typename T, typename... Args>
-static inline NonnullRefPtr<T> create(Args... args)
-{
-    return adopt_ref(*new T(args...));
-}
+using AK::make_ref_counted;
 
 template<typename T>
-static inline NonnullRefPtr<T> create(std::initializer_list<NonnullRefPtr<Value>> arg)
+static inline NonnullRefPtr<T> make_ref_counted(std::initializer_list<NonnullRefPtr<Value>> arg)
 {
     return adopt_ref(*new T(arg));
 }
@@ -89,7 +84,7 @@ struct Rewiring : public RefCounted<Rewiring> {
 };
 
 struct Redirection : public RefCounted<Redirection> {
-    virtual Result<NonnullRefPtr<Rewiring>, String> apply() const = 0;
+    virtual ErrorOr<NonnullRefPtr<Rewiring>> apply() const = 0;
     virtual ~Redirection();
     virtual bool is_path_redirection() const { return false; }
     virtual bool is_fd_redirection() const { return false; }
@@ -99,7 +94,7 @@ struct Redirection : public RefCounted<Redirection> {
 struct CloseRedirection : public Redirection {
     int fd { -1 };
 
-    virtual Result<NonnullRefPtr<Rewiring>, String> apply() const override;
+    virtual ErrorOr<NonnullRefPtr<Rewiring>> apply() const override;
     virtual ~CloseRedirection();
     CloseRedirection(int fd)
         : fd(fd)
@@ -125,7 +120,7 @@ struct PathRedirection : public Redirection {
         return adopt_ref(*new PathRedirection(move(path), fd, direction));
     }
 
-    virtual Result<NonnullRefPtr<Rewiring>, String> apply() const override;
+    virtual ErrorOr<NonnullRefPtr<Rewiring>> apply() const override;
     virtual ~PathRedirection();
 
 private:
@@ -153,7 +148,7 @@ public:
 
     virtual ~FdRedirection();
 
-    virtual Result<NonnullRefPtr<Rewiring>, String> apply() const override
+    virtual ErrorOr<NonnullRefPtr<Rewiring>> apply() const override
     {
         return adopt_ref(*new Rewiring(old_fd, new_fd, other_pipe_end, action));
     }
@@ -248,7 +243,7 @@ class CommandValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual Vector<Command> resolve_as_commands(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<CommandValue>(m_command)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<CommandValue>(m_command)->set_slices(m_slices); }
     virtual ~CommandValue();
     virtual bool is_command() const override { return true; }
     CommandValue(Command command)
@@ -269,7 +264,7 @@ class CommandSequenceValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual Vector<Command> resolve_as_commands(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<CommandSequenceValue>(m_contained_values)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<CommandSequenceValue>(m_contained_values)->set_slices(m_slices); }
     virtual ~CommandSequenceValue();
     virtual bool is_command() const override { return true; }
     CommandSequenceValue(Vector<Command> commands)
@@ -285,7 +280,7 @@ class JobValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override { VERIFY_NOT_REACHED(); }
     virtual Vector<Command> resolve_as_commands(RefPtr<Shell>) override { VERIFY_NOT_REACHED(); }
-    virtual NonnullRefPtr<Value> clone() const override { return create<JobValue>(m_job)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<JobValue>(m_job)->set_slices(m_slices); }
     virtual ~JobValue();
     virtual bool is_job() const override { return true; }
     JobValue(RefPtr<Job> job)
@@ -303,7 +298,7 @@ class ListValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual NonnullRefPtr<Value> resolve_without_cast(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<ListValue>(m_contained_values)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<ListValue>(m_contained_values)->set_slices(m_slices); }
     virtual ~ListValue();
     virtual bool is_list() const override { return true; }
     virtual bool is_list_without_resolution() const override { return true; }
@@ -327,7 +322,7 @@ private:
 class StringValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<StringValue>(m_string, m_split, m_keep_empty)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<StringValue>(m_string, m_split, m_keep_empty)->set_slices(m_slices); }
     virtual ~StringValue();
     virtual bool is_string() const override { return m_split.is_null(); }
     virtual bool is_list() const override { return !m_split.is_null(); }
@@ -348,7 +343,7 @@ private:
 class GlobValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<GlobValue>(m_glob, m_generation_position)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<GlobValue>(m_glob, m_generation_position)->set_slices(m_slices); }
     virtual ~GlobValue();
     virtual bool is_glob() const override { return true; }
     GlobValue(String glob, Position position)
@@ -366,7 +361,7 @@ class SimpleVariableValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual NonnullRefPtr<Value> resolve_without_cast(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<SimpleVariableValue>(m_name)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<SimpleVariableValue>(m_name)->set_slices(m_slices); }
     virtual ~SimpleVariableValue();
     SimpleVariableValue(String name)
         : m_name(move(name))
@@ -380,7 +375,7 @@ private:
 class SpecialVariableValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<SpecialVariableValue>(m_name)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<SpecialVariableValue>(m_name)->set_slices(m_slices); }
     virtual ~SpecialVariableValue();
     SpecialVariableValue(char name)
         : m_name(name)
@@ -394,7 +389,7 @@ private:
 class TildeValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<TildeValue>(m_username)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<TildeValue>(m_username)->set_slices(m_slices); }
     virtual ~TildeValue();
     virtual bool is_string() const override { return true; }
     TildeValue(String name)
@@ -922,7 +917,7 @@ struct HistorySelector {
             if (kind == Index)
                 return selector;
             if (kind == Last)
-                return size - 1;
+                return size - selector - 1;
             VERIFY_NOT_REACHED();
         }
     };
@@ -1188,6 +1183,7 @@ private:
     virtual HitTestResult hit_test_position(size_t) const override;
     virtual bool is_list() const override { return true; }
     virtual bool should_override_execution_in_current_process() const override { return true; }
+    virtual RefPtr<Node> leftmost_trivial_literal() const override;
 
     NonnullRefPtrVector<Node> m_entries;
     Vector<Position> m_separator_positions;
@@ -1349,11 +1345,18 @@ private:
 
 class StringLiteral final : public Node {
 public:
-    StringLiteral(Position, String);
+    enum class EnclosureType {
+        None,
+        SingleQuotes,
+        DoubleQuotes,
+    };
+
+    StringLiteral(Position, String, EnclosureType);
     virtual ~StringLiteral();
     virtual void visit(NodeVisitor& visitor) override { visitor.visit(this); }
 
     const String& text() const { return m_text; }
+    EnclosureType enclosure_type() const { return m_enclosure_type; }
 
 private:
     NODE(StringLiteral);
@@ -1363,6 +1366,7 @@ private:
     virtual RefPtr<Node> leftmost_trivial_literal() const override { return this; };
 
     String m_text;
+    EnclosureType m_enclosure_type;
 };
 
 class StringPartCompose final : public Node {
@@ -1511,13 +1515,13 @@ namespace AK {
 
 template<>
 struct Formatter<Shell::AST::Command> : StandardFormatter {
-    Formatter() { }
+    Formatter() = default;
     explicit Formatter(StandardFormatter formatter)
         : StandardFormatter(formatter)
     {
     }
 
-    void format(FormatBuilder&, const Shell::AST::Command& value);
+    ErrorOr<void> format(FormatBuilder&, Shell::AST::Command const& value);
 };
 
 }

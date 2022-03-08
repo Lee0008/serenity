@@ -61,20 +61,19 @@ void SoftMMU::ensure_split_at(X86::LogicalAddress address)
 
     // If we get here, we know that the page exists and belongs to a region, that there is
     // a previous page, and that it belongs to the same region.
-    VERIFY(is<MmapRegion>(m_page_to_region_map[page_index]));
-    auto* old_region = static_cast<MmapRegion*>(m_page_to_region_map[page_index]);
+    auto* old_region = verify_cast<MmapRegion>(m_page_to_region_map[page_index]);
 
-    //dbgln("splitting at {:p}", address.offset());
-    //dbgln("    old region: {:p}-{:p}", old_region->base(), old_region->end() - 1);
+    // dbgln("splitting at {:p}", address.offset());
+    // dbgln("    old region: {:p}-{:p}", old_region->base(), old_region->end() - 1);
 
     NonnullOwnPtr<MmapRegion> new_region = old_region->split_at(VirtualAddress(offset));
-    //dbgln("    new region: {:p}-{:p}", new_region->base(), new_region->end() - 1);
-    //dbgln(" up old region: {:p}-{:p}", old_region->base(), old_region->end() - 1);
+    // dbgln("    new region: {:p}-{:p}", new_region->base(), new_region->end() - 1);
+    // dbgln(" up old region: {:p}-{:p}", old_region->base(), old_region->end() - 1);
 
     size_t first_page_in_region = new_region->base() / PAGE_SIZE;
     size_t last_page_in_region = (new_region->base() + new_region->size() - 1) / PAGE_SIZE;
 
-    //dbgln("  @ remapping pages {} thru {}", first_page_in_region, last_page_in_region);
+    // dbgln("  @ remapping pages {} thru {}", first_page_in_region, last_page_in_region);
 
     for (size_t page = first_page_in_region; page <= last_page_in_region; ++page) {
         VERIFY(m_page_to_region_map[page] == old_region);
@@ -322,7 +321,7 @@ void SoftMMU::copy_from_vm(void* destination, const FlatPtr source, size_t size)
 
 ByteBuffer SoftMMU::copy_buffer_from_vm(const FlatPtr source, size_t size)
 {
-    auto buffer = ByteBuffer::create_uninitialized(size);
+    auto buffer = ByteBuffer::create_uninitialized(size).release_value_but_fixme_should_propagate_errors(); // FIXME: Handle possible OOM situation.
     copy_from_vm(buffer.data(), source, size);
     return buffer;
 }
@@ -348,7 +347,7 @@ bool SoftMMU::fast_fill_memory8(X86::LogicalAddress address, size_t size, ValueW
 
     size_t offset_in_region = address.offset() - region->base();
     memset(region->data() + offset_in_region, value.value(), size);
-    memset(region->shadow_data() + offset_in_region, value.shadow(), size);
+    memset(region->shadow_data() + offset_in_region, value.shadow()[0], size);
     return true;
 }
 
@@ -373,8 +372,13 @@ bool SoftMMU::fast_fill_memory32(X86::LogicalAddress address, size_t count, Valu
 
     size_t offset_in_region = address.offset() - region->base();
     fast_u32_fill((u32*)(region->data() + offset_in_region), value.value(), count);
-    fast_u32_fill((u32*)(region->shadow_data() + offset_in_region), value.shadow(), count);
+    fast_u32_fill((u32*)(region->shadow_data() + offset_in_region), value.shadow_as_value(), count);
     return true;
+}
+
+void SoftMMU::dump_backtrace()
+{
+    m_emulator.dump_backtrace();
 }
 
 }

@@ -1,6 +1,6 @@
---- scummvm-2.2.0/configure	2020-09-13 23:05:37.000000000 +0200
-+++ scummvm-2.2.0-patched/configure	2021-06-07 14:15:33.369406722 +0200
-@@ -3917,7 +3917,7 @@
+--- scummvm-2.5.1/configure	2021-12-24 22:19:28.000000000 +0000
++++ scummvm-2.5.1-patched/configure	2022-01-09 21:55:40.753734211 +0000
+@@ -3998,7 +3998,7 @@
  	amigaos* | cygwin* | dreamcast | ds | gamecube | mingw* | morphos | n64 | ps3 | psp2 | psp | riscos | wii)
  		_posix=no
  		;;
@@ -9,12 +9,13 @@
  		_posix=yes
  		;;
  	os2-emx*)
-@@ -5073,6 +5073,8 @@
- # Check for FreeType2 to be present
- #
- find_freetype() {
-+    _freetype_found="true"
-+    return
-         # Wrapper function which tries to find freetype
-         # either by calling freetype-config or by using
-         # pkg-config.
+@@ -5538,6 +5538,9 @@
+ 		mingw*)
+ 			OPENGL_LIBS="-lopengl32"
+ 			;;
++		serenity*)
++			OPENGL_LIBS="-lgl"
++			;;
+ 		*)
+ 			OPENGL_LIBS="-lGL"
+ 			;;

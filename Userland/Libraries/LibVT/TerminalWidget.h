@@ -7,10 +7,10 @@
 #pragma once
 
 #include <AK/String.h>
-#include <LibCore/ConfigFile.h>
 #include <LibCore/ElapsedTimer.h>
 #include <LibCore/Notifier.h>
 #include <LibCore/Timer.h>
+#include <LibGUI/Clipboard.h>
 #include <LibGUI/Frame.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Rect.h>
@@ -22,15 +22,15 @@ namespace VT {
 
 class TerminalWidget final
     : public GUI::Frame
-    , public VT::TerminalClient {
+    , public VT::TerminalClient
+    , public GUI::Clipboard::ClipboardClient {
     C_OBJECT(TerminalWidget);
 
 public:
-    TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Core::ConfigFile> config);
     virtual ~TerminalWidget() override;
 
     void set_pty_master_fd(int fd);
-    void inject_string(const StringView& string)
+    void inject_string(StringView string)
     {
         m_terminal.inject_string(string);
         flush_dirty_lines();
@@ -43,6 +43,8 @@ public:
     void set_opacity(u8);
     float opacity() { return m_opacity; };
 
+    void set_show_scrollbar(bool);
+
     enum class BellMode {
         Visible,
         AudibleBeep,
@@ -52,8 +54,6 @@ public:
     BellMode bell_mode() { return m_bell_mode; }
     void set_bell_mode(BellMode bm) { m_bell_mode = bm; };
 
-    RefPtr<Core::ConfigFile> config() const { return m_config; }
-
     bool has_selection() const;
     bool selection_contains(const VT::Position&) const;
     String selected_text() const;
@@ -61,8 +61,8 @@ public:
     void set_selection(const VT::Range& selection);
     VT::Position buffer_position_at(const Gfx::IntPoint&) const;
 
-    VT::Range find_next(const StringView&, const VT::Position& start = {}, bool case_sensitivity = false, bool should_wrap = false);
-    VT::Range find_previous(const StringView&, const VT::Position& start = {}, bool case_sensitivity = false, bool should_wrap = false);
+    VT::Range find_next(StringView, const VT::Position& start = {}, bool case_sensitivity = false, bool should_wrap = false);
+    VT::Range find_previous(StringView, const VT::Position& start = {}, bool case_sensitivity = false, bool should_wrap = false);
 
     void scroll_to_bottom();
     void scroll_to_row(int);
@@ -83,7 +83,7 @@ public:
 
     const StringView color_scheme_name() const { return m_color_scheme_name; }
 
-    Function<void(const StringView&)> on_title_change;
+    Function<void(StringView)> on_title_change;
     Function<void(const Gfx::IntSize&)> on_terminal_size_change;
     Function<void()> on_command_exit;
 
@@ -93,9 +93,11 @@ public:
 
     void set_font_and_resize_to_fit(const Gfx::Font&);
 
-    void set_color_scheme(const StringView&);
+    void set_color_scheme(StringView);
 
 private:
+    TerminalWidget(int ptm_fd, bool automatic_size_policy);
+
     // ^GUI::Widget
     virtual void event(Core::Event&) override;
     virtual void paint_event(GUI::PaintEvent&) override;
@@ -116,16 +118,19 @@ private:
 
     // ^TerminalClient
     virtual void beep() override;
-    virtual void set_window_title(const StringView&) override;
+    virtual void set_window_title(StringView) override;
     virtual void set_window_progress(int value, int max) override;
     virtual void terminal_did_resize(u16 columns, u16 rows) override;
     virtual void terminal_history_changed(int delta) override;
     virtual void emit(const u8*, size_t) override;
     virtual void set_cursor_style(CursorStyle) override;
 
+    // ^GUI::Clipboard::ClipboardClient
+    virtual void clipboard_content_did_change(const String&) override { update_paste_action(); }
+
     void set_logical_focus(bool);
 
-    void send_non_user_input(const ReadonlyBytes&);
+    void send_non_user_input(ReadonlyBytes);
 
     Gfx::IntRect glyph_rect(u16 row, u16 column);
     Gfx::IntRect row_rect(u16 row);
@@ -198,12 +203,13 @@ private:
         Down
     };
 
+    void set_auto_scroll_direction(AutoScrollDirection);
+
     AutoScrollDirection m_auto_scroll_direction { AutoScrollDirection::None };
 
     RefPtr<Core::Timer> m_cursor_blink_timer;
     RefPtr<Core::Timer> m_visual_beep_timer;
     RefPtr<Core::Timer> m_auto_scroll_timer;
-    RefPtr<Core::ConfigFile> m_config;
 
     RefPtr<GUI::Scrollbar> m_scrollbar;
 
@@ -217,6 +223,7 @@ private:
     Core::ElapsedTimer m_triple_click_timer;
 
     Gfx::IntPoint m_left_mousedown_position;
+    VT::Position m_left_mousedown_position_buffer;
 };
 
 }

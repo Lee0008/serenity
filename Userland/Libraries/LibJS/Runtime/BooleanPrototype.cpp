@@ -5,6 +5,7 @@
  */
 
 #include <AK/Function.h>
+#include <AK/TypeCasts.h>
 #include <LibJS/Runtime/BooleanPrototype.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/GlobalObject.h>
@@ -35,12 +36,10 @@ JS_DEFINE_NATIVE_FUNCTION(BooleanPrototype::to_string)
     auto this_value = vm.this_value(global_object);
     if (this_value.is_boolean())
         return js_string(vm, this_value.as_bool() ? "true" : "false");
-    if (!this_value.is_object() || !is<BooleanObject>(this_value.as_object())) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotA, "Boolean");
-        return {};
-    }
+    if (!this_value.is_object() || !is<BooleanObject>(this_value.as_object()))
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObjectOfType, "Boolean");
 
-    bool bool_value = static_cast<const BooleanObject&>(this_value.as_object()).value_of().as_bool();
+    bool bool_value = static_cast<const BooleanObject&>(this_value.as_object()).boolean();
     return js_string(vm, bool_value ? "true" : "false");
 }
 
@@ -50,11 +49,9 @@ JS_DEFINE_NATIVE_FUNCTION(BooleanPrototype::value_of)
     auto this_value = vm.this_value(global_object);
     if (this_value.is_boolean())
         return this_value;
-    if (!this_value.is_object() || !is<BooleanObject>(this_value.as_object())) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotA, "Boolean");
-        return {};
-    }
+    if (!this_value.is_object() || !is<BooleanObject>(this_value.as_object()))
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObjectOfType, "Boolean");
 
-    return static_cast<const BooleanObject&>(this_value.as_object()).value_of();
+    return Value(static_cast<const BooleanObject&>(this_value.as_object()).boolean());
 }
 }

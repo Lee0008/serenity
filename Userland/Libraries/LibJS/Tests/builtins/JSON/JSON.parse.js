@@ -35,3 +35,18 @@ test("syntax errors", () => {
         }).toThrow(SyntaxError);
     });
 });
+
+test("negative zero", () => {
+    ["-0", " \n-0", "-0  \t", "\n\t -0\n   ", "-0.0"].forEach(testCase => {
+        expect(JSON.parse(testCase)).toEqual(-0.0);
+    });
+
+    expect(JSON.parse(-0)).toEqual(0);
+});
+
+// The underlying parser resolves decimal numbers by storing the decimal portion in an integer
+// This test handles a regression where the decimal portion was only using a u32 vs. u64
+// and would fail to parse.
+test("long decimal parse", () => {
+    expect(JSON.parse("1644452550.6489999294281")).toEqual(1644452550.6489999294281);
+});

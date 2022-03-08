@@ -1,33 +1,38 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/ByteBuffer.h>
 #include <AK/Checked.h>
-#include <AK/Memory.h>
 #include <AK/PrintfImplementation.h>
 #include <AK/StdLibExtras.h>
-#include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
+#include <AK/UnicodeUtils.h>
 #include <AK/Utf32View.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#    include <AK/Utf16View.h>
+#endif
 
 namespace AK {
 
-inline void StringBuilder::will_append(size_t size)
+inline ErrorOr<void> StringBuilder::will_append(size_t size)
 {
     Checked<size_t> needed_capacity = m_buffer.size();
     needed_capacity += size;
     VERIFY(!needed_capacity.has_overflow());
     // Prefer to completely use the existing capacity first
     if (needed_capacity <= m_buffer.capacity())
-        return;
+        return {};
     Checked<size_t> expanded_capacity = needed_capacity;
     expanded_capacity *= 2;
     VERIFY(!expanded_capacity.has_overflow());
-    m_buffer.ensure_capacity(expanded_capacity.value());
+    TRY(m_buffer.try_ensure_capacity(expanded_capacity.value()));
+    return {};
 }
 
 StringBuilder::StringBuilder(size_t initial_capacity)
@@ -35,26 +40,43 @@ StringBuilder::StringBuilder(size_t initial_capacity)
     m_buffer.ensure_capacity(initial_capacity);
 }
 
-void StringBuilder::append(const StringView& str)
+ErrorOr<void> StringBuilder::try_append(StringView string)
 {
-    if (str.is_empty())
-        return;
-    will_append(str.length());
-    m_buffer.append(str.characters_without_null_termination(), str.length());
+    if (string.is_empty())
+        return {};
+    TRY(will_append(string.length()));
+    TRY(m_buffer.try_append(string.characters_without_null_termination(), string.length()));
+    return {};
 }
 
-void StringBuilder::append(const char* characters, size_t length)
+ErrorOr<void> StringBuilder::try_append(char ch)
 {
-    append(StringView { characters, length });
+    TRY(will_append(1));
+    TRY(m_buffer.try_append(ch));
+    return {};
+}
+
+void StringBuilder::append(StringView string)
+{
+    MUST(try_append(string));
+}
+
+ErrorOr<void> StringBuilder::try_append(char const* characters, size_t length)
+{
+    return try_append(StringView { characters, length });
+}
+
+void StringBuilder::append(char const* characters, size_t length)
+{
+    MUST(try_append(characters, length));
 }
 
 void StringBuilder::append(char ch)
 {
-    will_append(1);
-    m_buffer.append(&ch, 1);
+    MUST(try_append(ch));
 }
 
-void StringBuilder::appendvf(const char* fmt, va_list ap)
+void StringBuilder::appendvf(char const* fmt, va_list ap)
 {
     printf_internal([this](char*&, char ch) {
         append(ch);
@@ -64,20 +86,23 @@ void StringBuilder::appendvf(const char* fmt, va_list ap)
 
 ByteBuffer StringBuilder::to_byte_buffer() const
 {
-    return ByteBuffer::copy(data(), length());
+    // FIXME: Handle OOM failure.
+    return ByteBuffer::copy(data(), length()).release_value_but_fixme_should_propagate_errors();
 }
 
+#ifndef KERNEL
 String StringBuilder::to_string() const
 {
     if (is_empty())
         return String::empty();
-    return String((const char*)data(), length());
+    return String((char const*)data(), length());
 }
 
 String StringBuilder::build() const
 {
     return to_string();
 }
+#endif
 
 StringView StringBuilder::string_view() const
 {
@@ -89,35 +114,52 @@ void StringBuilder::clear()
     m_buffer.clear();
 }
 
-void StringBuilder::append_code_point(u32 code_point)
+ErrorOr<void> StringBuilder::try_append_code_point(u32 code_point)
 {
-    if (code_point <= 0x7f) {
-        append((char)code_point);
-    } else if (code_point <= 0x07ff) {
-        append((char)(((code_point >> 6) & 0x1f) | 0xc0));
-        append((char)(((code_point >> 0) & 0x3f) | 0x80));
-    } else if (code_point <= 0xffff) {
-        append((char)(((code_point >> 12) & 0x0f) | 0xe0));
-        append((char)(((code_point >> 6) & 0x3f) | 0x80));
-        append((char)(((code_point >> 0) & 0x3f) | 0x80));
-    } else if (code_point <= 0x10ffff) {
-        append((char)(((code_point >> 18) & 0x07) | 0xf0));
-        append((char)(((code_point >> 12) & 0x3f) | 0x80));
-        append((char)(((code_point >> 6) & 0x3f) | 0x80));
-        append((char)(((code_point >> 0) & 0x3f) | 0x80));
-    } else {
-        append(0xef);
-        append(0xbf);
-        append(0xbd);
+    auto nwritten = AK::UnicodeUtils::code_point_to_utf8(code_point, [this](char c) { append(c); });
+    if (nwritten < 0) {
+        TRY(try_append(0xef));
+        TRY(try_append(0xbf));
+        TRY(try_append(0xbd));
     }
+    return {};
 }
 
-void StringBuilder::append(const Utf32View& utf32_view)
+void StringBuilder::append_code_point(u32 code_point)
+{
+    MUST(try_append_code_point(code_point));
+}
+
+#ifndef KERNEL
+ErrorOr<void> StringBuilder::try_append(Utf16View const& utf16_view)
+{
+    for (size_t i = 0; i < utf16_view.length_in_code_units();) {
+        auto code_point = utf16_view.code_point_at(i);
+        TRY(try_append_code_point(code_point));
+
+        i += (code_point > 0xffff ? 2 : 1);
+    }
+    return {};
+}
+
+void StringBuilder::append(Utf16View const& utf16_view)
+{
+    MUST(try_append(utf16_view));
+}
+#endif
+
+ErrorOr<void> StringBuilder::try_append(Utf32View const& utf32_view)
 {
     for (size_t i = 0; i < utf32_view.length(); ++i) {
         auto code_point = utf32_view.code_points()[i];
-        append_code_point(code_point);
+        TRY(try_append_code_point(code_point));
     }
+    return {};
+}
+
+void StringBuilder::append(Utf32View const& utf32_view)
+{
+    MUST(try_append(utf32_view));
 }
 
 void StringBuilder::append_as_lowercase(char ch)
@@ -128,32 +170,38 @@ void StringBuilder::append_as_lowercase(char ch)
         append(ch);
 }
 
-void StringBuilder::append_escaped_for_json(const StringView& string)
+void StringBuilder::append_escaped_for_json(StringView string)
+{
+    MUST(try_append_escaped_for_json(string));
+}
+
+ErrorOr<void> StringBuilder::try_append_escaped_for_json(StringView string)
 {
     for (auto ch : string) {
         switch (ch) {
-        case '\e':
-            append("\\u001B");
-            break;
         case '\b':
-            append("\\b");
+            TRY(try_append("\\b"));
             break;
         case '\n':
-            append("\\n");
+            TRY(try_append("\\n"));
             break;
         case '\t':
-            append("\\t");
+            TRY(try_append("\\t"));
             break;
         case '\"':
-            append("\\\"");
+            TRY(try_append("\\\""));
             break;
         case '\\':
-            append("\\\\");
+            TRY(try_append("\\\\"));
             break;
         default:
-            append(ch);
+            if (ch >= 0 && ch <= 0x1f)
+                TRY(try_appendff("\\u{:04x}", ch));
+            else
+                TRY(try_append(ch));
         }
     }
+    return {};
 }
 
 }

@@ -8,6 +8,7 @@
 
 #define _STDIO_H // Make GMP believe we exist.
 
+#include <Kernel/API/POSIX/stdio.h>
 #include <bits/FILE.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -15,21 +16,19 @@
 #include <sys/types.h>
 
 #define FILENAME_MAX 1024
+#define FOPEN_MAX 1024
 
 __BEGIN_DECLS
 #ifndef EOF
 #    define EOF (-1)
 #endif
 
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
-
 #define _IOFBF 0
 #define _IOLBF 1
 #define _IONBF 2
 
 #define L_tmpnam 256
+#define P_tmpdir "/tmp"
 
 extern FILE* stdin;
 extern FILE* stdout;
@@ -50,7 +49,7 @@ int fgetc(FILE*);
 int fgetc_unlocked(FILE*);
 int getc(FILE*);
 int getc_unlocked(FILE* stream);
-int getchar();
+int getchar(void);
 ssize_t getdelim(char**, size_t*, int, FILE*);
 ssize_t getline(char**, size_t*, FILE*);
 int ungetc(int c, FILE*);
@@ -58,6 +57,7 @@ int remove(const char* pathname);
 FILE* fdopen(int fd, const char* mode);
 FILE* fopen(const char* pathname, const char* mode);
 FILE* freopen(const char* pathname, const char* mode, FILE*);
+FILE* fmemopen(void* buf, size_t size, const char* mode);
 void flockfile(FILE* filehandle);
 void funlockfile(FILE* filehandle);
 int fclose(FILE*);
@@ -76,7 +76,6 @@ int vsprintf(char* buffer, const char* fmt, va_list) __attribute__((format(print
 int vsnprintf(char* buffer, size_t, const char* fmt, va_list) __attribute__((format(printf, 3, 0)));
 int fprintf(FILE*, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 int printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-void dbgputch(char);
 void dbgputstr(const char*, size_t);
 int sprintf(char* buffer, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 int asprintf(char** strp, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -96,7 +95,7 @@ int setvbuf(FILE*, char* buf, int mode, size_t);
 void setbuf(FILE*, char* buf);
 void setlinebuf(FILE*);
 int rename(const char* oldpath, const char* newpath);
-FILE* tmpfile();
+FILE* tmpfile(void);
 char* tmpnam(char*);
 FILE* popen(const char* command, const char* type);
 int pclose(FILE*);

@@ -6,29 +6,32 @@
 
 #pragma once
 
-#include <Kernel/KResult.h>
+#include <AK/Error.h>
+#include <Kernel/Locking/MutexProtected.h>
 #include <Kernel/Net/IPv4Socket.h>
 
 namespace Kernel {
 
 class UDPSocket final : public IPv4Socket {
 public:
-    static KResultOr<NonnullRefPtr<UDPSocket>> create(int protocol);
+    static ErrorOr<NonnullRefPtr<UDPSocket>> try_create(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer);
     virtual ~UDPSocket() override;
 
-    static SocketHandle<UDPSocket> from_port(u16);
+    static RefPtr<UDPSocket> from_port(u16);
     static void for_each(Function<void(const UDPSocket&)>);
+    static ErrorOr<void> try_for_each(Function<ErrorOr<void>(const UDPSocket&)>);
 
 private:
-    explicit UDPSocket(int protocol);
-    virtual const char* class_name() const override { return "UDPSocket"; }
-    static Lockable<HashMap<u16, UDPSocket*>>& sockets_by_port();
+    explicit UDPSocket(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer);
+    virtual StringView class_name() const override { return "UDPSocket"sv; }
+    static MutexProtected<HashMap<u16, UDPSocket*>>& sockets_by_port();
 
-    virtual KResultOr<size_t> protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, int flags) override;
-    virtual KResultOr<size_t> protocol_send(const UserOrKernelBuffer&, size_t) override;
-    virtual KResult protocol_connect(FileDescription&, ShouldBlock) override;
-    virtual KResultOr<u16> protocol_allocate_local_port() override;
-    virtual KResult protocol_bind() override;
+    virtual ErrorOr<size_t> protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, int flags) override;
+    virtual ErrorOr<size_t> protocol_send(const UserOrKernelBuffer&, size_t) override;
+    virtual ErrorOr<size_t> protocol_size(ReadonlyBytes raw_ipv4_packet) override;
+    virtual ErrorOr<void> protocol_connect(OpenFileDescription&, ShouldBlock) override;
+    virtual ErrorOr<u16> protocol_allocate_local_port() override;
+    virtual ErrorOr<void> protocol_bind() override;
 };
 
 }

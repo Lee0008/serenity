@@ -18,18 +18,17 @@ RefPtr<ImageData> ImageData::create_with_size(JS::GlobalObject& global_object, i
     if (width > 16384 || height > 16384)
         return nullptr;
 
-    dbgln("Creating ImageData with {}x{}", width, height);
-
-    auto* data = JS::Uint8ClampedArray::create(global_object, width * height * 4);
-    if (!data)
+    auto data_or_error = JS::Uint8ClampedArray::create(global_object, width * height * 4);
+    if (data_or_error.is_error())
         return nullptr;
+    auto* data = data_or_error.release_value();
 
     auto data_handle = JS::make_handle(data);
 
-    auto bitmap = Gfx::Bitmap::create_wrapper(Gfx::BitmapFormat::RGBA8888, Gfx::IntSize(width, height), 1, width * sizeof(u32), data->data().data());
-    if (!bitmap)
+    auto bitmap_or_error = Gfx::Bitmap::try_create_wrapper(Gfx::BitmapFormat::RGBA8888, Gfx::IntSize(width, height), 1, width * sizeof(u32), data->data().data());
+    if (bitmap_or_error.is_error())
         return nullptr;
-    return adopt_ref(*new ImageData(bitmap.release_nonnull(), move(data_handle)));
+    return adopt_ref(*new ImageData(bitmap_or_error.release_value(), move(data_handle)));
 }
 
 ImageData::ImageData(NonnullRefPtr<Gfx::Bitmap> bitmap, JS::Handle<JS::Uint8ClampedArray> data)

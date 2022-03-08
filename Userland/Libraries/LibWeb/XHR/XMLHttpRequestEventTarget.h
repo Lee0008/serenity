@@ -12,6 +12,15 @@
 
 namespace Web::XHR {
 
+#define ENUMERATE_XML_HTTP_REQUEST_EVENT_TARGET_EVENT_HANDLERS(E) \
+    E(onloadstart, XHR::EventNames::loadstart)                    \
+    E(onprogress, XHR::EventNames::progress)                      \
+    E(onabort, XHR::EventNames::abort)                            \
+    E(onerror, XHR::EventNames::error)                            \
+    E(onload, XHR::EventNames::load)                              \
+    E(ontimeout, XHR::EventNames::timeout)                        \
+    E(onloadend, XHR::EventNames::loadend)
+
 class XMLHttpRequestEventTarget
     : public DOM::EventTarget
     , public Bindings::Wrappable {
@@ -20,9 +29,16 @@ public:
 
     virtual ~XMLHttpRequestEventTarget() override {};
 
+#undef __ENUMERATE
+#define __ENUMERATE(attribute_name, event_name)                  \
+    void set_##attribute_name(Optional<Bindings::CallbackType>); \
+    Bindings::CallbackType* attribute_name();
+    ENUMERATE_XML_HTTP_REQUEST_EVENT_TARGET_EVENT_HANDLERS(__ENUMERATE)
+#undef __ENUMERATE
+
 protected:
-    explicit XMLHttpRequestEventTarget(Bindings::ScriptExecutionContext& script_execution_context)
-        : DOM::EventTarget(script_execution_context)
+    XMLHttpRequestEventTarget()
+        : DOM::EventTarget()
     {
     }
 

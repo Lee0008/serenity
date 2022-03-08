@@ -10,18 +10,17 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$mknod(Userspace<const Syscall::SC_mknod_params*> user_params)
+ErrorOr<FlatPtr> Process::sys$mknod(Userspace<const Syscall::SC_mknod_params*> user_params)
 {
-    REQUIRE_PROMISE(dpath);
-    Syscall::SC_mknod_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::dpath));
+    auto params = TRY(copy_typed_from_user(user_params));
+
     if (!is_superuser() && !is_regular_file(params.mode) && !is_fifo(params.mode) && !is_socket(params.mode))
         return EPERM;
-    auto path = get_syscall_path_argument(params.path);
-    if (path.is_error())
-        return path.error();
-    return VFS::the().mknod(path.value()->view(), params.mode & ~umask(), params.dev, current_directory());
+    auto path = TRY(get_syscall_path_argument(params.path));
+    TRY(VirtualFileSystem::the().mknod(path->view(), params.mode & ~umask(), params.dev, current_directory()));
+    return 0;
 }
 
 }

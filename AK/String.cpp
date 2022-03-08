@@ -7,6 +7,7 @@
 #include <AK/ByteBuffer.h>
 #include <AK/FlyString.h>
 #include <AK/Format.h>
+#include <AK/Function.h>
 #include <AK/Memory.h>
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
@@ -17,54 +18,27 @@ namespace AK {
 
 bool String::operator==(const FlyString& fly_string) const
 {
-    return *this == String(fly_string.impl());
+    return m_impl == fly_string.impl() || view() == fly_string.view();
 }
 
 bool String::operator==(const String& other) const
 {
-    if (!m_impl)
-        return !other.m_impl;
-
-    if (!other.m_impl)
-        return false;
-
-    return *m_impl == *other.m_impl;
+    return m_impl == other.impl() || view() == other.view();
 }
 
-bool String::operator==(const StringView& other) const
+bool String::operator==(StringView other) const
 {
-    if (!m_impl)
-        return !other.m_characters;
-
-    if (!other.m_characters)
-        return false;
-
-    if (length() != other.length())
-        return false;
-
-    return !memcmp(characters(), other.characters_without_null_termination(), length());
+    return view() == other;
 }
 
 bool String::operator<(const String& other) const
 {
-    if (!m_impl)
-        return other.m_impl;
-
-    if (!other.m_impl)
-        return false;
-
-    return strcmp(characters(), other.characters()) < 0;
+    return view() < other.view();
 }
 
 bool String::operator>(const String& other) const
 {
-    if (!m_impl)
-        return other.m_impl;
-
-    if (!other.m_impl)
-        return false;
-
-    return strcmp(characters(), other.characters()) > 0;
+    return view() > other.view();
 }
 
 bool String::copy_characters_to_buffer(char* buffer, size_t buffer_size) const
@@ -91,6 +65,16 @@ String String::isolated_copy() const
     return String(move(*impl));
 }
 
+String String::substring(size_t start, size_t length) const
+{
+    if (!length)
+        return String::empty();
+    VERIFY(m_impl);
+    VERIFY(!Checked<size_t>::addition_would_overflow(start, length));
+    VERIFY(start + length <= m_impl->length());
+    return { characters() + start, length };
+}
+
 String String::substring(size_t start) const
 {
     VERIFY(m_impl);
@@ -98,21 +82,11 @@ String String::substring(size_t start) const
     return { characters() + start, length() - start };
 }
 
-String String::substring(size_t start, size_t length) const
-{
-    if (!length)
-        return "";
-    VERIFY(m_impl);
-    VERIFY(start + length <= m_impl->length());
-    // FIXME: This needs some input bounds checking.
-    return { characters() + start, length };
-}
-
 StringView String::substring_view(size_t start, size_t length) const
 {
     VERIFY(m_impl);
+    VERIFY(!Checked<size_t>::addition_would_overflow(start, length));
     VERIFY(start + length <= m_impl->length());
-    // FIXME: This needs some input bounds checking.
     return { characters() + start, length };
 }
 
@@ -150,7 +124,7 @@ Vector<String> String::split_limit(char separator, size_t limit, bool keep_empty
     return v;
 }
 
-Vector<StringView> String::split_view(const char separator, bool keep_empty) const
+Vector<StringView> String::split_view(Function<bool(char)> separator, bool keep_empty) const
 {
     if (is_empty())
         return {};
@@ -159,7 +133,7 @@ Vector<StringView> String::split_view(const char separator, bool keep_empty) con
     size_t substart = 0;
     for (size_t i = 0; i < length(); ++i) {
         char ch = characters()[i];
-        if (ch == separator) {
+        if (separator(ch)) {
             size_t sublen = i - substart;
             if (sublen != 0 || keep_empty)
                 v.append(substring_view(substart, sublen));
@@ -172,36 +146,42 @@ Vector<StringView> String::split_view(const char separator, bool keep_empty) con
     return v;
 }
 
+Vector<StringView> String::split_view(const char separator, bool keep_empty) const
+{
+    return split_view([separator](char ch) { return ch == separator; }, keep_empty);
+}
+
 ByteBuffer String::to_byte_buffer() const
 {
     if (!m_impl)
         return {};
-    return ByteBuffer::copy(reinterpret_cast<const u8*>(characters()), length());
+    // FIXME: Handle OOM failure.
+    return ByteBuffer::copy(bytes()).release_value_but_fixme_should_propagate_errors();
 }
 
 template<typename T>
-Optional<T> String::to_int() const
+Optional<T> String::to_int(TrimWhitespace trim_whitespace) const
 {
-    return StringUtils::convert_to_int<T>(view());
+    return StringUtils::convert_to_int<T>(view(), trim_whitespace);
 }
 
-template Optional<i8> String::to_int() const;
-template Optional<i16> String::to_int() const;
-template Optional<i32> String::to_int() const;
-template Optional<i64> String::to_int() const;
+template Optional<i8> String::to_int(TrimWhitespace) const;
+template Optional<i16> String::to_int(TrimWhitespace) const;
+template Optional<i32> String::to_int(TrimWhitespace) const;
+template Optional<i64> String::to_int(TrimWhitespace) const;
 
 template<typename T>
-Optional<T> String::to_uint() const
+Optional<T> String::to_uint(TrimWhitespace trim_whitespace) const
 {
-    return StringUtils::convert_to_uint<T>(view());
+    return StringUtils::convert_to_uint<T>(view(), trim_whitespace);
 }
 
-template Optional<u8> String::to_uint() const;
-template Optional<u16> String::to_uint() const;
-template Optional<u32> String::to_uint() const;
-template Optional<u64> String::to_uint() const;
+template Optional<u8> String::to_uint(TrimWhitespace) const;
+template Optional<u16> String::to_uint(TrimWhitespace) const;
+template Optional<u32> String::to_uint(TrimWhitespace) const;
+template Optional<u64> String::to_uint(TrimWhitespace) const;
 
-bool String::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
+bool String::starts_with(StringView str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::starts_with(*this, str, case_sensitivity);
 }
@@ -213,7 +193,7 @@ bool String::starts_with(char ch) const
     return characters()[0] == ch;
 }
 
-bool String::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
+bool String::ends_with(StringView str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::ends_with(*this, str, case_sensitivity);
 }
@@ -235,7 +215,7 @@ String String::repeated(char ch, size_t count)
     return *impl;
 }
 
-String String::repeated(const StringView& string, size_t count)
+String String::repeated(StringView string, size_t count)
 {
     if (!count || string.is_empty())
         return empty();
@@ -273,99 +253,94 @@ String String::bijective_base_from(size_t value, unsigned base, StringView map)
     return String { ReadonlyBytes(buffer.data(), i) };
 }
 
-bool String::matches(const StringView& mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
+String String::roman_number_from(size_t value)
+{
+    if (value > 3999)
+        return String::number(value);
+
+    StringBuilder builder;
+
+    while (value > 0) {
+        if (value >= 1000) {
+            builder.append('M');
+            value -= 1000;
+        } else if (value >= 900) {
+            builder.append("CM"sv);
+            value -= 900;
+        } else if (value >= 500) {
+            builder.append('D');
+            value -= 500;
+        } else if (value >= 400) {
+            builder.append("CD"sv);
+            value -= 400;
+        } else if (value >= 100) {
+            builder.append('C');
+            value -= 100;
+        } else if (value >= 90) {
+            builder.append("XC"sv);
+            value -= 90;
+        } else if (value >= 50) {
+            builder.append('L');
+            value -= 50;
+        } else if (value >= 40) {
+            builder.append("XL"sv);
+            value -= 40;
+        } else if (value >= 10) {
+            builder.append('X');
+            value -= 10;
+        } else if (value == 9) {
+            builder.append("IX"sv);
+            value -= 9;
+        } else if (value >= 5 && value <= 8) {
+            builder.append('V');
+            value -= 5;
+        } else if (value == 4) {
+            builder.append("IV"sv);
+            value -= 4;
+        } else if (value <= 3) {
+            builder.append('I');
+            value -= 1;
+        }
+    }
+
+    return builder.to_string();
+}
+
+bool String::matches(StringView mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::matches(*this, mask, case_sensitivity, &mask_spans);
 }
 
-bool String::matches(const StringView& mask, CaseSensitivity case_sensitivity) const
+bool String::matches(StringView mask, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::matches(*this, mask, case_sensitivity);
 }
 
-bool String::contains(const StringView& needle, CaseSensitivity case_sensitivity) const
+bool String::contains(StringView needle, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::contains(*this, needle, case_sensitivity);
 }
 
-bool String::equals_ignoring_case(const StringView& other) const
+bool String::contains(char needle, CaseSensitivity case_sensitivity) const
+{
+    return StringUtils::contains(*this, StringView(&needle, 1), case_sensitivity);
+}
+
+bool String::equals_ignoring_case(StringView other) const
 {
     return StringUtils::equals_ignoring_case(view(), other);
 }
 
-Vector<size_t> String::find_all(const String& needle) const
-{
-    Vector<size_t> positions;
-    size_t start = 0, pos;
-    for (;;) {
-        const char* ptr = strstr(characters() + start, needle.characters());
-        if (!ptr)
-            break;
-
-        pos = ptr - characters();
-        positions.append(pos);
-
-        start = pos + 1;
-    }
-    return positions;
-}
-
-int String::replace(const String& needle, const String& replacement, bool all_occurrences)
-{
-    if (is_empty())
-        return 0;
-
-    Vector<size_t> positions;
-    if (all_occurrences) {
-        positions = find_all(needle);
-    } else {
-        auto pos = find(needle);
-        if (!pos.has_value())
-            return 0;
-        positions.append(pos.value());
-    }
-
-    if (!positions.size())
-        return 0;
-
-    StringBuilder b;
-    size_t lastpos = 0;
-    for (auto& pos : positions) {
-        b.append(substring_view(lastpos, pos - lastpos));
-        b.append(replacement);
-        lastpos = pos + needle.length();
-    }
-    b.append(substring_view(lastpos, length() - lastpos));
-    m_impl = StringImpl::create(b.build().characters());
-    return positions.size();
-}
-
-size_t String::count(const String& needle) const
-{
-    size_t count = 0;
-    size_t start = 0, pos;
-    for (;;) {
-        const char* ptr = strstr(characters() + start, needle.characters());
-        if (!ptr)
-            break;
-
-        pos = ptr - characters();
-        count++;
-        start = pos + 1;
-    }
-    return count;
-}
-
 String String::reverse() const
 {
-    StringBuilder reversed_string;
+    StringBuilder reversed_string(length());
     for (size_t i = length(); i-- > 0;) {
         reversed_string.append(characters()[i]);
     }
     return reversed_string.to_string();
 }
 
-String escape_html_entities(const StringView& html)
+String escape_html_entities(StringView html)
 {
     StringBuilder builder;
     for (size_t i = 0; i < html.length(); ++i) {
@@ -375,6 +350,8 @@ String escape_html_entities(const StringView& html)
             builder.append("&gt;");
         else if (html[i] == '&')
             builder.append("&amp;");
+        else if (html[i] == '"')
+            builder.append("&quot;");
         else
             builder.append(html[i]);
     }
@@ -405,45 +382,34 @@ String String::to_snakecase() const
     return StringUtils::to_snakecase(*this);
 }
 
+String String::to_titlecase() const
+{
+    return StringUtils::to_titlecase(*this);
+}
+
 bool operator<(const char* characters, const String& string)
 {
-    if (!characters)
-        return !string.is_null();
-
-    if (string.is_null())
-        return false;
-
-    return __builtin_strcmp(characters, string.characters()) < 0;
+    return string.view() > characters;
 }
 
 bool operator>=(const char* characters, const String& string)
 {
-    return !(characters < string);
+    return string.view() <= characters;
 }
 
 bool operator>(const char* characters, const String& string)
 {
-    if (!characters)
-        return !string.is_null();
-
-    if (string.is_null())
-        return false;
-
-    return __builtin_strcmp(characters, string.characters()) > 0;
+    return string.view() < characters;
 }
 
 bool operator<=(const char* characters, const String& string)
 {
-    return !(characters > string);
+    return string.view() >= characters;
 }
 
 bool String::operator==(const char* cstring) const
 {
-    if (is_null())
-        return !cstring;
-    if (!cstring)
-        return false;
-    return !__builtin_strcmp(characters(), cstring);
+    return view() == cstring;
 }
 
 InputStream& operator>>(InputStream& stream, String& string)
@@ -469,24 +435,16 @@ InputStream& operator>>(InputStream& stream, String& string)
     }
 }
 
-String String::vformatted(StringView fmtstr, TypeErasedFormatParams params)
+String String::vformatted(StringView fmtstr, TypeErasedFormatParams& params)
 {
     StringBuilder builder;
-    vformat(builder, fmtstr, params);
+    MUST(vformat(builder, fmtstr, params));
     return builder.to_string();
 }
 
-Optional<size_t> String::find(char c, size_t start) const
+Vector<size_t> String::find_all(StringView needle) const
 {
-    return find(StringView { &c, 1 }, start);
-}
-
-Optional<size_t> String::find(StringView const& view, size_t start) const
-{
-    auto index = StringUtils::find(substring_view(start), view);
-    if (!index.has_value())
-        return {};
-    return index.value() + start;
+    return StringUtils::find_all(*this, needle);
 }
 
 }

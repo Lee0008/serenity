@@ -12,6 +12,13 @@
 
 namespace Core {
 
+ElapsedTimer ElapsedTimer::start_new()
+{
+    ElapsedTimer timer;
+    timer.start();
+    return timer;
+}
+
 void ElapsedTimer::start()
 {
     m_valid = true;
@@ -19,6 +26,12 @@ void ElapsedTimer::start()
     clock_gettime(m_precise ? CLOCK_MONOTONIC : CLOCK_MONOTONIC_COARSE, &now_spec);
     m_origin_time.tv_sec = now_spec.tv_sec;
     m_origin_time.tv_usec = now_spec.tv_nsec / 1000;
+}
+
+void ElapsedTimer::reset()
+{
+    m_valid = false;
+    m_origin_time = { 0, 0 };
 }
 
 int ElapsedTimer::elapsed() const
@@ -32,6 +45,11 @@ int ElapsedTimer::elapsed() const
     struct timeval diff;
     timeval_sub(now, m_origin_time, diff);
     return diff.tv_sec * 1000 + diff.tv_usec / 1000;
+}
+
+Time ElapsedTimer::elapsed_time() const
+{
+    return Time::from_milliseconds(elapsed());
 }
 
 }

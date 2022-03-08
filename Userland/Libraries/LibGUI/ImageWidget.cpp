@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/MappedFile.h>
+#include <LibCore/MappedFile.h>
 #include <LibGUI/ImageWidget.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Bitmap.h>
@@ -14,7 +14,7 @@ REGISTER_WIDGET(GUI, ImageWidget)
 
 namespace GUI {
 
-ImageWidget::ImageWidget(const StringView&)
+ImageWidget::ImageWidget(StringView)
     : m_timer(Core::Timer::construct())
 
 {
@@ -56,7 +56,7 @@ void ImageWidget::animate()
 {
     m_current_frame_index = (m_current_frame_index + 1) % m_image_decoder->frame_count();
 
-    const auto& current_frame = m_image_decoder->frame(m_current_frame_index);
+    auto current_frame = m_image_decoder->frame(m_current_frame_index).release_value_but_fixme_should_propagate_errors();
     set_bitmap(current_frame.image);
 
     if (current_frame.duration != m_timer->interval()) {
@@ -71,21 +71,24 @@ void ImageWidget::animate()
     }
 }
 
-void ImageWidget::load_from_file(const StringView& path)
+void ImageWidget::load_from_file(StringView path)
 {
-    auto file_or_error = MappedFile::map(path);
+    auto file_or_error = Core::MappedFile::map(path);
     if (file_or_error.is_error())
         return;
 
     auto& mapped_file = *file_or_error.value();
-    m_image_decoder = Gfx::ImageDecoder::create((const u8*)mapped_file.data(), mapped_file.size());
-    auto bitmap = m_image_decoder->bitmap();
+    m_image_decoder = Gfx::ImageDecoder::try_create(mapped_file.bytes());
+    VERIFY(m_image_decoder);
+
+    auto frame = m_image_decoder->frame(0).release_value_but_fixme_should_propagate_errors();
+    auto bitmap = frame.image;
     VERIFY(bitmap);
 
     set_bitmap(bitmap);
 
     if (m_image_decoder->is_animated() && m_image_decoder->frame_count() > 1) {
-        const auto& first_frame = m_image_decoder->frame(0);
+        auto first_frame = m_image_decoder->frame(0).release_value_but_fixme_should_propagate_errors();
         m_timer->set_interval(first_frame.duration);
         m_timer->on_timeout = [this] { animate(); };
         m_timer->start();

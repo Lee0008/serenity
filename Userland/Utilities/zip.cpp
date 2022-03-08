@@ -11,12 +11,13 @@
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
 #include <LibCore/FileStream.h>
+#include <LibCore/System.h>
 #include <LibCrypto/Checksum/CRC32.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     const char* zip_path;
-    Vector<String> source_paths;
+    Vector<StringView> source_paths;
     bool recurse = false;
     bool force = false;
 
@@ -25,7 +26,16 @@ int main(int argc, char** argv)
     args_parser.add_positional_argument(source_paths, "Input files to be archived", "files", Core::ArgsParser::Required::Yes);
     args_parser.add_option(recurse, "Travel the directory structure recursively", "recurse-paths", 'r');
     args_parser.add_option(force, "Overwrite existing zip file", "force", 'f');
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
+
+    TRY(Core::System::pledge("stdio rpath wpath cpath"));
+
+    auto cwd = TRY(Core::System::getcwd());
+    TRY(Core::System::unveil(LexicalPath::absolute_path(cwd, zip_path), "wc"));
+    for (auto const& source_path : source_paths) {
+        TRY(Core::System::unveil(LexicalPath::absolute_path(cwd, source_path), "r"));
+    }
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     String zip_file_path { zip_path };
     if (Core::File::exists(zip_file_path)) {
@@ -37,15 +47,10 @@ int main(int argc, char** argv)
         }
     }
 
-    auto file_stream_or_error = Core::OutputFileStream::open(zip_file_path);
-    if (file_stream_or_error.is_error()) {
-        warnln("Failed to open zip file: {}", file_stream_or_error.error());
-        return 1;
-    }
+    auto file_stream = TRY(Core::OutputFileStream::open(zip_file_path));
 
     outln("Archive: {}", zip_file_path);
 
-    auto file_stream = file_stream_or_error.value();
     Archive::ZipOutputStream zip_stream { file_stream };
 
     auto add_file = [&](String path) {
@@ -96,11 +101,12 @@ int main(int argc, char** argv)
         Core::DirIterator it(path, Core::DirIterator::Flags::SkipParentAndBaseDir);
         while (it.has_next()) {
             auto child_path = it.next_full_path();
-            if (!Core::File::is_directory(child_path)) {
+            if (Core::File::is_link(child_path))
+                return;
+            if (!Core::File::is_directory(child_path))
                 add_file(child_path);
-            } else {
+            else
                 handle_directory(child_path, handle_directory);
-            }
         }
     };
 

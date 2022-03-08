@@ -5,17 +5,17 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
 #include <AK/CircularQueue.h>
 #include <AK/JsonObject.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
-#include <LibCore/ProcessStatisticsReader.h>
+#include <LibCore/System.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Frame.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
+#include <LibMain/Main.h>
 #include <serenity.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -31,6 +31,7 @@ class GraphWidget final : public GUI::Frame {
 public:
     static constexpr size_t history_size = 24;
 
+private:
     GraphWidget(GraphType graph_type, Optional<Gfx::Color> graph_color, Optional<Gfx::Color> graph_error_color)
         : m_graph_type(graph_type)
     {
@@ -40,19 +41,17 @@ public:
         start_timer(1000);
     }
 
-private:
     virtual void timer_event(Core::TimerEvent&) override
     {
         switch (m_graph_type) {
         case GraphType::CPU: {
-            unsigned busy;
-            unsigned idle;
-            if (get_cpu_usage(busy, idle)) {
-                unsigned busy_diff = busy - m_last_cpu_busy;
-                unsigned idle_diff = idle - m_last_cpu_idle;
-                m_last_cpu_busy = busy;
-                m_last_cpu_idle = idle;
-                float cpu = (float)busy_diff / (float)(busy_diff + idle_diff);
+            u64 total, idle;
+            if (get_cpu_usage(total, idle)) {
+                auto total_diff = total - m_last_total;
+                m_last_total = total;
+                auto idle_diff = idle - m_last_idle;
+                m_last_idle = idle;
+                float cpu = total_diff > 0 ? (float)(total_diff - idle_diff) / (float)total_diff : 0;
                 m_history.enqueue(cpu);
                 m_tooltip = String::formatted("CPU usage: {:.1}%", 100 * cpu);
             } else {
@@ -94,7 +93,7 @@ private:
             if (value >= 0) {
                 painter.draw_line(
                     { rect.x() + i, rect.bottom() },
-                    { rect.x() + i, rect.top() + (int)(round(rect.height() - (value * rect.height()))) },
+                    { rect.x() + i, rect.top() + (int)(roundf(rect.height() - (value * rect.height()))) },
                     m_graph_color);
             } else {
                 painter.draw_line(
@@ -108,7 +107,7 @@ private:
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() != GUI::MouseButton::Left)
+        if (event.button() != GUI::MouseButton::Primary)
             return;
         pid_t child_pid;
         const char* argv[] = { "SystemMonitor", "-t", "graphs", nullptr };
@@ -120,23 +119,30 @@ private:
         }
     }
 
-    bool get_cpu_usage(unsigned& busy, unsigned& idle)
+    bool get_cpu_usage(u64& total, u64& idle)
     {
-        busy = 0;
+        total = 0;
         idle = 0;
 
-        auto all_processes = Core::ProcessStatisticsReader::get_all(m_proc_all);
-        if (!all_processes.has_value() || all_processes.value().is_empty())
-            return false;
-
-        for (auto& it : all_processes.value()) {
-            for (auto& jt : it.threads) {
-                if (it.pid == 0)
-                    idle += jt.ticks_user + jt.ticks_kernel;
-                else
-                    busy += jt.ticks_user + jt.ticks_kernel;
-            }
+        if (m_proc_stat) {
+            // Seeking to the beginning causes a data refresh!
+            if (!m_proc_stat->seek(0, Core::SeekMode::SetPosition))
+                return false;
+        } else {
+            auto proc_stat = Core::File::construct("/proc/stat");
+            if (!proc_stat->open(Core::OpenMode::ReadOnly))
+                return false;
+            m_proc_stat = move(proc_stat);
         }
+
+        auto file_contents = m_proc_stat->read_all();
+        auto json_or_error = JsonValue::from_string(file_contents);
+        if (json_or_error.is_error())
+            return false;
+        auto json = json_or_error.release_value();
+        auto const& obj = json.as_object();
+        total = obj.get("total_time").to_u64();
+        idle = obj.get("idle_time").to_u64();
         return true;
     }
 
@@ -154,19 +160,21 @@ private:
         }
 
         auto file_contents = m_proc_mem->read_all();
-        auto json = JsonValue::from_string(file_contents);
-        VERIFY(json.has_value());
-        auto& obj = json.value().as_object();
+        auto json_or_error = JsonValue::from_string(file_contents);
+        if (json_or_error.is_error())
+            return false;
+        auto json = json_or_error.release_value();
+        auto const& obj = json.as_object();
         unsigned kmalloc_allocated = obj.get("kmalloc_allocated").to_u32();
         unsigned kmalloc_available = obj.get("kmalloc_available").to_u32();
-        unsigned user_physical_allocated = obj.get("user_physical_allocated").to_u32();
-        unsigned user_physical_committed = obj.get("user_physical_committed").to_u32();
-        unsigned user_physical_uncommitted = obj.get("user_physical_uncommitted").to_u32();
+        auto user_physical_allocated = obj.get("user_physical_allocated").to_u64();
+        auto user_physical_committed = obj.get("user_physical_committed").to_u64();
+        auto user_physical_uncommitted = obj.get("user_physical_uncommitted").to_u64();
         unsigned kmalloc_bytes_total = kmalloc_allocated + kmalloc_available;
         unsigned kmalloc_pages_total = (kmalloc_bytes_total + PAGE_SIZE - 1) / PAGE_SIZE;
-        unsigned total_userphysical_and_swappable_pages = kmalloc_pages_total + user_physical_allocated + user_physical_committed + user_physical_uncommitted;
-        allocated = kmalloc_allocated + ((u64)(user_physical_allocated + user_physical_committed) * PAGE_SIZE);
-        available = (u64)(total_userphysical_and_swappable_pages * PAGE_SIZE) - allocated;
+        u64 total_userphysical_and_swappable_pages = kmalloc_pages_total + user_physical_allocated + user_physical_committed + user_physical_uncommitted;
+        allocated = kmalloc_allocated + ((user_physical_allocated + user_physical_committed) * PAGE_SIZE);
+        available = (total_userphysical_and_swappable_pages * PAGE_SIZE) - allocated;
         return true;
     }
 
@@ -174,33 +182,27 @@ private:
     Gfx::Color m_graph_color;
     Gfx::Color m_graph_error_color;
     CircularQueue<float, history_size> m_history;
-    unsigned m_last_cpu_busy { 0 };
-    unsigned m_last_cpu_idle { 0 };
+    u64 m_last_idle { 0 };
+    u64 m_last_total { 0 };
     String m_tooltip;
-    RefPtr<Core::File> m_proc_all;
+    RefPtr<Core::File> m_proc_stat;
     RefPtr<Core::File> m_proc_mem;
 };
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd proc exec rpath unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd proc exec rpath unix"));
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = GUI::Application::construct(arguments);
 
-    if (pledge("stdio recvfd sendfd proc exec rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd proc exec rpath"));
 
     const char* cpu = nullptr;
     const char* memory = nullptr;
     Core::ArgsParser args_parser;
     args_parser.add_option(cpu, "Create CPU graph", "cpu", 'C', "cpu");
     args_parser.add_option(memory, "Create memory graph", "memory", 'M', "memory");
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     if (!cpu && !memory) {
         printf("At least one of --cpu or --memory must be used");
@@ -209,13 +211,13 @@ int main(int argc, char** argv)
 
     NonnullRefPtrVector<GUI::Window> applet_windows;
 
-    auto create_applet = [&](GraphType graph_type, StringView spec) {
+    auto create_applet = [&](GraphType graph_type, StringView spec) -> ErrorOr<void> {
         auto parts = spec.split_view(',');
 
         dbgln("Create applet: {} with spec '{}'", (int)graph_type, spec);
 
         if (parts.size() != 2)
-            return;
+            return Error::from_string_literal("ResourceGraph: Applet spec is not composed of exactly 2 comma-separated parts"sv);
 
         auto name = parts[0];
         auto graph_color = Gfx::Color::from_string(parts[1]);
@@ -225,44 +227,23 @@ int main(int argc, char** argv)
         window->set_window_type(GUI::WindowType::Applet);
         window->resize(GraphWidget::history_size + 2, 15);
 
-        window->set_main_widget<GraphWidget>(graph_type, graph_color, Optional<Gfx::Color> {});
+        auto graph_widget = TRY(window->try_set_main_widget<GraphWidget>(graph_type, graph_color, Optional<Gfx::Color> {}));
         window->show();
         applet_windows.append(move(window));
+
+        return {};
     };
 
     if (cpu)
-        create_applet(GraphType::CPU, cpu);
+        TRY(create_applet(GraphType::CPU, cpu));
     if (memory)
-        create_applet(GraphType::Memory, memory);
+        TRY(create_applet(GraphType::Memory, memory));
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    // FIXME: This is required by Core::ProcessStatisticsReader.
-    //        It would be good if we didn't depend on that.
-    if (unveil("/etc/passwd", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/proc/all", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/proc/memstat", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/bin/SystemMonitor", "x") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    unveil(nullptr, nullptr);
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/proc/stat", "r"));
+    TRY(Core::System::unveil("/proc/memstat", "r"));
+    TRY(Core::System::unveil("/bin/SystemMonitor", "x"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     return app->exec();
 }

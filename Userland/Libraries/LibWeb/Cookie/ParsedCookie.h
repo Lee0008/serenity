@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -31,6 +31,6 @@ Optional<ParsedCookie> parse_cookie(const String& cookie_string);
 namespace IPC {
 
 bool encode(IPC::Encoder&, const Web::Cookie::ParsedCookie&);
-bool decode(IPC::Decoder&, Web::Cookie::ParsedCookie&);
+ErrorOr<void> decode(IPC::Decoder&, Web::Cookie::ParsedCookie&);
 
 }

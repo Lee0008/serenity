@@ -42,13 +42,13 @@ void LineProgram::parse_path_entries(Function<void(PathEntry& entry)> callback, 
         Vector<PathEntryFormat> format_descriptions;
 
         for (u8 i = 0; i < path_entry_format_count; i++) {
-            size_t content_type = 0;
+            UnderlyingType<ContentType> content_type;
             m_stream.read_LEB128_unsigned(content_type);
 
-            size_t data_form = 0;
+            UnderlyingType<AttributeDataForm> data_form;
             m_stream.read_LEB128_unsigned(data_form);
 
-            format_descriptions.empend((ContentType)content_type, (AttributeDataForm)data_form);
+            format_descriptions.empend(static_cast<ContentType>(content_type), static_cast<AttributeDataForm>(data_form));
         }
 
         size_t paths_count = 0;
@@ -60,13 +60,13 @@ void LineProgram::parse_path_entries(Function<void(PathEntry& entry)> callback, 
                 auto value = m_dwarf_info.get_attribute_value(format_description.form, 0, m_stream);
                 switch (format_description.type) {
                 case ContentType::Path:
-                    entry.path = value.data.as_string;
+                    entry.path = value.as_string();
                     break;
                 case ContentType::DirectoryIndex:
-                    entry.directory_index = value.data.as_u32;
+                    entry.directory_index = value.as_unsigned();
                     break;
                 default:
-                    dbgln_if(DWARF_DEBUG, "Unhandled path list attribute: {}", (int)format_description.type);
+                    dbgln_if(DWARF_DEBUG, "Unhandled path list attribute: {}", to_underlying(format_description.type));
                 }
             }
             callback(entry);
@@ -170,11 +170,12 @@ void LineProgram::handle_extended_opcode()
     }
     case ExtendedOpcodes::SetDiscriminator: {
         dbgln_if(DWARF_DEBUG, "SetDiscriminator");
-        m_stream.discard_or_error(1);
+        size_t discriminator;
+        m_stream.read_LEB128_unsigned(discriminator);
         break;
     }
     default:
-        dbgln_if(DWARF_DEBUG, "offset: {:p}", m_stream.offset());
+        dbgln("Encountered unknown sub opcode {} at stream offset {:p}", sub_opcode, m_stream.offset());
         VERIFY_NOT_REACHED();
     }
 }
@@ -246,6 +247,10 @@ void LineProgram::handle_standard_opcode(u8 opcode)
         m_basic_block = true;
         break;
     }
+    case StandardOpcodes::SetPrologueEnd: {
+        m_prologue_end = true;
+        break;
+    }
     default:
         dbgln("Unhandled LineProgram opcode {}", opcode);
         VERIFY_NOT_REACHED();
@@ -268,13 +273,14 @@ void LineProgram::handle_special_opcode(u8 opcode)
     append_to_line_info();
 
     m_basic_block = false;
+    m_prologue_end = false;
 }
 
 void LineProgram::run_program()
 {
     reset_registers();
 
-    while ((size_t)m_stream.offset() < m_unit_offset + sizeof(u32) + m_unit_header.length()) {
+    while (m_stream.offset() < m_unit_offset + sizeof(u32) + m_unit_header.length()) {
         u8 opcode = 0;
         m_stream >> opcode;
 
@@ -288,6 +294,15 @@ void LineProgram::run_program()
             handle_special_opcode(opcode);
         }
     }
+}
+
+LineProgram::DirectoryAndFile LineProgram::get_directory_and_file(size_t file_index) const
+{
+    VERIFY(file_index < m_source_files.size());
+    auto file_entry = m_source_files[file_index];
+    VERIFY(file_entry.directory_index < m_source_directories.size());
+    auto directory_entry = m_source_directories[file_entry.directory_index];
+    return { directory_entry, file_entry.name };
 }
 
 }

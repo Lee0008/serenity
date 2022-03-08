@@ -1,9 +1,11 @@
 /*
  * Copyright (c) 2020, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/System.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Icon.h>
@@ -16,6 +18,7 @@
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/Path.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
 const int WIDTH = 780;
@@ -24,7 +27,7 @@ const int HEIGHT = 600;
 class Canvas final : public GUI::Widget {
     C_OBJECT(Canvas)
 public:
-    virtual ~Canvas() override;
+    virtual ~Canvas() override = default;
 
 private:
     Canvas();
@@ -36,12 +39,8 @@ private:
 
 Canvas::Canvas()
 {
-    m_bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { WIDTH, HEIGHT });
+    m_bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRx8888, { WIDTH, HEIGHT }).release_value_but_fixme_should_propagate_errors();
     draw();
-}
-
-Canvas::~Canvas()
-{
 }
 
 void Canvas::paint_event(GUI::PaintEvent& event)
@@ -108,7 +107,7 @@ void Canvas::draw()
     painter.draw_line({ 740, 140 }, { 640, 240 }, Color::Red, 5, Gfx::Painter::LineStyle::Solid);
     painter.draw_line({ 690, 140 }, { 640, 240 }, Color::Blue, 10, Gfx::Painter::LineStyle::Solid);
 
-    auto bg = Gfx::Bitmap::load_from_file("/res/html/misc/90s-bg.png");
+    auto bg = Gfx::Bitmap::try_load_from_file("/res/html/misc/90s-bg.png").release_value_but_fixme_should_propagate_errors();
     painter.draw_tiled_bitmap({ 20, 260, 480, 320 }, *bg);
 
     painter.draw_line({ 40, 480 }, { 20, 260 }, Color::Red);
@@ -129,7 +128,7 @@ void Canvas::draw()
     path.close();
     painter.fill_path(path, Color::Yellow, Gfx::Painter::WindingRule::EvenOdd);
 
-    auto buggie = Gfx::Bitmap::load_from_file("/res/graphics/buggie.png");
+    auto buggie = Gfx::Bitmap::try_load_from_file("/res/graphics/buggie.png").release_value_but_fixme_should_propagate_errors();
     painter.blit({ 280, 280 }, *buggie, buggie->rect(), 0.5);
     painter.draw_scaled_bitmap({ 360, 280, buggie->rect().width() * 2, buggie->rect().height() * 2 }, *buggie, buggie->rect());
 
@@ -182,39 +181,26 @@ void Canvas::draw()
     update();
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    if (pledge("stdio recvfd sendfd rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_double_buffering_enabled(true);
     window->set_title("LibGfx Demo");
     window->set_resizable(false);
     window->resize(WIDTH, HEIGHT);
 
-    auto menubar = GUI::Menubar::construct();
-    auto& file_menu = menubar->add_menu("&File");
-    file_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
-    window->set_menubar(move(menubar));
+    auto file_menu = TRY(window->try_add_menu("&File"));
+    TRY(file_menu->try_add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); })));
 
-    auto app_icon = GUI::Icon::default_icon("app-libgfx-demo");
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-libgfx-demo"));
     window->set_icon(app_icon.bitmap_for_size(16));
-    window->set_main_widget<Canvas>();
+    (void)TRY(window->try_set_main_widget<Canvas>());
     window->show();
 
     return app->exec();

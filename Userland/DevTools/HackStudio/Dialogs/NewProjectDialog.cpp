@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Nick Vella <nick@nxk.io>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,11 +19,8 @@
 #include <LibGUI/IconView.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
-#include <LibGUI/RadioButton.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/Widget.h>
-#include <LibGfx/Font.h>
-#include <LibGfx/FontDatabase.h>
 #include <LibRegex/Regex.h>
 
 namespace HackStudio {
@@ -104,10 +102,6 @@ NewProjectDialog::NewProjectDialog(GUI::Window* parent)
     };
 }
 
-NewProjectDialog::~NewProjectDialog()
-{
-}
-
 RefPtr<ProjectTemplate> NewProjectDialog::selected_template()
 {
     if (m_icon_view->selection().is_empty()) {
@@ -157,9 +151,6 @@ Optional<String> NewProjectDialog::get_available_project_name()
     if (!s_project_name_validity_regex.has_match(chosen_name))
         return {};
 
-    if (!Core::File::exists(create_in) || !Core::File::is_directory(create_in))
-        return {};
-
     // Check for up-to 999 variations of the project name, in case it's already taken
     for (int i = 0; i < 1000; i++) {
         auto candidate = (i == 0)
@@ -182,18 +173,10 @@ Optional<String> NewProjectDialog::get_project_full_path()
     auto create_in = m_create_in_input->text();
     auto maybe_project_name = get_available_project_name();
 
-    if (!maybe_project_name.has_value()) {
-        return {};
-    }
-
-    auto project_name = maybe_project_name.value();
-    auto full_path = LexicalPath(String::formatted("{}/{}", create_in, project_name));
-
-    // Do not permit otherwise invalid paths.
-    if (!full_path.is_valid())
+    if (!maybe_project_name.has_value())
         return {};
 
-    return full_path.string();
+    return LexicalPath::join(create_in, *maybe_project_name).string();
 }
 
 void NewProjectDialog::do_create_project()
@@ -209,6 +192,19 @@ void NewProjectDialog::do_create_project()
     if (!maybe_project_name.has_value() || !maybe_project_full_path.has_value()) {
         GUI::MessageBox::show_error(this, "Could not create project: invalid project name or path.");
         return;
+    }
+
+    auto create_in = m_create_in_input->text();
+    if (!Core::File::exists(create_in) || !Core::File::is_directory(create_in)) {
+        auto result = GUI::MessageBox::show(this, String::formatted("The directory {} does not exist yet, would you like to create it?", create_in), "New project", GUI::MessageBox::Type::Question, GUI::MessageBox::InputType::YesNo);
+        if (result != GUI::MessageBox::ExecResult::ExecYes)
+            return;
+
+        auto created = Core::File::ensure_parent_directories(maybe_project_full_path.value());
+        if (!created) {
+            GUI::MessageBox::show_error(this, String::formatted("Could not create directory {}", create_in));
+            return;
+        }
     }
 
     auto creation_result = project_template->create_project(maybe_project_name.value(), maybe_project_full_path.value());

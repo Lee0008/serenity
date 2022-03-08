@@ -16,7 +16,7 @@
 
 namespace regex {
 
-using FlagsUnderlyingType = u16;
+using FlagsUnderlyingType = u32;
 
 enum class AllFlags {
     Global = __Regex_Global,                                     // All matches (don't return after first match)
@@ -33,8 +33,10 @@ enum class AllFlags {
     Sticky = __Regex_Sticky,                                     // Force the pattern to only match consecutive matches from where the previous match ended.
     Multiline = __Regex_Multiline,                               // Handle newline characters. Match each line, one by one.
     SkipTrimEmptyMatches = __Regex_SkipTrimEmptyMatches,         // Do not remove empty capture group results.
+    SingleMatch = __Regex_SingleMatch,                           // Stop after acquiring a single match.
     Internal_Stateful = __Regex_Internal_Stateful,               // Make global matches match one result at a time, and further match() calls on the same instance continue where the previous one left off.
-    Internal_BrowserExtended = __Regex_Internal_BrowserExtended, // Only for ECMA262, Enable the behaviours defined in section B.1.4. of the ECMA262 spec.
+    Internal_BrowserExtended = __Regex_Internal_BrowserExtended, // Only for ECMA262, Enable the behaviors defined in section B.1.4. of the ECMA262 spec.
+    Internal_ConsiderNewline = __Regex_Internal_ConsiderNewline, // Only for ECMA262, Allow multiline matches to consider newlines as line boundaries.
     Last = Internal_BrowserExtended,
 };
 
@@ -74,13 +76,13 @@ public:
 
     RegexOptions() = default;
 
-    RegexOptions(T flags)
+    constexpr RegexOptions(T flags)
         : m_flags(flags)
     {
     }
 
     template<class U>
-    RegexOptions(RegexOptions<U> other)
+    constexpr RegexOptions(RegexOptions<U> other)
         : m_flags((T) static_cast<FlagsUnderlyingType>(other.value()))
     {
     }
@@ -88,16 +90,16 @@ public:
     operator bool() const { return !!*this; }
     bool operator!() const { return (FlagsUnderlyingType)m_flags == 0; }
 
-    RegexOptions<T> operator|(T flag) const { return RegexOptions<T> { (T)((FlagsUnderlyingType)m_flags | (FlagsUnderlyingType)flag) }; }
-    RegexOptions<T> operator&(T flag) const { return RegexOptions<T> { (T)((FlagsUnderlyingType)m_flags & (FlagsUnderlyingType)flag) }; }
+    constexpr RegexOptions<T> operator|(T flag) const { return RegexOptions<T> { (T)((FlagsUnderlyingType)m_flags | (FlagsUnderlyingType)flag) }; }
+    constexpr RegexOptions<T> operator&(T flag) const { return RegexOptions<T> { (T)((FlagsUnderlyingType)m_flags & (FlagsUnderlyingType)flag) }; }
 
-    RegexOptions<T>& operator|=(T flag)
+    constexpr RegexOptions<T>& operator|=(T flag)
     {
         m_flags = (T)((FlagsUnderlyingType)m_flags | (FlagsUnderlyingType)flag);
         return *this;
     }
 
-    RegexOptions<T>& operator&=(T flag)
+    constexpr RegexOptions<T>& operator&=(T flag)
     {
         m_flags = (T)((FlagsUnderlyingType)m_flags & (FlagsUnderlyingType)flag);
         return *this;
@@ -114,19 +116,19 @@ private:
 };
 
 template<class T>
-inline RegexOptions<T> operator|(T lhs, T rhs)
+constexpr RegexOptions<T> operator|(T lhs, T rhs)
 {
     return RegexOptions<T> { lhs } |= rhs;
 }
 
 template<class T>
-inline RegexOptions<T> operator&(T lhs, T rhs)
+constexpr RegexOptions<T> operator&(T lhs, T rhs)
 {
     return RegexOptions<T> { lhs } &= rhs;
 }
 
 template<class T>
-inline T operator~(T flag)
+constexpr T operator~(T flag)
 {
     return (T) ~((FlagsUnderlyingType)flag);
 }

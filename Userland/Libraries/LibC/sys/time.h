@@ -6,16 +6,10 @@
 
 #pragma once
 
-#include <sys/cdefs.h>
-#include <sys/types.h>
+#include <Kernel/API/POSIX/sys/time.h>
 #include <time.h>
 
 __BEGIN_DECLS
-
-struct timeval {
-    time_t tv_sec;
-    suseconds_t tv_usec;
-};
 
 struct timezone {
     int tz_minuteswest;
@@ -23,8 +17,8 @@ struct timezone {
 };
 
 int adjtime(const struct timeval* delta, struct timeval* old_delta);
-int gettimeofday(struct timeval* __restrict__, void* __restrict__) __attribute__((nonnull(1)));
-int settimeofday(struct timeval* __restrict__, void* __restrict__) __attribute__((nonnull(1)));
+int gettimeofday(struct timeval* __restrict__, void* __restrict__);
+int settimeofday(struct timeval* __restrict__, void* __restrict__);
 int utimes(const char* pathname, const struct timeval[2]);
 
 static inline void timeradd(const struct timeval* a, const struct timeval* b, struct timeval* out)

@@ -19,6 +19,7 @@ ListView::ListView()
     set_fill_with_background_color(true);
     set_background_role(ColorRole::Base);
     set_foreground_role(ColorRole::BaseText);
+    set_searchable(true);
 }
 
 ListView::~ListView()
@@ -118,19 +119,16 @@ void ListView::paint_list_item(Painter& painter, int row_index, int painted_item
     if (data.is_bitmap()) {
         painter.blit(row_rect.location(), data.as_bitmap(), data.as_bitmap().rect());
     } else if (data.is_icon()) {
-        if (auto bitmap = data.as_icon().bitmap_for_size(16))
-            painter.blit(row_rect.location(), *bitmap, bitmap->rect());
+        if (auto bitmap = data.as_icon().bitmap_for_size(16)) {
+            auto opacity = index.data(ModelRole::IconOpacity).as_float_or(1.0f);
+            painter.blit(row_rect.location(), *bitmap, bitmap->rect(), opacity);
+        }
     } else {
-        Color text_color;
-        if (is_selected_row)
-            text_color = is_focused() ? palette().selection_text() : palette().inactive_selection_text();
-        else
-            text_color = index.data(ModelRole::ForegroundColor).to_color(palette().color(foreground_role()));
         auto text_rect = row_rect;
         text_rect.translate_by(horizontal_padding(), 0);
         text_rect.set_width(text_rect.width() - horizontal_padding() * 2);
         auto text_alignment = index.data(ModelRole::TextAlignment).to_text_alignment(Gfx::TextAlignment::CenterLeft);
-        painter.draw_text(text_rect, data.to_string(), font, text_alignment, text_color);
+        draw_item_text(painter, index, is_selected_row, text_rect, data.to_string(), font, text_alignment, Gfx::TextElision::None);
     }
 }
 

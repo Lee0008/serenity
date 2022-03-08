@@ -17,13 +17,14 @@ CreateNewImageDialog::CreateNewImageDialog(GUI::Window* parent_window)
     : Dialog(parent_window)
 {
     set_title("Create new image");
+    set_icon(parent_window->icon());
     resize(200, 200);
 
     auto& main_widget = set_main_widget<GUI::Widget>();
     main_widget.set_fill_with_background_color(true);
 
     auto& layout = main_widget.set_layout<GUI::VerticalBoxLayout>();
-    layout.set_margins({ 4, 4, 4, 4 });
+    layout.set_margins(4);
 
     auto& name_label = main_widget.add<GUI::Label>("Name:");
     name_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
@@ -64,8 +65,15 @@ CreateNewImageDialog::CreateNewImageDialog(GUI::Window* parent_window)
         m_image_size.set_height(value);
     };
 
-    width_spinbox.set_range(0, 16384);
-    height_spinbox.set_range(0, 16384);
+    m_name_textbox->on_return_pressed = [this] {
+        done(ExecOK);
+    };
+
+    width_spinbox.set_range(1, 16384);
+    height_spinbox.set_range(1, 16384);
+
+    width_spinbox.set_value(510);
+    height_spinbox.set_value(356);
 }
 
 }

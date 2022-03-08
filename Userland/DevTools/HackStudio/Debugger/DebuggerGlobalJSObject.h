@@ -8,6 +8,7 @@
 
 #include <AK/Weakable.h>
 #include <LibDebug/DebugInfo.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/GlobalObject.h>
 
 namespace HackStudio {
@@ -20,8 +21,8 @@ class DebuggerGlobalJSObject final
 public:
     DebuggerGlobalJSObject();
 
-    JS::Value get(const JS::PropertyName& name, JS::Value receiver, bool without_side_effects) const override;
-    bool put(const JS::PropertyName& name, JS::Value value, JS::Value receiver) override;
+    virtual JS::ThrowCompletionOr<JS::Value> internal_get(JS::PropertyKey const&, JS::Value receiver) const override;
+    virtual JS::ThrowCompletionOr<bool> internal_set(JS::PropertyKey const&, JS::Value value, JS::Value receiver) override;
 
     Optional<JS::Value> debugger_to_js(const Debug::DebugInfo::VariableInfo&) const;
     Optional<u32> js_to_debugger(JS::Value value, const Debug::DebugInfo::VariableInfo&) const;

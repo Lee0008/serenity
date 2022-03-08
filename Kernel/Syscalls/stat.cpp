@@ -6,56 +6,43 @@
 
 #include <AK/NonnullRefPtrVector.h>
 #include <Kernel/FileSystem/Custody.h>
-#include <Kernel/FileSystem/FileDescription.h>
 #include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$fstat(int fd, Userspace<stat*> user_statbuf)
+ErrorOr<FlatPtr> Process::sys$fstat(int fd, Userspace<stat*> user_statbuf)
 {
-    REQUIRE_PROMISE(stdio);
-    auto description = file_description(fd);
-    if (!description)
-        return EBADF;
-    stat buffer = {};
-    int rc = description->stat(buffer);
-    if (!copy_to_user(user_statbuf, &buffer))
-        return EFAULT;
-    return rc;
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
+    TRY(require_promise(Pledge::stdio));
+    auto description = TRY(open_file_description(fd));
+    auto buffer = TRY(description->stat());
+    TRY(copy_to_user(user_statbuf, &buffer));
+    return 0;
 }
 
-KResultOr<int> Process::sys$stat(Userspace<const Syscall::SC_stat_params*> user_params)
+ErrorOr<FlatPtr> Process::sys$stat(Userspace<const Syscall::SC_stat_params*> user_params)
 {
-    REQUIRE_PROMISE(rpath);
-    Syscall::SC_stat_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
-    auto path = get_syscall_path_argument(params.path);
-    if (path.is_error())
-        return path.error();
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
+    TRY(require_promise(Pledge::rpath));
+    auto params = TRY(copy_typed_from_user(user_params));
+
+    auto path = TRY(get_syscall_path_argument(params.path));
+
     RefPtr<Custody> base;
     if (params.dirfd == AT_FDCWD) {
         base = current_directory();
     } else {
-        auto base_description = file_description(params.dirfd);
-        if (!base_description)
-            return EBADF;
+        auto base_description = TRY(open_file_description(params.dirfd));
         if (!base_description->is_directory())
             return ENOTDIR;
         if (!base_description->custody())
             return EINVAL;
         base = base_description->custody();
     }
-    auto metadata_or_error = VFS::the().lookup_metadata(path.value()->view(), *base, params.follow_symlinks ? 0 : O_NOFOLLOW_NOERROR);
-    if (metadata_or_error.is_error())
-        return metadata_or_error.error();
-    stat statbuf;
-    auto result = metadata_or_error.value().stat(statbuf);
-    if (result.is_error())
-        return result;
-    if (!copy_to_user(params.statbuf, &statbuf))
-        return EFAULT;
+    auto metadata = TRY(VirtualFileSystem::the().lookup_metadata(path->view(), *base, params.follow_symlinks ? 0 : O_NOFOLLOW_NOERROR));
+    auto statbuf = TRY(metadata.stat());
+    TRY(copy_to_user(params.statbuf, &statbuf));
     return 0;
 }
 

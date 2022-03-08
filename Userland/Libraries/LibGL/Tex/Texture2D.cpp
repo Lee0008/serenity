@@ -1,135 +1,96 @@
 /*
  * Copyright (c) 2021, Jesse Buhagiar <jooster669@gmail.com>
+ * Copyright (c) 2021, Stephan Unverwerth <s.unverwerth@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Format.h>
 #include <LibGL/GL/gl.h>
 #include <LibGL/Tex/Texture2D.h>
-#include <string.h>
 
 namespace GL {
 
-void Texture2D::upload_texture_data(GLenum, GLint lod, GLint internal_format, GLsizei width, GLsizei height, GLint, GLenum format, GLenum, const GLvoid* pixels)
+void Texture2D::upload_texture_data(GLuint lod, GLint internal_format, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid const* pixels, GLsizei pixels_per_row, u8 byte_alignment)
 {
     // NOTE: Some target, format, and internal formats are currently unsupported.
     // Considering we control this library, and `gl.h` itself, we don't need to add any
     // checks here to see if we support them; the program will simply fail to compile..
 
-    // Somebody passed us in nullptr...
-    // Apparently this allocates memory on the GPU (according to Khronos docs..)?
-    if (pixels == nullptr) {
-        dbgln("LibGL: pixels == nullptr when uploading texture data.");
-        VERIFY_NOT_REACHED();
-    }
+    auto& mip = m_mipmaps[lod];
+    mip.set_width(width);
+    mip.set_height(height);
+
+    // No pixel data was supplied leave the texture memory uninitialized.
+    if (pixels == nullptr)
+        return;
 
     m_internal_format = internal_format;
 
-    // Get reference to the mip
+    replace_sub_texture_data(lod, 0, 0, width, height, format, type, pixels, pixels_per_row, byte_alignment);
+}
+
+void Texture2D::replace_sub_texture_data(GLuint lod, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid const* pixels, GLsizei pixels_per_row, u8 byte_alignment)
+{
     auto& mip = m_mipmaps[lod];
-    const u8* pixel_byte_array = reinterpret_cast<const u8*>(pixels);
 
-    // Copy pixel data to storage
+    // FIXME: We currently only support GL_UNSIGNED_BYTE and GL_UNSIGNED_SHORT_5_6_5 pixel data
+    VERIFY(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_SHORT_5_6_5);
+    VERIFY(xoffset >= 0 && yoffset >= 0 && xoffset + width <= mip.width() && yoffset + height <= mip.height());
+    VERIFY(pixels_per_row == 0 || pixels_per_row >= xoffset + width);
 
-    // Pixels are already 32-bits wide
-    if (format == GL_RGBA || format == GL_BGRA) {
-        mip.pixel_data().resize(width * height * sizeof(u32));
-        memcpy(mip.pixel_data().data(), pixels, width * height * sizeof(u32));
-    } else {
-        mip.pixel_data().resize(width * height * 3);
-        // Copy RGB or BGR pixel data
-        for (auto i = 0; i < width * height * 3; i += 3) {
-            u32 b0 = pixel_byte_array[i];     // B or R
-            u32 b1 = pixel_byte_array[i + 1]; // G
-            u32 b2 = pixel_byte_array[i + 2]; // R or B
+    // FIXME: We currently depend on the first glTexImage2D call to attach an image to mipmap level 0, which initializes the GPU image
+    // Ideally we would create separate GPU images for each level and merge them into a final image
+    // once used for rendering for the first time.
+    if (device_image().is_null())
+        return;
 
-            u32 pixel = ((0xffu << 24) | (b0 << 16) | (b1 << 8) | b2);
-            mip.pixel_data().append(pixel);
-        }
-    }
-
-    // Now we need to swizzle the texture data from `format` to `internal_format`
-    switch (format) {
-    case GL_BGR: {
-        if (internal_format == GL_RGB) {
-            swizzle(mip.pixel_data(), [](u32 pixel) -> u32 {
-                u8 r = pixel & 0xff;
-                u8 g = (pixel >> 8) & 0xff;
-                u8 b = (pixel >> 16) & 0xff;
-
-                return (0xff << 24) | (r << 16) | (g << 8) | b;
-            });
-        } else if (internal_format == GL_RGBA) {
-            swizzle(mip.pixel_data(), [](u32 pixel) -> u32 {
-                u8 r = pixel & 0xff;
-                u8 g = (pixel >> 8) & 0xff;
-                u8 b = (pixel >> 16) & 0xff;
-
-                return (r << 24) | (g << 16) | (b << 8) | 0xff;
-            });
-        }
-    } break;
-    case GL_BGRA: {
-        if (internal_format == GL_RGB) {
-            swizzle(mip.pixel_data(), [](u32 pixel) -> u32 {
-                u8 r = (pixel >> 8) & 0xff;
-                u8 g = (pixel >> 16) & 0xff;
-                u8 b = (pixel >> 24) & 0xff;
-
-                return (0xff << 24) | (r << 16) | (g << 8) | b;
-            });
-        } else if (internal_format == GL_RGBA) {
-            swizzle(mip.pixel_data(), [](u32 pixel) -> u32 {
-                u8 a = pixel & 0xff;
-                u8 r = (pixel >> 8) & 0xff;
-                u8 g = (pixel >> 16) & 0xff;
-                u8 b = (pixel >> 24) & 0xff;
-
-                return (r << 24) | (g << 16) | (b << 8) | a;
-            });
-        }
-    } break;
-    case GL_RGB: {
-        if (internal_format == GL_RGBA) {
-            swizzle(mip.pixel_data(), [](u32 pixel) -> u32 {
-                u8 r = pixel & 0xff;
-                u8 g = (pixel >> 8) & 0xff;
-                u8 b = (pixel >> 16) & 0xff;
-
-                return (r << 24) | (g << 16) | (b << 8) | 0xff;
-            });
-        }
-    } break;
-    case GL_RGBA:
+    u8 pixel_size_bytes;
+    switch (type) {
+    case GL_UNSIGNED_BYTE:
+        pixel_size_bytes = (format == GL_RGBA || format == GL_BGRA) ? 4 : 3;
+        break;
+    case GL_UNSIGNED_SHORT_5_6_5:
+        pixel_size_bytes = sizeof(u16);
         break;
     default:
-        // Let's crash for now so we can implement format by format
         VERIFY_NOT_REACHED();
     }
 
-    mip.set_width(width);
-    mip.set_height(height);
-}
+    // Calculate row offset at end to fit alignment
+    int const physical_width = pixels_per_row > 0 ? pixels_per_row : width;
+    size_t const physical_width_bytes = physical_width * pixel_size_bytes;
 
-FloatVector4 Texture2D::sample_texel(const FloatVector2& uv) const
-{
-    auto& mip = m_mipmaps.at(0);
+    SoftGPU::ImageDataLayout layout;
+    layout.column_stride = pixel_size_bytes;
+    layout.row_stride = physical_width_bytes + (byte_alignment - physical_width_bytes % byte_alignment) % byte_alignment;
+    layout.depth_stride = 0;
 
-    // FIXME: Remove this to prevent a crash when we have proper texture binding
-    if (mip.width() == 0 || mip.height() == 0)
-        return { 1.0f, 1.0f, 1.0f, 1.0f };
+    if (type == GL_UNSIGNED_SHORT_5_6_5) {
+        layout.format = SoftGPU::ImageFormat::RGB565;
+    } else if (type == GL_UNSIGNED_BYTE) {
+        if (format == GL_RGB)
+            layout.format = SoftGPU::ImageFormat::RGB888;
+        else if (format == GL_BGR)
+            layout.format = SoftGPU::ImageFormat::BGR888;
+        else if (format == GL_RGBA)
+            layout.format = SoftGPU::ImageFormat::RGBA8888;
+        else if (format == GL_BGRA)
+            layout.format = SoftGPU::ImageFormat::BGRA8888;
+    }
 
-    u32 u = static_cast<u32>(uv.x() * mip.width());
-    u32 v = static_cast<u32>(uv.y() * mip.height());
+    Vector3<unsigned> offset {
+        static_cast<unsigned>(xoffset),
+        static_cast<unsigned>(yoffset),
+        0
+    };
 
-    u32 pixel = mip.pixel_data().at(v * mip.width() + u);
+    Vector3<unsigned> size {
+        static_cast<unsigned>(width),
+        static_cast<unsigned>(height),
+        1
+    };
 
-    float b0 = ((pixel)&0xff) / 255.0f;
-    float b1 = ((pixel >> 8) & 0xff) / 255.0f;
-    float b2 = ((pixel >> 16) & 0xff) / 255.0f;
-
-    return { b0, b1, b2, 1.0f };
+    device_image()->write_texels(0, lod, offset, size, pixels, layout);
 }
 
 }

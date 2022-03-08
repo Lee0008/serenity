@@ -1,12 +1,14 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibCore/LocalServer.h>
-#include <LibCore/LocalSocket.h>
 #include <LibCore/Notifier.h>
+#include <LibCore/Stream.h>
+#include <LibCore/System.h>
+#include <LibCore/SystemServerTakeover.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -30,61 +32,32 @@ LocalServer::~LocalServer()
         ::close(m_fd);
 }
 
-bool LocalServer::take_over_from_system_server(String const& socket_path)
+ErrorOr<void> LocalServer::take_over_from_system_server(String const& socket_path)
 {
     if (m_listening)
-        return false;
+        return Error::from_string_literal("Core::LocalServer: Can't perform socket takeover when already listening"sv);
 
-    if (!LocalSocket::s_overtaken_sockets_parsed)
-        LocalSocket::parse_sockets_from_system_server();
+    auto socket = TRY(take_over_socket_from_system_server(socket_path));
+    m_fd = TRY(socket->release_fd());
 
-    int fd = -1;
-    if (socket_path.is_null()) {
-        // We want the first (and only) socket.
-        if (LocalSocket::s_overtaken_sockets.size() == 1) {
-            fd = LocalSocket::s_overtaken_sockets.begin()->value;
-        }
-    } else {
-        auto it = LocalSocket::s_overtaken_sockets.find(socket_path);
-        if (it != LocalSocket::s_overtaken_sockets.end()) {
-            fd = it->value;
-        }
-    }
-
-    if (fd >= 0) {
-        // Sanity check: it has to be a socket.
-        struct stat stat;
-        int rc = fstat(fd, &stat);
-        if (rc == 0 && S_ISSOCK(stat.st_mode)) {
-            // The SystemServer has passed us the socket, so use that instead of
-            // creating our own.
-            m_fd = fd;
-            // It had to be !CLOEXEC for obvious reasons, but we
-            // don't need it to be !CLOEXEC anymore, so set the
-            // CLOEXEC flag now.
-            fcntl(m_fd, F_SETFD, FD_CLOEXEC);
-
-            m_listening = true;
-            setup_notifier();
-            return true;
-        } else {
-            if (rc != 0)
-                perror("fstat");
-            dbgln("It's not a socket, what the heck??");
-        }
-    }
-
-    dbgln("Failed to take the socket over from SystemServer");
-
-    return false;
+    m_listening = true;
+    setup_notifier();
+    return {};
 }
 
 void LocalServer::setup_notifier()
 {
     m_notifier = Notifier::construct(m_fd, Notifier::Event::Read, this);
     m_notifier->on_ready_to_read = [this] {
-        if (on_ready_to_accept)
-            on_ready_to_accept();
+        if (on_accept) {
+            auto maybe_client_socket = accept();
+            if (maybe_client_socket.is_error()) {
+                dbgln("LocalServer::on_ready_to_read: Error accepting a connection: {} (FIXME: should propagate!)", maybe_client_socket.error());
+                return;
+            }
+
+            on_accept(maybe_client_socket.release_value());
+        }
     };
 }
 
@@ -104,7 +77,7 @@ bool LocalServer::listen(const String& address)
     fcntl(m_fd, F_SETFD, FD_CLOEXEC);
 #endif
     VERIFY(m_fd >= 0);
-#ifndef __APPLE__
+#ifndef AK_OS_MACOS
     rc = fchmod(m_fd, 0600);
     if (rc < 0) {
         perror("fchmod");
@@ -136,7 +109,7 @@ bool LocalServer::listen(const String& address)
     return true;
 }
 
-RefPtr<LocalSocket> LocalServer::accept()
+ErrorOr<NonnullOwnPtr<Stream::LocalSocket>> LocalServer::accept()
 {
     VERIFY(m_listening);
     sockaddr_un un;
@@ -147,8 +120,7 @@ RefPtr<LocalSocket> LocalServer::accept()
     int accepted_fd = ::accept(m_fd, (sockaddr*)&un, &un_size);
 #endif
     if (accepted_fd < 0) {
-        perror("accept");
-        return nullptr;
+        return Error::from_syscall("accept", -errno);
     }
 
 #ifdef AK_OS_MACOS
@@ -157,7 +129,7 @@ RefPtr<LocalSocket> LocalServer::accept()
     (void)fcntl(accepted_fd, F_SETFD, FD_CLOEXEC);
 #endif
 
-    return LocalSocket::construct(accepted_fd);
+    return Stream::LocalSocket::adopt_fd(accepted_fd);
 }
 
 }

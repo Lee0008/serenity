@@ -31,11 +31,6 @@ size_t RamdiskController::devices_count() const
     return m_devices.size();
 }
 
-void RamdiskController::start_request(const StorageDevice&, AsyncBlockDeviceRequest&)
-{
-    VERIFY_NOT_REACHED();
-}
-
 void RamdiskController::complete_current_request(AsyncDeviceRequest::RequestResult)
 {
     VERIFY_NOT_REACHED();
@@ -46,14 +41,15 @@ RamdiskController::RamdiskController()
 {
     // Populate ramdisk controllers from Multiboot boot modules, if any.
     size_t count = 0;
-    for (auto& used_memory_range : MemoryManager::the().used_memory_ranges()) {
-        if (used_memory_range.type == UsedMemoryRangeType::BootModule) {
-            size_t length = page_round_up(used_memory_range.end.get()) - used_memory_range.start.get();
-            auto region = MemoryManager::the().allocate_kernel_region(used_memory_range.start, length, "Ramdisk", Region::Access::Read | Region::Access::Write);
-            if (!region)
+    for (auto& used_memory_range : MM.used_memory_ranges()) {
+        if (used_memory_range.type == Memory::UsedMemoryRangeType::BootModule) {
+            size_t length = Memory::page_round_up(used_memory_range.end.get()).release_value_but_fixme_should_propagate_errors() - used_memory_range.start.get();
+            auto region_or_error = MM.allocate_kernel_region(used_memory_range.start, length, "Ramdisk", Memory::Region::Access::ReadWrite);
+            if (region_or_error.is_error()) {
                 dmesgln("RamdiskController: Failed to allocate kernel region of size {}", length);
-            else
-                m_devices.append(RamdiskDevice::create(*this, region.release_nonnull(), 6, count));
+            } else {
+                m_devices.append(RamdiskDevice::create(*this, region_or_error.release_value(), 6, count));
+            }
             count++;
         }
     }

@@ -80,16 +80,41 @@ struct Variant<IndexType, InitialIndex> {
 
 template<typename IndexType, typename... Ts>
 struct VisitImpl {
-    template<typename Visitor, IndexType CurrentIndex = 0>
-    ALWAYS_INLINE static constexpr decltype(auto) visit(IndexType id, const void* data, Visitor&& visitor) requires(CurrentIndex < sizeof...(Ts))
+    template<typename RT, typename T, size_t I, typename Fn>
+    static constexpr bool has_explicitly_named_overload()
+    {
+        // If we're not allowed to make a member function pointer and call it directly (without explicitly resolving it),
+        // we have a templated function on our hands (or a function overload set).
+        // in such cases, we don't have an explicitly named overload, and we would have to select it.
+        return requires { (declval<Fn>().*(&Fn::operator()))(declval<T>()); };
+    }
+
+    template<typename ReturnType, typename T, typename Visitor, auto... Is>
+    static constexpr bool should_invoke_const_overload(IndexSequence<Is...>)
+    {
+        // Scan over all the different visitor functions, if none of them are suitable for calling with `T const&`, avoid calling that first.
+        return ((has_explicitly_named_overload<ReturnType, T, Is, typename Visitor::Types::template Type<Is>>()) || ...);
+    }
+
+    template<typename Self, typename Visitor, IndexType CurrentIndex = 0>
+    ALWAYS_INLINE static constexpr decltype(auto) visit(Self& self, IndexType id, const void* data, Visitor&& visitor) requires(CurrentIndex < sizeof...(Ts))
     {
         using T = typename TypeList<Ts...>::template Type<CurrentIndex>;
 
-        if (id == CurrentIndex)
-            return visitor(*bit_cast<T*>(data));
+        if (id == CurrentIndex) {
+            // Check if Visitor::operator() is an explicitly typed function (as opposed to a templated function)
+            // if so, try to call that with `T const&` first before copying the Variant's const-ness.
+            // This emulates normal C++ call semantics where templated functions are considered last, after all non-templated overloads
+            // are checked and found to be unusable.
+            using ReturnType = decltype(visitor(*bit_cast<T*>(data)));
+            if constexpr (should_invoke_const_overload<ReturnType, T, Visitor>(MakeIndexSequence<Visitor::Types::size>()))
+                return visitor(*bit_cast<AddConst<T>*>(data));
+
+            return visitor(*bit_cast<CopyConst<Self, T>*>(data));
+        }
 
         if constexpr ((CurrentIndex + 1) < sizeof...(Ts))
-            return visit<Visitor, CurrentIndex + 1>(id, data, forward<Visitor>(visitor));
+            return visit<Self, Visitor, CurrentIndex + 1>(self, id, data, forward<Visitor>(visitor));
         else
             VERIFY_NOT_REACHED();
     }
@@ -104,19 +129,19 @@ struct VariantConstructTag {
 
 template<typename T, typename Base>
 struct VariantConstructors {
-    ALWAYS_INLINE VariantConstructors(T&& t)
+    ALWAYS_INLINE VariantConstructors(T&& t) requires(requires { T(move(t)); })
     {
         internal_cast().clear_without_destruction();
         internal_cast().set(move(t), VariantNoClearTag {});
     }
 
-    ALWAYS_INLINE VariantConstructors(const T& t)
+    ALWAYS_INLINE VariantConstructors(const T& t) requires(requires { T(t); })
     {
         internal_cast().clear_without_destruction();
         internal_cast().set(t, VariantNoClearTag {});
     }
 
-    ALWAYS_INLINE VariantConstructors() { }
+    ALWAYS_INLINE VariantConstructors() = default;
 
 private:
     [[nodiscard]] ALWAYS_INLINE Base& internal_cast()
@@ -208,9 +233,47 @@ public:
     }
 
     template<typename... NewTs>
+    Variant(Variant<NewTs...>&& old) requires((can_contain<NewTs>() && ...))
+        : Variant(move(old).template downcast<Ts...>())
+    {
+    }
+
+    template<typename... NewTs>
+    Variant(const Variant<NewTs...>& old) requires((can_contain<NewTs>() && ...))
+        : Variant(old.template downcast<Ts...>())
+    {
+    }
+
+    template<typename... NewTs>
     friend struct Variant;
 
+    Variant() requires(!can_contain<Empty>()) = delete;
+    Variant() requires(can_contain<Empty>())
+        : Variant(Empty())
+    {
+    }
+
+#ifdef AK_HAS_CONDITIONALLY_TRIVIAL
+    Variant(const Variant&) requires(!(IsCopyConstructible<Ts> && ...)) = delete;
+    Variant(const Variant&) = default;
+
+    Variant(Variant&&) requires(!(IsMoveConstructible<Ts> && ...)) = delete;
+    Variant(Variant&&) = default;
+
+    ~Variant() requires(!(IsDestructible<Ts> && ...)) = delete;
+    ~Variant() = default;
+
+    Variant& operator=(const Variant&) requires(!(IsCopyConstructible<Ts> && ...) || !(IsDestructible<Ts> && ...)) = delete;
+    Variant& operator=(const Variant&) = default;
+
+    Variant& operator=(Variant&&) requires(!(IsMoveConstructible<Ts> && ...) || !(IsDestructible<Ts> && ...)) = delete;
+    Variant& operator=(Variant&&) = default;
+#endif
+
     ALWAYS_INLINE Variant(const Variant& old)
+#ifdef AK_HAS_CONDITIONALLY_TRIVIAL
+        requires(!(IsTriviallyCopyConstructible<Ts> && ...))
+#endif
         : Detail::MergeAndDeduplicatePacks<Detail::VariantConstructors<Ts, Variant<Ts...>>...>()
         , m_data {}
         , m_index(old.m_index)
@@ -223,36 +286,57 @@ public:
     //       and if a variant with a nontrivial move ctor is moved from, it may or may not be valid
     //       but it will still contain the "moved-from" state of the object it previously contained.
     ALWAYS_INLINE Variant(Variant&& old)
+#ifdef AK_HAS_CONDITIONALLY_TRIVIAL
+        requires(!(IsTriviallyMoveConstructible<Ts> && ...))
+#endif
         : Detail::MergeAndDeduplicatePacks<Detail::VariantConstructors<Ts, Variant<Ts...>>...>()
-        , m_data {}
         , m_index(old.m_index)
     {
         Helper::move_(old.m_index, old.m_data, m_data);
     }
 
     ALWAYS_INLINE ~Variant()
+#ifdef AK_HAS_CONDITIONALLY_TRIVIAL
+        requires(!(IsTriviallyDestructible<Ts> && ...))
+#endif
     {
         Helper::delete_(m_index, m_data);
     }
 
     ALWAYS_INLINE Variant& operator=(const Variant& other)
+#ifdef AK_HAS_CONDITIONALLY_TRIVIAL
+        requires(!(IsTriviallyCopyConstructible<Ts> && ...) || !(IsTriviallyDestructible<Ts> && ...))
+#endif
     {
-        m_index = other.m_index;
-        Helper::copy_(other.m_index, other.m_data, m_data);
+        if (this != &other) {
+            if constexpr (!(IsTriviallyDestructible<Ts> && ...)) {
+                Helper::delete_(m_index, m_data);
+            }
+            m_index = other.m_index;
+            Helper::copy_(other.m_index, other.m_data, m_data);
+        }
         return *this;
     }
 
     ALWAYS_INLINE Variant& operator=(Variant&& other)
+#ifdef AK_HAS_CONDITIONALLY_TRIVIAL
+        requires(!(IsTriviallyMoveConstructible<Ts> && ...) || !(IsTriviallyDestructible<Ts> && ...))
+#endif
     {
-        m_index = other.m_index;
-        Helper::move_(other.m_index, other.m_data, m_data);
+        if (this != &other) {
+            if constexpr (!(IsTriviallyDestructible<Ts> && ...)) {
+                Helper::delete_(m_index, m_data);
+            }
+            m_index = other.m_index;
+            Helper::move_(other.m_index, other.m_data, m_data);
+        }
         return *this;
     }
 
     using Detail::MergeAndDeduplicatePacks<Detail::VariantConstructors<Ts, Variant<Ts...>>...>::MergeAndDeduplicatePacks;
 
-    template<typename T, typename StrippedT = RemoveCV<RemoveReference<T>>>
-    void set(T&& t) requires(can_contain<StrippedT>())
+    template<typename T, typename StrippedT = RemoveCVReference<T>>
+    void set(T&& t) requires(can_contain<StrippedT>() && requires { StrippedT(forward<T>(t)); })
     {
         constexpr auto new_index = index_of<StrippedT>();
         Helper::delete_(m_index, m_data);
@@ -260,8 +344,8 @@ public:
         m_index = new_index;
     }
 
-    template<typename T, typename StrippedT = RemoveCV<RemoveReference<T>>>
-    void set(T&& t, Detail::VariantNoClearTag) requires(can_contain<StrippedT>())
+    template<typename T, typename StrippedT = RemoveCVReference<T>>
+    void set(T&& t, Detail::VariantNoClearTag) requires(can_contain<StrippedT>() && requires { StrippedT(forward<T>(t)); })
     {
         constexpr auto new_index = index_of<StrippedT>();
         new (m_data) StrippedT(forward<T>(t));
@@ -308,14 +392,14 @@ public:
     ALWAYS_INLINE decltype(auto) visit(Fs&&... functions)
     {
         Visitor<Fs...> visitor { forward<Fs>(functions)... };
-        return VisitHelper::visit(m_index, m_data, move(visitor));
+        return VisitHelper::visit(*this, m_index, m_data, move(visitor));
     }
 
     template<typename... Fs>
     ALWAYS_INLINE decltype(auto) visit(Fs&&... functions) const
     {
         Visitor<Fs...> visitor { forward<Fs>(functions)... };
-        return VisitHelper::visit(m_index, m_data, move(visitor));
+        return VisitHelper::visit(*this, m_index, m_data, move(visitor));
     }
 
     template<typename... NewTs>
@@ -323,7 +407,7 @@ public:
     {
         Variant<NewTs...> instance { Variant<NewTs...>::invalid_index, Detail::VariantConstructTag {} };
         visit([&](auto& value) {
-            if constexpr (Variant<NewTs...>::template can_contain<RemoveCV<RemoveReference<decltype(value)>>>())
+            if constexpr (Variant<NewTs...>::template can_contain<RemoveCVReference<decltype(value)>>())
                 instance.set(move(value), Detail::VariantNoClearTag {});
         });
         VERIFY(instance.m_index != instance.invalid_index);
@@ -331,11 +415,11 @@ public:
     }
 
     template<typename... NewTs>
-    Variant<NewTs...> downcast() &
+    Variant<NewTs...> downcast() const&
     {
         Variant<NewTs...> instance { Variant<NewTs...>::invalid_index, Detail::VariantConstructTag {} };
         visit([&](const auto& value) {
-            if constexpr (Variant<NewTs...>::template can_contain<RemoveCV<RemoveReference<decltype(value)>>>())
+            if constexpr (Variant<NewTs...>::template can_contain<RemoveCVReference<decltype(value)>>())
                 instance.set(value, Detail::VariantNoClearTag {});
         });
         VERIFY(instance.m_index != instance.invalid_index);
@@ -343,8 +427,8 @@ public:
     }
 
 private:
-    static constexpr auto data_size = integer_sequence_generate_array<size_t>(0, IntegerSequence<size_t, sizeof(Ts)...>()).max();
-    static constexpr auto data_alignment = integer_sequence_generate_array<size_t>(0, IntegerSequence<size_t, alignof(Ts)...>()).max();
+    static constexpr auto data_size = Detail::integer_sequence_generate_array<size_t>(0, IntegerSequence<size_t, sizeof(Ts)...>()).max();
+    static constexpr auto data_alignment = Detail::integer_sequence_generate_array<size_t>(0, IntegerSequence<size_t, alignof(Ts)...>()).max();
     using Helper = Detail::Variant<IndexType, 0, Ts...>;
     using VisitHelper = Detail::VisitImpl<IndexType, Ts...>;
 
@@ -365,6 +449,8 @@ private:
 
     template<typename... Fs>
     struct Visitor : Fs... {
+        using Types = TypeList<Fs...>;
+
         Visitor(Fs&&... args)
             : Fs(forward<Fs>(args))...
         {

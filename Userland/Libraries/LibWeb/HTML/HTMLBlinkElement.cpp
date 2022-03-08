@@ -5,14 +5,12 @@
  */
 
 #include <LibCore/Timer.h>
-#include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/CSS/StyleValue.h>
 #include <LibWeb/HTML/HTMLBlinkElement.h>
-#include <LibWeb/Layout/Node.h>
 
 namespace Web::HTML {
 
-HTMLBlinkElement::HTMLBlinkElement(DOM::Document& document, QualifiedName qualified_name)
+HTMLBlinkElement::HTMLBlinkElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
     , m_timer(Core::Timer::construct())
 {

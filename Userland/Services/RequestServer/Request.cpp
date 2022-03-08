@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Badge.h>
-#include <RequestServer/ClientConnection.h>
+#include <RequestServer/ConnectionFromClient.h>
 #include <RequestServer/Request.h>
 
 namespace RequestServer {
@@ -13,7 +12,7 @@ namespace RequestServer {
 // FIXME: What about rollover?
 static i32 s_next_id = 1;
 
-Request::Request(ClientConnection& client, NonnullOwnPtr<OutputFileStream>&& output_stream)
+Request::Request(ConnectionFromClient& client, NonnullOwnPtr<Core::Stream::File>&& output_stream)
     : m_client(client)
     , m_id(s_next_id++)
     , m_output_stream(move(output_stream))

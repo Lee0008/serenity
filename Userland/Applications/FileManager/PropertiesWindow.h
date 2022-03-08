@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,10 +19,10 @@ class PropertiesWindow final : public GUI::Window {
     C_OBJECT(PropertiesWindow);
 
 public:
-    virtual ~PropertiesWindow() override;
+    virtual ~PropertiesWindow() override = default;
 
 private:
-    PropertiesWindow(const String& path, bool disable_rename, Window* parent = nullptr);
+    PropertiesWindow(String const& path, bool disable_rename, Window* parent = nullptr);
 
     struct PropertyValuePair {
         String property;
@@ -35,7 +36,7 @@ private:
         mode_t execute;
     };
 
-    static const String get_description(const mode_t mode)
+    static String const get_description(mode_t const mode)
     {
         if (S_ISREG(mode))
             return "File";
@@ -58,12 +59,11 @@ private:
     }
 
     GUI::Button& make_button(String, GUI::Widget& parent);
-    void make_property_value_pairs(const Vector<PropertyValuePair>& pairs, GUI::Widget& parent);
-    void make_permission_checkboxes(GUI::Widget& parent, PermissionMasks, String label_string, mode_t mode);
+    void setup_permission_checkboxes(GUI::CheckBox& box_read, GUI::CheckBox& box_write, GUI::CheckBox& box_execute, PermissionMasks masks, mode_t mode);
     void permission_changed(mode_t mask, bool set);
     bool apply_changes();
     void update();
-    String make_full_path(const String& name);
+    String make_full_path(String const& name);
 
     RefPtr<GUI::Button> m_apply_button;
     RefPtr<GUI::TextBox> m_name_box;

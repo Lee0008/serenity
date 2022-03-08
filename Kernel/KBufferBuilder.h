@@ -6,42 +6,55 @@
 
 #pragma once
 
-#include <AK/String.h>
+#include <AK/StringBuilder.h>
+#include <AK/StringView.h>
 #include <Kernel/KBuffer.h>
 #include <stdarg.h>
 
 namespace Kernel {
 
 class KBufferBuilder {
+    AK_MAKE_NONCOPYABLE(KBufferBuilder);
+
 public:
     using OutputType = KBuffer;
 
-    explicit KBufferBuilder(bool can_expand = false);
-    explicit KBufferBuilder(RefPtr<KBufferImpl>&, bool can_expand = false);
+    static ErrorOr<KBufferBuilder> try_create();
+
     KBufferBuilder(KBufferBuilder&&) = default;
+    KBufferBuilder& operator=(KBufferBuilder&&) = default;
     ~KBufferBuilder() = default;
 
-    void append(const StringView&);
-    void append(char);
-    void append(const char*, int);
+    ErrorOr<void> append(StringView);
+    ErrorOr<void> append(char);
+    ErrorOr<void> append(const char*, int);
 
-    void append_escaped_for_json(const StringView&);
-    void append_bytes(ReadonlyBytes);
+    ErrorOr<void> append_escaped_for_json(StringView);
+    ErrorOr<void> append_bytes(ReadonlyBytes);
 
     template<typename... Parameters>
-    void appendff(CheckedFormatString<Parameters...>&& fmtstr, const Parameters&... parameters)
+    ErrorOr<void> appendff(CheckedFormatString<Parameters...>&& fmtstr, const Parameters&... parameters)
     {
-        // FIXME: This is really not the way to go about it, but vformat expects a
-        //        StringBuilder. Why does this class exist anyways?
+        // FIXME: This really not ideal, but vformat expects StringBuilder.
         StringBuilder builder;
-        vformat(builder, fmtstr.view(), AK::VariadicFormatParams { parameters... });
-        append_bytes(builder.string_view().bytes());
+        AK::VariadicFormatParams variadic_format_params { parameters... };
+        TRY(vformat(builder, fmtstr.view(), variadic_format_params));
+        return append_bytes(builder.string_view().bytes());
     }
 
     bool flush();
     OwnPtr<KBuffer> build();
 
+    ReadonlyBytes bytes() const
+    {
+        if (!m_buffer)
+            return {};
+        return m_buffer->bytes();
+    }
+
 private:
+    explicit KBufferBuilder(NonnullOwnPtr<KBuffer>);
+
     bool check_expand(size_t);
     u8* insertion_ptr()
     {
@@ -50,9 +63,8 @@ private:
         return m_buffer->data() + m_size;
     }
 
-    RefPtr<KBufferImpl> m_buffer;
+    OwnPtr<KBuffer> m_buffer;
     size_t m_size { 0 };
-    bool m_can_expand { false };
 };
 
 }

@@ -9,8 +9,8 @@
 
 namespace ImageDecoderClient {
 
-Client::Client()
-    : IPC::ServerConnection<ImageDecoderClientEndpoint, ImageDecoderServerEndpoint>(*this, "/tmp/portal/image")
+Client::Client(NonnullOwnPtr<Core::Stream::LocalSocket> socket)
+    : IPC::ConnectionToServer<ImageDecoderClientEndpoint, ImageDecoderServerEndpoint>(*this, move(socket))
 {
 }
 
@@ -20,20 +20,17 @@ void Client::die()
         on_death();
 }
 
-void Client::dummy()
-{
-}
-
-Optional<DecodedImage> Client::decode_image(const ByteBuffer& encoded_data)
+Optional<DecodedImage> Client::decode_image(ReadonlyBytes encoded_data)
 {
     if (encoded_data.is_empty())
         return {};
 
-    auto encoded_buffer = Core::AnonymousBuffer::create_with_size(encoded_data.size());
-    if (!encoded_buffer.is_valid()) {
+    auto encoded_buffer_or_error = Core::AnonymousBuffer::create_with_size(encoded_data.size());
+    if (encoded_buffer_or_error.is_error()) {
         dbgln("Could not allocate encoded buffer");
         return {};
     }
+    auto encoded_buffer = encoded_buffer_or_error.release_value();
 
     memcpy(encoded_buffer.data<void>(), encoded_data.data(), encoded_data.size());
     auto response_or_error = try_decode_image(move(encoded_buffer));

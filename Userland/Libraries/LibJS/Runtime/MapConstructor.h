@@ -18,13 +18,13 @@ public:
     virtual void initialize(GlobalObject&) override;
     virtual ~MapConstructor() override;
 
-    virtual Value call() override;
-    virtual Value construct(Function&) override;
+    virtual ThrowCompletionOr<Value> call() override;
+    virtual ThrowCompletionOr<Object*> construct(FunctionObject&) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
 
-    JS_DECLARE_NATIVE_GETTER(symbol_species_getter);
+    JS_DECLARE_NATIVE_FUNCTION(symbol_species_getter);
 };
 
 }

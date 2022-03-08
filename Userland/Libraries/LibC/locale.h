@@ -12,12 +12,19 @@ __BEGIN_DECLS
 
 enum {
     LC_ALL,
+#define LC_ALL LC_ALL
     LC_NUMERIC,
+#define LC_NUMERIC LC_NUMERIC
     LC_CTYPE,
+#define LC_CTYPE LC_CTYPE
     LC_COLLATE,
+#define LC_COLLATE LC_COLLATE
     LC_TIME,
+#define LC_TIME LC_TIME
     LC_MONETARY,
+#define LC_MONETARY LC_MONETARY
     LC_MESSAGES,
+#define LC_MESSAGES LC_MESSAGES
 };
 
 struct lconv {
@@ -47,7 +54,7 @@ struct lconv {
     char int_n_sign_posn;
 };
 
-struct lconv* localeconv();
+struct lconv* localeconv(void);
 char* setlocale(int category, const char* locale);
 
 __END_DECLS

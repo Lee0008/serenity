@@ -30,7 +30,7 @@ static void report_validation_error(SourceLocation const& location = SourceLocat
     dbgln_if(URL_PARSER_DEBUG, "URLParser::parse: Validation error! {}", location);
 }
 
-static Optional<String> parse_opaque_host(StringView const& input)
+static Optional<String> parse_opaque_host(StringView input)
 {
     auto forbidden_host_code_points_excluding_percent = "\0\t\n\r #/:<>?@[\\]^|"sv;
     for (auto code_point : forbidden_host_code_points_excluding_percent) {
@@ -44,7 +44,7 @@ static Optional<String> parse_opaque_host(StringView const& input)
     return URL::percent_encode(input, URL::PercentEncodeSet::C0Control);
 }
 
-static Optional<String> parse_ipv4_address(StringView const& input)
+static Optional<String> parse_ipv4_address(StringView input)
 {
     // FIXME: Implement the correct IPv4 parser as specified by https://url.spec.whatwg.org/#concept-ipv4-parser.
     return input;
@@ -52,7 +52,7 @@ static Optional<String> parse_ipv4_address(StringView const& input)
 
 // https://url.spec.whatwg.org/#concept-host-parser
 // NOTE: This is a very bare-bones implementation.
-static Optional<String> parse_host(StringView const& input, bool is_not_special = false)
+static Optional<String> parse_host(StringView input, bool is_not_special = false)
 {
     if (input.starts_with('[')) {
         if (!input.ends_with(']')) {
@@ -84,7 +84,7 @@ static Optional<String> parse_host(StringView const& input, bool is_not_special 
     return ipv4_host;
 }
 
-constexpr bool starts_with_windows_drive_letter(StringView const& input)
+constexpr bool starts_with_windows_drive_letter(StringView input)
 {
     if (input.length() < 2)
         return false;
@@ -95,29 +95,29 @@ constexpr bool starts_with_windows_drive_letter(StringView const& input)
     return "/\\?#"sv.contains(input[2]);
 }
 
-constexpr bool is_windows_drive_letter(StringView const& input)
+constexpr bool is_windows_drive_letter(StringView input)
 {
     return input.length() == 2 && is_ascii_alpha(input[0]) && (input[1] == ':' || input[1] == '|');
 }
 
-constexpr bool is_normalized_windows_drive_letter(StringView const& input)
+constexpr bool is_normalized_windows_drive_letter(StringView input)
 {
     return input.length() == 2 && is_ascii_alpha(input[0]) && input[1] == ':';
 }
 
-constexpr bool is_single_dot_path_segment(StringView const& input)
+constexpr bool is_single_dot_path_segment(StringView input)
 {
     return input == "."sv || input.equals_ignoring_case("%2e"sv);
 }
 
-constexpr bool is_double_dot_path_segment(StringView const& input)
+constexpr bool is_double_dot_path_segment(StringView input)
 {
     return input == ".."sv || input.equals_ignoring_case(".%2e"sv) || input.equals_ignoring_case("%2e."sv) || input.equals_ignoring_case("%2e%2e"sv);
 }
 
 // https://fetch.spec.whatwg.org/#data-urls
-// FIXME: This only loosely follow the spec, as we use the same class for "regular" and data URLs, unlike the spec.
-Optional<URL> URLParser::parse_data_url(StringView const& raw_input)
+// FIXME: This only loosely follows the spec, as we use the same class for "regular" and data URLs, unlike the spec.
+Optional<URL> URLParser::parse_data_url(StringView raw_input)
 {
     dbgln_if(URL_PARSER_DEBUG, "URLParser::parse_data_url: Parsing '{}'.", raw_input);
     VERIFY(raw_input.starts_with("data:"));
@@ -125,24 +125,28 @@ Optional<URL> URLParser::parse_data_url(StringView const& raw_input)
     auto comma_offset = input.find(',');
     if (!comma_offset.has_value())
         return {};
-    auto mime_type = input.substring_view(0, comma_offset.value());
-    // FIXME: Strip leading and trailing ASCII whitespace from mimeType
+    auto mime_type = StringUtils::trim(input.substring_view(0, comma_offset.value()), "\t\n\f\r ", TrimMode::Both);
     auto encoded_body = input.substring_view(comma_offset.value() + 1);
     auto body = URL::percent_decode(encoded_body);
-    bool is_base_64_encoded = false;
-    if (mime_type.ends_with(";base64", CaseSensitivity::CaseInsensitive)) {
-        is_base_64_encoded = true;
-        mime_type = mime_type.substring_view(0, mime_type.length() - 7);
+    bool is_base64_encoded = false;
+    if (mime_type.ends_with("base64", CaseSensitivity::CaseInsensitive)) {
+        auto substring_view = mime_type.substring_view(0, mime_type.length() - 6);
+        auto trimmed_substring_view = StringUtils::trim(substring_view, " ", TrimMode::Right);
+        if (trimmed_substring_view.ends_with(';')) {
+            is_base64_encoded = true;
+            mime_type = trimmed_substring_view.substring_view(0, trimmed_substring_view.length() - 1);
+        }
     }
 
-    if (mime_type.starts_with(";")) {
-        StringBuilder builder;
+    StringBuilder builder;
+    if (mime_type.starts_with(";") || mime_type.is_empty()) {
         builder.append("text/plain");
         builder.append(mime_type);
-        mime_type = builder.to_string();
+        mime_type = builder.string_view();
     }
 
-    URL url { mime_type, move(body), is_base_64_encoded };
+    // FIXME: Parse the MIME type's components according to https://mimesniff.spec.whatwg.org/#parse-a-mime-type
+    URL url { StringUtils::trim(mime_type, "\n\r\t ", TrimMode::Both), move(body), is_base64_encoded };
     dbgln_if(URL_PARSER_DEBUG, "URLParser::parse_data_url: Parsed data URL to be '{}'.", url.serialize());
     return url;
 }
@@ -157,7 +161,7 @@ Optional<URL> URLParser::parse_data_url(StringView const& raw_input)
 // NOTE: Since the URL class's member variables contain percent decoded data, we have to deviate from the URL parser specification when setting
 //       some of those values. Because the specification leaves all values percent encoded in their URL data structure, we have to percent decode
 //       everything before setting the member variables.
-URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_url)
+URL URLParser::parse(StringView raw_input, URL const* base_url, Optional<URL> url, Optional<State> state_override)
 {
     dbgln_if(URL_PARSER_DEBUG, "URLParser::parse: Parsing '{}'", raw_input);
     if (raw_input.is_empty())
@@ -170,47 +174,46 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
         return maybe_url.release_value();
     }
 
-    URL url;
-
-    // NOTE: This removes all leading and trailing C0 control or space characters.
-    bool has_validation_error = false;
     size_t start_index = 0;
     size_t end_index = raw_input.length();
-    for (size_t i = 0; i < raw_input.length(); ++i) {
-        i8 ch = raw_input[i];
-        if (0 <= ch && ch <= 0x20) {
-            ++start_index;
-            has_validation_error = true;
-        } else {
-            break;
+    if (!url.has_value()) {
+        url = URL();
+
+        // NOTE: This removes all leading and trailing C0 control or space characters.
+        bool has_validation_error = false;
+        for (size_t i = 0; i < raw_input.length(); ++i) {
+            i8 ch = raw_input[i];
+            if (0 <= ch && ch <= 0x20) {
+                ++start_index;
+                has_validation_error = true;
+            } else {
+                break;
+            }
         }
-    }
-    for (ssize_t i = raw_input.length() - 1; i >= 0; --i) {
-        i8 ch = raw_input[i];
-        if (0 <= ch && ch <= 0x20) {
-            --end_index;
-            has_validation_error = true;
-        } else {
-            break;
+        for (ssize_t i = raw_input.length() - 1; i >= 0; --i) {
+            i8 ch = raw_input[i];
+            if (0 <= ch && ch <= 0x20) {
+                --end_index;
+                has_validation_error = true;
+            } else {
+                break;
+            }
         }
+        if (has_validation_error)
+            report_validation_error();
     }
-    if (has_validation_error)
-        report_validation_error();
     if (start_index >= end_index)
         return {};
 
-    auto processed_input = raw_input.substring_view(start_index, end_index - start_index);
+    String processed_input = raw_input.substring_view(start_index, end_index - start_index);
 
     // NOTE: This replaces all tab and newline characters with nothing.
     if (processed_input.contains("\t") || processed_input.contains("\n")) {
         report_validation_error();
-        String processed_input_string(processed_input);
-        processed_input_string.replace("\t", "", true);
-        processed_input_string.replace("\n", "", true);
-        processed_input = processed_input_string;
+        processed_input = processed_input.replace("\t", "", true).replace("\n", "", true);
     }
 
-    State state = State::SchemeStart;
+    State state = state_override.value_or(State::SchemeStart);
     StringBuilder buffer;
     bool at_sign_seen = false;
     bool inside_brackets = false;
@@ -254,15 +257,15 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
             if (is_ascii_alphanumeric(code_point) || code_point == '+' || code_point == '-' || code_point == '.') {
                 buffer.append_as_lowercase(code_point);
             } else if (code_point == ':') {
-                url.m_scheme = buffer.to_string();
+                url->m_scheme = buffer.to_string();
                 buffer.clear();
-                if (url.scheme() == "file") {
+                if (url->scheme() == "file") {
                     if (!get_remaining().starts_with("//")) {
                         report_validation_error();
                     }
                     state = State::File;
-                } else if (url.is_special()) {
-                    if (base_url && base_url->m_scheme == url.m_scheme)
+                } else if (url->is_special()) {
+                    if (base_url && base_url->m_scheme == url->m_scheme)
                         state = State::SpecialRelativeOrAuthority;
                     else
                         state = State::SpecialAuthoritySlashes;
@@ -270,8 +273,8 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                     state = State::PathOrAuthority;
                     ++iterator;
                 } else {
-                    url.m_cannot_be_a_base_url = true;
-                    url.append_path("");
+                    url->m_cannot_be_a_base_url = true;
+                    url->append_path("");
                     state = State::CannotBeABaseUrlPath;
                 }
             } else {
@@ -286,11 +289,11 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                 report_validation_error();
                 return {};
             } else if (base_url->m_cannot_be_a_base_url && code_point == '#') {
-                url.m_scheme = base_url->m_scheme;
-                url.m_paths = base_url->m_paths;
-                url.m_query = base_url->m_query;
-                url.m_fragment = "";
-                url.m_cannot_be_a_base_url = true;
+                url->m_scheme = base_url->m_scheme;
+                url->m_paths = base_url->m_paths;
+                url->m_query = base_url->m_query;
+                url->m_fragment = "";
+                url->m_cannot_be_a_base_url = true;
                 state = State::Fragment;
             } else if (base_url->m_scheme != "file") {
                 state = State::Relative;
@@ -319,47 +322,47 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
             }
             break;
         case State::Relative:
-            url.m_scheme = base_url->m_scheme;
+            url->m_scheme = base_url->m_scheme;
             if (code_point == '/') {
                 state = State::RelativeSlash;
-            } else if (url.is_special() && code_point == '\\') {
+            } else if (url->is_special() && code_point == '\\') {
                 report_validation_error();
                 state = State::RelativeSlash;
             } else {
-                url.m_username = base_url->m_username;
-                url.m_password = base_url->m_password;
-                url.m_host = base_url->m_host;
-                url.m_port = base_url->m_port;
-                url.m_paths = base_url->m_paths;
-                url.m_query = base_url->m_query;
+                url->m_username = base_url->m_username;
+                url->m_password = base_url->m_password;
+                url->m_host = base_url->m_host;
+                url->m_port = base_url->m_port;
+                url->m_paths = base_url->m_paths;
+                url->m_query = base_url->m_query;
 
                 if (code_point == '?') {
-                    url.m_query = "";
+                    url->m_query = "";
                     state = State::Query;
                 } else if (code_point == '#') {
-                    url.m_fragment = "";
+                    url->m_fragment = "";
                     state = State::Fragment;
                 } else if (code_point != end_of_file) {
-                    url.m_query = {};
-                    if (url.m_paths.size())
-                        url.m_paths.remove(url.m_paths.size() - 1);
+                    url->m_query = {};
+                    if (url->m_paths.size())
+                        url->m_paths.remove(url->m_paths.size() - 1);
                     state = State::Path;
                     continue;
                 }
             }
             break;
         case State::RelativeSlash:
-            if (url.is_special() && (code_point == '/' || code_point == '\\')) {
+            if (url->is_special() && (code_point == '/' || code_point == '\\')) {
                 if (code_point == '\\')
                     report_validation_error();
                 state = State::SpecialAuthorityIgnoreSlashes;
             } else if (code_point == '/') {
                 state = State::Authority;
             } else {
-                url.m_username = base_url->m_username;
-                url.m_password = base_url->m_password;
-                url.m_host = base_url->m_host;
-                url.m_port = base_url->m_port;
+                url->m_username = base_url->m_username;
+                url->m_password = base_url->m_password;
+                url->m_host = base_url->m_host;
+                url->m_port = base_url->m_port;
                 state = State::Path;
                 continue;
             }
@@ -400,19 +403,19 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                     }
                     builder.clear();
                     if (password_token_seen) {
-                        builder.append(url.password());
+                        builder.append(url->password());
                         URL::append_percent_encoded_if_necessary(builder, c, URL::PercentEncodeSet::Userinfo);
                         // NOTE: This is has to be encoded and then decoded because the original sequence could contain already percent-encoded sequences.
-                        url.m_password = URL::percent_decode(builder.string_view());
+                        url->m_password = URL::percent_decode(builder.string_view());
                     } else {
-                        builder.append(url.username());
+                        builder.append(url->username());
                         URL::append_percent_encoded_if_necessary(builder, c, URL::PercentEncodeSet::Userinfo);
                         // NOTE: This is has to be encoded and then decoded because the original sequence could contain already percent-encoded sequences.
-                        url.m_username = URL::percent_decode(builder.string_view());
+                        url->m_username = URL::percent_decode(builder.string_view());
                     }
                 }
                 buffer.clear();
-            } else if (code_point == end_of_file || code_point == '/' || code_point == '?' || code_point == '#' || (url.is_special() && code_point == '\\')) {
+            } else if (code_point == end_of_file || code_point == '/' || code_point == '?' || code_point == '#' || (url->is_special() && code_point == '\\')) {
                 if (at_sign_seen && buffer.is_empty()) {
                     report_validation_error();
                     return {};
@@ -432,21 +435,21 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                     report_validation_error();
                     return {};
                 }
-                auto host = parse_host(buffer.string_view(), !url.is_special());
+                auto host = parse_host(buffer.string_view(), !url->is_special());
                 if (!host.has_value())
                     return {};
-                url.m_host = host.release_value();
+                url->m_host = host.release_value();
                 buffer.clear();
                 state = State::Port;
-            } else if (code_point == end_of_file || code_point == '/' || code_point == '?' || code_point == '#' || (url.is_special() && code_point == '\\')) {
-                if (url.is_special() && buffer.is_empty()) {
+            } else if (code_point == end_of_file || code_point == '/' || code_point == '?' || code_point == '#' || (url->is_special() && code_point == '\\')) {
+                if (url->is_special() && buffer.is_empty()) {
                     report_validation_error();
                     return {};
                 }
-                auto host = parse_host(buffer.string_view(), !url.is_special());
+                auto host = parse_host(buffer.string_view(), !url->is_special());
                 if (!host.has_value())
                     return {};
-                url.m_host = host.value();
+                url->m_host = host.value();
                 buffer.clear();
                 state = State::Port;
                 continue;
@@ -461,17 +464,17 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
         case State::Port:
             if (is_ascii_digit(code_point)) {
                 buffer.append_code_point(code_point);
-            } else if (code_point == end_of_file || code_point == '/' || code_point == '?' || code_point == '#' || (url.is_special() && code_point == '\\')) {
+            } else if (code_point == end_of_file || code_point == '/' || code_point == '?' || code_point == '#' || (url->is_special() && code_point == '\\')) {
                 if (!buffer.is_empty()) {
                     auto port = buffer.string_view().to_uint();
                     if (!port.has_value() || port.value() > 65535) {
                         report_validation_error();
                         return {};
                     }
-                    if (port.value() == URL::default_port_for_scheme(url.scheme()))
-                        url.m_port = 0;
+                    if (port.value() == URL::default_port_for_scheme(url->scheme()))
+                        url->m_port = {};
                     else
-                        url.m_port = port.value();
+                        url->m_port = port.value();
                     buffer.clear();
                 }
                 state = State::PathStart;
@@ -482,31 +485,31 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
             }
             break;
         case State::File:
-            url.m_scheme = "file";
-            url.m_host = "";
+            url->m_scheme = "file";
+            url->m_host = "";
             if (code_point == '/' || code_point == '\\') {
                 if (code_point == '\\')
                     report_validation_error();
                 state = State::FileSlash;
             } else if (base_url && base_url->m_scheme == "file") {
-                url.m_host = base_url->m_host;
-                url.m_paths = base_url->m_paths;
-                url.m_query = base_url->m_query;
+                url->m_host = base_url->m_host;
+                url->m_paths = base_url->m_paths;
+                url->m_query = base_url->m_query;
                 if (code_point == '?') {
-                    url.m_query = "";
+                    url->m_query = "";
                     state = State::Query;
                 } else if (code_point == '#') {
-                    url.m_fragment = "";
+                    url->m_fragment = "";
                     state = State::Fragment;
                 } else if (code_point != end_of_file) {
-                    url.m_query = {};
+                    url->m_query = {};
                     auto substring_from_pointer = input.substring_view(iterator - input.begin()).as_string();
                     if (!starts_with_windows_drive_letter(substring_from_pointer)) {
-                        if (!url.paths().is_empty() && !(url.scheme() == "file" && url.paths().size() == 1 && is_normalized_windows_drive_letter(url.paths()[0])))
-                            url.m_paths.remove(url.m_paths.size() - 1);
+                        if (!url->paths().is_empty() && !(url->scheme() == "file" && url->paths().size() == 1 && is_normalized_windows_drive_letter(url->paths()[0])))
+                            url->m_paths.remove(url->m_paths.size() - 1);
                     } else {
                         report_validation_error();
-                        url.m_paths.clear();
+                        url->m_paths.clear();
                     }
                     state = State::Path;
                     continue;
@@ -519,10 +522,10 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                     report_validation_error();
                 state = State::FileHost;
             } else if (base_url && base_url->m_scheme == "file") {
-                url.m_host = base_url->m_host;
+                url->m_host = base_url->m_host;
                 auto substring_from_pointer = input.substring_view(iterator - input.begin()).as_string();
                 if (!starts_with_windows_drive_letter(substring_from_pointer) && is_normalized_windows_drive_letter(base_url->m_paths[0]))
-                    url.append_path(base_url->m_paths[0]);
+                    url->append_path(base_url->m_paths[0]);
                 state = State::Path;
                 continue;
             }
@@ -533,7 +536,7 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                     report_validation_error();
                     state = State::Path;
                 } else if (buffer.is_empty()) {
-                    url.m_host = "";
+                    url->m_host = "";
                     state = State::PathStart;
                 } else {
                     auto host = parse_host(buffer.string_view(), true);
@@ -541,7 +544,7 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                         return {};
                     if (host.value() == "localhost")
                         host = "";
-                    url.m_host = host.release_value();
+                    url->m_host = host.release_value();
                     buffer.clear();
                     state = State::PathStart;
                 }
@@ -551,17 +554,17 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
             }
             break;
         case State::PathStart:
-            if (url.is_special()) {
+            if (url->is_special()) {
                 if (code_point == '\\')
                     report_validation_error();
                 state = State::Path;
                 if (code_point != '/' && code_point != '\\')
                     continue;
             } else if (code_point == '?') {
-                url.m_query = "";
+                url->m_query = "";
                 state = State::Query;
             } else if (code_point == '#') {
-                url.m_fragment = "";
+                url->m_fragment = "";
                 state = State::Fragment;
             } else if (code_point != end_of_file) {
                 state = State::Path;
@@ -570,32 +573,32 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
             }
             break;
         case State::Path:
-            if (code_point == end_of_file || code_point == '/' || (url.is_special() && code_point == '\\') || code_point == '?' || code_point == '#') {
-                if (url.is_special() && code_point == '\\')
+            if (code_point == end_of_file || code_point == '/' || (url->is_special() && code_point == '\\') || code_point == '?' || code_point == '#') {
+                if (url->is_special() && code_point == '\\')
                     report_validation_error();
                 if (is_double_dot_path_segment(buffer.string_view())) {
-                    if (!url.m_paths.is_empty() && !(url.m_scheme == "file" && url.m_paths.size() == 1 && is_normalized_windows_drive_letter(url.m_paths[0])))
-                        url.m_paths.remove(url.m_paths.size() - 1);
-                    if (code_point != '/' && !(url.is_special() && code_point == '\\'))
-                        url.append_path("");
-                } else if (is_single_dot_path_segment(buffer.string_view()) && code_point != '/' && !(url.is_special() && code_point == '\\')) {
-                    url.append_path("");
+                    if (!url->m_paths.is_empty() && !(url->m_scheme == "file" && url->m_paths.size() == 1 && is_normalized_windows_drive_letter(url->m_paths[0])))
+                        url->m_paths.remove(url->m_paths.size() - 1);
+                    if (code_point != '/' && !(url->is_special() && code_point == '\\'))
+                        url->append_path("");
+                } else if (is_single_dot_path_segment(buffer.string_view()) && code_point != '/' && !(url->is_special() && code_point == '\\')) {
+                    url->append_path("");
                 } else if (!is_single_dot_path_segment(buffer.string_view())) {
-                    if (url.m_scheme == "file" && url.m_paths.is_empty() && is_windows_drive_letter(buffer.string_view())) {
+                    if (url->m_scheme == "file" && url->m_paths.is_empty() && is_windows_drive_letter(buffer.string_view())) {
                         auto drive_letter = buffer.string_view()[0];
                         buffer.clear();
                         buffer.append(drive_letter);
                         buffer.append(':');
                     }
                     // NOTE: This needs to be percent decoded since the member variables contain decoded data.
-                    url.append_path(URL::percent_decode(buffer.string_view()));
+                    url->append_path(URL::percent_decode(buffer.string_view()));
                 }
                 buffer.clear();
                 if (code_point == '?') {
-                    url.m_query = "";
+                    url->m_query = "";
                     state = State::Query;
                 } else if (code_point == '#') {
-                    url.m_fragment = "";
+                    url->m_fragment = "";
                     state = State::Fragment;
                 }
             } else {
@@ -608,16 +611,16 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
         case State::CannotBeABaseUrlPath:
             // NOTE: This does not follow the spec exactly but rather uses the buffer and only sets the path on EOF.
             // NOTE: Verify that the assumptions required for this simplification are correct.
-            VERIFY(url.m_paths.size() == 1 && url.m_paths[0].is_empty());
+            VERIFY(url->m_paths.size() == 1 && url->m_paths[0].is_empty());
             if (code_point == '?') {
                 // NOTE: This needs to be percent decoded since the member variables contain decoded data.
-                url.m_paths[0] = URL::percent_decode(buffer.string_view());
-                url.m_query = "";
+                url->m_paths[0] = URL::percent_decode(buffer.string_view());
+                url->m_query = "";
                 state = State::Query;
             } else if (code_point == '#') {
                 // NOTE: This needs to be percent decoded since the member variables contain decoded data.
-                url.m_paths[0] = URL::percent_decode(buffer.string_view());
-                url.m_fragment = "";
+                url->m_paths[0] = URL::percent_decode(buffer.string_view());
+                url->m_fragment = "";
                 state = State::Fragment;
             } else {
                 if (code_point != end_of_file && !is_url_code_point(code_point) && code_point != '%')
@@ -627,19 +630,19 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                     URL::append_percent_encoded_if_necessary(buffer, code_point, URL::PercentEncodeSet::C0Control);
                 } else {
                     // NOTE: This needs to be percent decoded since the member variables contain decoded data.
-                    url.m_paths[0] = URL::percent_decode(buffer.string_view());
+                    url->m_paths[0] = URL::percent_decode(buffer.string_view());
                 }
             }
             break;
         case State::Query:
             if (code_point == end_of_file || code_point == '#') {
-                VERIFY(url.m_query == "");
-                auto query_percent_encode_set = url.is_special() ? URL::PercentEncodeSet::SpecialQuery : URL::PercentEncodeSet::Query;
+                VERIFY(url->m_query == "");
+                auto query_percent_encode_set = url->is_special() ? URL::PercentEncodeSet::SpecialQuery : URL::PercentEncodeSet::Query;
                 // NOTE: This is has to be encoded and then decoded because the original sequence could contain already percent-encoded sequences.
-                url.m_query = URL::percent_decode(URL::percent_encode(buffer.string_view(), query_percent_encode_set));
+                url->m_query = URL::percent_decode(URL::percent_encode(buffer.string_view(), query_percent_encode_set));
                 buffer.clear();
                 if (code_point == '#') {
-                    url.m_fragment = "";
+                    url->m_fragment = "";
                     state = State::Fragment;
                 }
             } else if (code_point != end_of_file) {
@@ -658,7 +661,7 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
                 buffer.append_code_point(code_point);
             } else {
                 // NOTE: This needs to be percent decoded since the member variables contain decoded data.
-                url.m_fragment = URL::percent_decode(buffer.string_view());
+                url->m_fragment = URL::percent_decode(buffer.string_view());
                 buffer.clear();
             }
             break;
@@ -671,9 +674,9 @@ URL URLParser::parse(Badge<URL>, StringView const& raw_input, URL const* base_ur
         ++iterator;
     }
 
-    url.m_valid = true;
-    dbgln_if(URL_PARSER_DEBUG, "URLParser::parse: Parsed URL to be '{}'.", url.serialize());
-    return url;
+    url->m_valid = true;
+    dbgln_if(URL_PARSER_DEBUG, "URLParser::parse: Parsed URL to be '{}'.", url->serialize());
+    return url.release_value();
 }
 
 }

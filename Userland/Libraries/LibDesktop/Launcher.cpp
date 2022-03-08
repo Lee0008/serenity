@@ -9,7 +9,7 @@
 #include <LaunchServer/LaunchClientEndpoint.h>
 #include <LaunchServer/LaunchServerEndpoint.h>
 #include <LibDesktop/Launcher.h>
-#include <LibIPC/ServerConnection.h>
+#include <LibIPC/ConnectionToServer.h>
 #include <stdlib.h>
 
 namespace Desktop {
@@ -17,9 +17,8 @@ namespace Desktop {
 auto Launcher::Details::from_details_str(const String& details_str) -> NonnullRefPtr<Details>
 {
     auto details = adopt_ref(*new Details);
-    auto json = JsonValue::from_string(details_str);
-    VERIFY(json.has_value());
-    auto obj = json.value().as_object();
+    auto json = JsonValue::from_string(details_str).release_value_but_fixme_should_propagate_errors();
+    auto const& obj = json.as_object();
     details->executable = obj.get("executable").to_string();
     details->name = obj.get("name").to_string();
     if (auto type_value = obj.get_ptr("type")) {
@@ -34,62 +33,58 @@ auto Launcher::Details::from_details_str(const String& details_str) -> NonnullRe
     return details;
 }
 
-class LaunchServerConnection final
-    : public IPC::ServerConnection<LaunchClientEndpoint, LaunchServerEndpoint>
+class ConnectionToLaunchServer final
+    : public IPC::ConnectionToServer<LaunchClientEndpoint, LaunchServerEndpoint>
     , public LaunchClientEndpoint {
-    C_OBJECT(LaunchServerConnection)
+    IPC_CLIENT_CONNECTION(ConnectionToLaunchServer, "/tmp/portal/launch")
 private:
-    LaunchServerConnection()
-        : IPC::ServerConnection<LaunchClientEndpoint, LaunchServerEndpoint>(*this, "/tmp/portal/launch")
+    ConnectionToLaunchServer(NonnullOwnPtr<Core::Stream::LocalSocket> socket)
+        : IPC::ConnectionToServer<LaunchClientEndpoint, LaunchServerEndpoint>(*this, move(socket))
     {
     }
-    virtual void dummy() override { }
 };
 
-static LaunchServerConnection& connection()
+static ConnectionToLaunchServer& connection()
 {
-    static auto connection = LaunchServerConnection::construct();
+    static auto connection = ConnectionToLaunchServer::try_create().release_value_but_fixme_should_propagate_errors();
     return connection;
 }
 
-bool Launcher::add_allowed_url(const URL& url)
+void Launcher::ensure_connection()
+{
+    [[maybe_unused]] auto& conn = connection();
+}
+
+ErrorOr<void> Launcher::add_allowed_url(URL const& url)
 {
     auto response_or_error = connection().try_add_allowed_url(url);
-    if (response_or_error.is_error()) {
-        dbgln("Launcher::add_allowed_url: Failed");
-        return false;
-    }
-    return true;
+    if (response_or_error.is_error())
+        return Error::from_string_literal("Launcher::add_allowed_url: Failed"sv);
+    return {};
 }
 
-bool Launcher::add_allowed_handler_with_any_url(const String& handler)
+ErrorOr<void> Launcher::add_allowed_handler_with_any_url(String const& handler)
 {
     auto response_or_error = connection().try_add_allowed_handler_with_any_url(handler);
-    if (response_or_error.is_error()) {
-        dbgln("Launcher::add_allowed_handler_with_any_url: Failed");
-        return false;
-    }
-    return true;
+    if (response_or_error.is_error())
+        return Error::from_string_literal("Launcher::add_allowed_handler_with_any_url: Failed"sv);
+    return {};
 }
 
-bool Launcher::add_allowed_handler_with_only_specific_urls(const String& handler, const Vector<URL>& urls)
+ErrorOr<void> Launcher::add_allowed_handler_with_only_specific_urls(String const& handler, Vector<URL> const& urls)
 {
     auto response_or_error = connection().try_add_allowed_handler_with_only_specific_urls(handler, urls);
-    if (response_or_error.is_error()) {
-        dbgln("Launcher::add_allowed_handler_with_only_specific_urls: Failed");
-        return false;
-    }
-    return true;
+    if (response_or_error.is_error())
+        return Error::from_string_literal("Launcher::add_allowed_handler_with_only_specific_urls: Failed"sv);
+    return {};
 }
 
-bool Launcher::seal_allowlist()
+ErrorOr<void> Launcher::seal_allowlist()
 {
     auto response_or_error = connection().try_seal_allowlist();
-    if (response_or_error.is_error()) {
-        dbgln("Launcher::seal_allowlist: Failed");
-        return false;
-    }
-    return true;
+    if (response_or_error.is_error())
+        return Error::from_string_literal("Launcher::seal_allowlist: Failed"sv);
+    return {};
 }
 
 bool Launcher::open(const URL& url, const String& handler_name)

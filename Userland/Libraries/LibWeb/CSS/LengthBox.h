@@ -7,14 +7,15 @@
 #pragma once
 
 #include <LibWeb/CSS/Length.h>
+#include <LibWeb/CSS/StyleValue.h>
 
 namespace Web::CSS {
 
 struct LengthBox {
-    Length top { Length::make_auto() };
-    Length right { Length::make_auto() };
-    Length bottom { Length::make_auto() };
-    Length left { Length::make_auto() };
+    LengthPercentage top { Length::make_auto() };
+    LengthPercentage right { Length::make_auto() };
+    LengthPercentage bottom { Length::make_auto() };
+    LengthPercentage left { Length::make_auto() };
 };
 
 }

@@ -1,0 +1,12 @@
+#import <DOM/EventTarget.idl>
+
+interface MessagePort : EventTarget {
+
+    undefined postMessage(any message);
+    undefined start();
+    undefined close();
+
+    attribute EventHandler onmessage;
+    attribute EventHandler onmessageerror;
+
+};

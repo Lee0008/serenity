@@ -1,11 +1,13 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Concepts.h>
+#include <AK/StdLibExtras.h>
 #include <LibIPC/Forward.h>
 #include <LibIPC/Message.h>
 
@@ -28,22 +30,24 @@ public:
     Encoder& operator<<(bool);
     Encoder& operator<<(u8);
     Encoder& operator<<(u16);
-    Encoder& operator<<(u32);
-    Encoder& operator<<(u64);
+    Encoder& operator<<(unsigned);
+    Encoder& operator<<(unsigned long);
+    Encoder& operator<<(unsigned long long);
     Encoder& operator<<(i8);
     Encoder& operator<<(i16);
     Encoder& operator<<(i32);
     Encoder& operator<<(i64);
     Encoder& operator<<(float);
-    Encoder& operator<<(const char*);
-    Encoder& operator<<(const StringView&);
-    Encoder& operator<<(const String&);
-    Encoder& operator<<(const ByteBuffer&);
-    Encoder& operator<<(const URL&);
-    Encoder& operator<<(const Dictionary&);
-    Encoder& operator<<(const File&);
+    Encoder& operator<<(double);
+    Encoder& operator<<(char const*);
+    Encoder& operator<<(StringView);
+    Encoder& operator<<(String const&);
+    Encoder& operator<<(ByteBuffer const&);
+    Encoder& operator<<(URL const&);
+    Encoder& operator<<(Dictionary const&);
+    Encoder& operator<<(File const&);
     template<typename K, typename V>
-    Encoder& operator<<(const HashMap<K, V>& hashmap)
+    Encoder& operator<<(HashMap<K, V> const& hashmap)
     {
         *this << (u32)hashmap.size();
         for (auto it : hashmap) {
@@ -54,7 +58,7 @@ public:
     }
 
     template<typename T>
-    Encoder& operator<<(const Vector<T>& vector)
+    Encoder& operator<<(Vector<T> const& vector)
     {
         *this << (u64)vector.size();
         for (auto& value : vector)
@@ -62,15 +66,22 @@ public:
         return *this;
     }
 
+    template<Enum T>
+    Encoder& operator<<(T const& enum_value)
+    {
+        *this << AK::to_underlying(enum_value);
+        return *this;
+    }
+
     template<typename T>
-    Encoder& operator<<(const T& value)
+    Encoder& operator<<(T const& value)
     {
         encode(value);
         return *this;
     }
 
     template<typename T>
-    Encoder& operator<<(const Optional<T>& optional)
+    Encoder& operator<<(Optional<T> const& optional)
     {
         *this << optional.has_value();
         if (optional.has_value())
@@ -79,12 +90,15 @@ public:
     }
 
     template<typename T>
-    void encode(const T& value)
+    void encode(T const& value)
     {
         IPC::encode(*this, value);
     }
 
 private:
+    void encode_u32(u32);
+    void encode_u64(u64);
+
     MessageBuffer& m_buffer;
 };
 

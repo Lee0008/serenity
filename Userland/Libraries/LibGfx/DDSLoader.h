@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <LibGfx/Bitmap.h>
 #include <LibGfx/ImageDecoder.h>
 
 namespace Gfx {
@@ -232,9 +231,6 @@ struct DDSHeaderDXT10 {
     u32 misc_flag2 {};
 };
 
-RefPtr<Gfx::Bitmap> load_dds(String const& path);
-RefPtr<Gfx::Bitmap> load_dds_from_memory(const u8*, size_t);
-
 struct DDSLoadingContext;
 
 class DDSImageDecoderPlugin final : public ImageDecoderPlugin {
@@ -243,14 +239,13 @@ public:
     DDSImageDecoderPlugin(const u8*, size_t);
 
     virtual IntSize size() override;
-    virtual RefPtr<Gfx::Bitmap> bitmap() override;
     virtual void set_volatile() override;
-    [[nodiscard]] virtual bool set_nonvolatile() override;
+    [[nodiscard]] virtual bool set_nonvolatile(bool& was_purged) override;
     virtual bool sniff() override;
     virtual bool is_animated() override;
     virtual size_t loop_count() override;
     virtual size_t frame_count() override;
-    virtual ImageFrameDescriptor frame(size_t i) override;
+    virtual ErrorOr<ImageFrameDescriptor> frame(size_t index) override;
 
 private:
     OwnPtr<DDSLoadingContext> m_context;

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Julius Heijmen <julius.heijmen@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -72,10 +73,23 @@ void IconImpl::set_bitmap_for_size(int size, RefPtr<Gfx::Bitmap>&& bitmap)
     m_bitmaps.set(size, move(bitmap));
 }
 
-Icon Icon::default_icon(const StringView& name)
+Icon Icon::default_icon(StringView name)
 {
-    auto bitmap16 = Gfx::Bitmap::load_from_file(String::formatted("/res/icons/16x16/{}.png", name));
-    auto bitmap32 = Gfx::Bitmap::load_from_file(String::formatted("/res/icons/32x32/{}.png", name));
+    return MUST(try_create_default_icon(name));
+}
+
+ErrorOr<Icon> Icon::try_create_default_icon(StringView name)
+{
+    RefPtr<Gfx::Bitmap> bitmap16;
+    RefPtr<Gfx::Bitmap> bitmap32;
+    if (auto bitmap_or_error = Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/16x16/{}.png", name)); !bitmap_or_error.is_error())
+        bitmap16 = bitmap_or_error.release_value();
+    if (auto bitmap_or_error = Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/32x32/{}.png", name)); !bitmap_or_error.is_error())
+        bitmap32 = bitmap_or_error.release_value();
+
+    if (!bitmap16 && !bitmap32)
+        return Error::from_string_literal("Default icon not found"sv);
+
     return Icon(move(bitmap16), move(bitmap32));
 }
 

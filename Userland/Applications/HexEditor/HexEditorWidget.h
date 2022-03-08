@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,18 +22,18 @@ class HexEditor;
 class HexEditorWidget final : public GUI::Widget {
     C_OBJECT(HexEditorWidget)
 public:
-    virtual ~HexEditorWidget() override;
-    void open_file(const String& path);
-    void initialize_menubar(GUI::Menubar&);
+    virtual ~HexEditorWidget() override = default;
+    void open_file(NonnullRefPtr<Core::File>);
+    void initialize_menubar(GUI::Window&);
     bool request_close();
 
 private:
     HexEditorWidget();
-    void set_path(const LexicalPath& file);
+    void set_path(StringView);
     void update_title();
     void set_search_results_visible(bool visible);
 
-    RefPtr<Core::ConfigFile> m_config;
+    virtual void drop_event(GUI::DropEvent&) override;
 
     RefPtr<HexEditor> m_editor;
     String m_path;
@@ -60,6 +62,4 @@ private:
     RefPtr<GUI::ToolbarContainer> m_toolbar_container;
     RefPtr<GUI::TableView> m_search_results;
     RefPtr<GUI::Widget> m_search_results_container;
-
-    bool m_document_dirty { false };
 };

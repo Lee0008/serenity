@@ -7,9 +7,13 @@
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/Time.h>
+#include <Kernel/API/TimePage.h>
+#include <LibTimeZone/TimeZone.h>
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <sys/times.h>
@@ -38,12 +42,26 @@ int adjtime(const struct timeval* delta, struct timeval* old_delta)
 
 int gettimeofday(struct timeval* __restrict__ tv, void* __restrict__)
 {
-    int rc = syscall(SC_gettimeofday, tv);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
+    if (!tv) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    struct timespec ts = {};
+    if (clock_gettime(CLOCK_REALTIME_COARSE, &ts) < 0)
+        return -1;
+
+    TIMESPEC_TO_TIMEVAL(tv, &ts);
+    return 0;
 }
 
 int settimeofday(struct timeval* __restrict__ tv, void* __restrict__)
 {
+    if (!tv) {
+        errno = EFAULT;
+        return -1;
+    }
+
     timespec ts;
     TIMEVAL_TO_TIMESPEC(tv, &ts);
     return clock_settime(CLOCK_REALTIME, &ts);
@@ -127,11 +145,14 @@ static time_t tm_to_time(struct tm* tm, long timezone_adjust_seconds)
 
 time_t mktime(struct tm* tm)
 {
+    tzset();
     return tm_to_time(tm, timezone);
 }
 
 struct tm* localtime(const time_t* t)
 {
+    tzset();
+
     static struct tm tm_buf;
     return localtime_r(t, &tm_buf);
 }
@@ -140,7 +161,8 @@ struct tm* localtime_r(const time_t* t, struct tm* tm)
 {
     if (!t)
         return nullptr;
-    time_to_tm(tm, (*t) - timezone);
+
+    time_to_tm(tm, *t - timezone);
     return tm;
 }
 
@@ -181,9 +203,11 @@ char* asctime_r(const struct tm* tm, char* buffer)
     return buffer;
 }
 
-//FIXME: Some formats are not supported.
+// FIXME: Some formats are not supported.
 size_t strftime(char* destination, size_t max_size, const char* format, const struct tm* tm)
 {
+    tzset();
+
     const char wday_short_names[7][4] = {
         "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
     };
@@ -330,20 +354,49 @@ size_t strftime(char* destination, size_t max_size, const char* format, const st
     return fits ? str.length() : 0;
 }
 
-long timezone;
-long altzone;
-char* tzname[2];
-int daylight;
-
+static char __tzname_standard[TZNAME_MAX];
+static char __tzname_daylight[TZNAME_MAX];
 constexpr const char* __utc = "UTC";
+
+long timezone = 0;
+long altzone = 0;
+char* tzname[2] = { const_cast<char*>(__utc), const_cast<char*>(__utc) };
+int daylight = 0;
 
 void tzset()
 {
-    // FIXME: Here we pretend we are in UTC+0.
-    timezone = 0;
-    daylight = 0;
-    tzname[0] = const_cast<char*>(__utc);
-    tzname[1] = const_cast<char*>(__utc);
+    // FIXME: Actually parse the TZ environment variable, described here:
+    // https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap08.html#tag_08
+    StringView time_zone;
+
+    if (char* tz = getenv("TZ"); tz != nullptr)
+        time_zone = tz;
+    else
+        time_zone = TimeZone::system_time_zone();
+
+    auto set_default_values = []() {
+        timezone = 0;
+        altzone = 0;
+        daylight = 0;
+        tzname[0] = const_cast<char*>(__utc);
+        tzname[1] = const_cast<char*>(__utc);
+    };
+
+    if (auto offsets = TimeZone::get_named_time_zone_offsets(time_zone, AK::Time::now_realtime()); offsets.has_value()) {
+        if (!offsets->at(0).name.copy_characters_to_buffer(__tzname_standard, TZNAME_MAX))
+            return set_default_values();
+        if (!offsets->at(1).name.copy_characters_to_buffer(__tzname_daylight, TZNAME_MAX))
+            return set_default_values();
+
+        // timezone and altzone are seconds west of UTC, i.e. the offsets are negated.
+        timezone = -offsets->at(0).seconds;
+        altzone = -offsets->at(1).seconds;
+        daylight = timezone != altzone;
+        tzname[0] = __tzname_standard;
+        tzname[1] = __tzname_daylight;
+    } else {
+        set_default_values();
+    }
 }
 
 clock_t clock()
@@ -353,8 +406,39 @@ clock_t clock()
     return tms.tms_utime + tms.tms_stime;
 }
 
+static Kernel::TimePage* get_kernel_time_page()
+{
+    static Kernel::TimePage* s_kernel_time_page;
+    // FIXME: Thread safety
+    if (!s_kernel_time_page) {
+        auto rc = syscall(SC_map_time_page);
+        if ((int)rc < 0 && (int)rc > -EMAXERRNO) {
+            errno = -(int)rc;
+            return nullptr;
+        }
+        s_kernel_time_page = (Kernel::TimePage*)rc;
+    }
+    return s_kernel_time_page;
+}
+
 int clock_gettime(clockid_t clock_id, struct timespec* ts)
 {
+    if (Kernel::time_page_supports(clock_id)) {
+        if (!ts) {
+            errno = EFAULT;
+            return -1;
+        }
+
+        if (auto* kernel_time_page = get_kernel_time_page()) {
+            u32 update_iteration;
+            do {
+                update_iteration = AK::atomic_load(&kernel_time_page->update1, AK::memory_order_acquire);
+                *ts = kernel_time_page->clocks[clock_id];
+            } while (update_iteration != AK::atomic_load(&kernel_time_page->update2, AK::memory_order_acquire));
+            return 0;
+        }
+    }
+
     int rc = syscall(SC_clock_gettime, clock_id, ts);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }

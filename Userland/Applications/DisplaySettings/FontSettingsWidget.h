@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,17 +8,17 @@
 #pragma once
 
 #include <LibGUI/Label.h>
-#include <LibGUI/Widget.h>
+#include <LibGUI/SettingsWindow.h>
 
 namespace DisplaySettings {
 
-class FontSettingsWidget : public GUI::Widget {
+class FontSettingsWidget final : public GUI::SettingsWindow::Tab {
     C_OBJECT(FontSettingsWidget);
 
 public:
-    virtual ~FontSettingsWidget() override;
+    virtual ~FontSettingsWidget() override = default;
 
-    void apply_settings();
+    virtual void apply_settings() override;
 
 private:
     FontSettingsWidget();

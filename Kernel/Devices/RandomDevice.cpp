@@ -4,10 +4,20 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/RandomDevice.h>
 #include <Kernel/Random.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
+
+UNMAP_AFTER_INIT NonnullRefPtr<RandomDevice> RandomDevice::must_create()
+{
+    auto random_device_or_error = DeviceManagement::try_create_device<RandomDevice>();
+    // FIXME: Find a way to propagate errors
+    VERIFY(!random_device_or_error.is_error());
+    return random_device_or_error.release_value();
+}
 
 UNMAP_AFTER_INIT RandomDevice::RandomDevice()
     : CharacterDevice(1, 8)
@@ -18,20 +28,20 @@ UNMAP_AFTER_INIT RandomDevice::~RandomDevice()
 {
 }
 
-bool RandomDevice::can_read(const FileDescription&, size_t) const
+bool RandomDevice::can_read(const OpenFileDescription&, u64) const
 {
     return true;
 }
 
-KResultOr<size_t> RandomDevice::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
+ErrorOr<size_t> RandomDevice::read(OpenFileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
 {
-    return buffer.write_buffered<256>(size, [&](u8* data, size_t data_size) {
-        get_good_random_bytes(data, data_size);
-        return data_size;
+    return buffer.write_buffered<256>(size, [&](Bytes bytes) {
+        get_good_random_bytes(bytes);
+        return bytes.size();
     });
 }
 
-KResultOr<size_t> RandomDevice::write(FileDescription&, u64, const UserOrKernelBuffer&, size_t size)
+ErrorOr<size_t> RandomDevice::write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t size)
 {
     // FIXME: Use input for entropy? I guess that could be a neat feature?
     return size;

@@ -7,12 +7,13 @@
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <LibMarkdown/HorizontalRule.h>
+#include <LibMarkdown/Visitor.h>
 
 namespace Markdown {
 
-String HorizontalRule::render_to_html() const
+String HorizontalRule::render_to_html(bool) const
 {
-    return "<hr>\n";
+    return "<hr />\n";
 }
 
 String HorizontalRule::render_for_terminal(size_t view_width) const
@@ -24,12 +25,21 @@ String HorizontalRule::render_for_terminal(size_t view_width) const
     return builder.to_string();
 }
 
-OwnPtr<HorizontalRule> HorizontalRule::parse(Vector<StringView>::ConstIterator& lines)
+RecursionDecision HorizontalRule::walk(Visitor& visitor) const
+{
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+    // Normalize return value.
+    return RecursionDecision::Continue;
+}
+
+OwnPtr<HorizontalRule> HorizontalRule::parse(LineIterator& lines)
 {
     if (lines.is_end())
         return {};
 
-    const StringView& line = *lines;
+    StringView line = *lines;
 
     if (line.length() < 3)
         return {};

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, sin-ack <sin-ack@protonmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -7,70 +7,66 @@
 
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/Singleton.h>
-#include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <Kernel/API/InodeWatcherEvent.h>
 #include <Kernel/FileSystem/Custody.h>
 #include <Kernel/FileSystem/Inode.h>
 #include <Kernel/FileSystem/InodeWatcher.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/KBufferBuilder.h>
+#include <Kernel/Memory/SharedInodeVMObject.h>
 #include <Kernel/Net/LocalSocket.h>
-#include <Kernel/VM/SharedInodeVMObject.h>
+#include <Kernel/Process.h>
 
 namespace Kernel {
 
-static SpinLock s_all_inodes_lock;
-static AK::Singleton<Inode::List> s_list;
+static Singleton<SpinlockProtected<Inode::AllInstancesList>> s_all_instances;
 
-static Inode::List& all_with_lock()
+SpinlockProtected<Inode::AllInstancesList>& Inode::all_instances()
 {
-    VERIFY(s_all_inodes_lock.is_locked());
+    return s_all_instances;
+}
 
-    return *s_list;
+void Inode::sync_all()
+{
+    NonnullRefPtrVector<Inode, 32> inodes;
+    Inode::all_instances().with([&](auto& all_inodes) {
+        for (auto& inode : all_inodes) {
+            if (inode.is_metadata_dirty())
+                inodes.append(inode);
+        }
+    });
+
+    for (auto& inode : inodes) {
+        VERIFY(inode.is_metadata_dirty());
+        (void)inode.flush_metadata();
+    }
 }
 
 void Inode::sync()
 {
-    NonnullRefPtrVector<Inode, 32> inodes;
-    {
-        ScopedSpinLock all_inodes_lock(s_all_inodes_lock);
-        for (auto& inode : all_with_lock()) {
-            if (inode.is_metadata_dirty())
-                inodes.append(inode);
-        }
-    }
-
-    for (auto& inode : inodes) {
-        VERIFY(inode.is_metadata_dirty());
-        inode.flush_metadata();
-    }
+    if (is_metadata_dirty())
+        (void)flush_metadata();
+    fs().flush_writes();
 }
 
-KResultOr<NonnullOwnPtr<KBuffer>> Inode::read_entire(FileDescription* description) const
+ErrorOr<NonnullOwnPtr<KBuffer>> Inode::read_entire(OpenFileDescription* description) const
 {
-    KBufferBuilder builder;
+    auto builder = TRY(KBufferBuilder::try_create());
 
-    ssize_t nread;
     u8 buffer[4096];
     off_t offset = 0;
     for (;;) {
         auto buf = UserOrKernelBuffer::for_kernel_buffer(buffer);
-        auto result = read_bytes(offset, sizeof(buffer), buf, description);
-        if (result.is_error())
-            return result.error();
-        nread = result.value();
-        VERIFY(nread <= (ssize_t)sizeof(buffer));
-        if (nread <= 0)
+        auto nread = TRY(read_bytes(offset, sizeof(buffer), buf, description));
+        VERIFY(nread <= sizeof(buffer));
+        if (nread == 0)
             break;
-        builder.append((const char*)buffer, nread);
+        TRY(builder.append((const char*)buffer, nread));
         offset += nread;
-        if (nread < (ssize_t)sizeof(buffer))
+        if (nread < sizeof(buffer))
             break;
-    }
-    if (nread < 0) {
-        dmesgln("Inode::read_entire: Error: {}", nread);
-        return KResult((ErrnoCode)-nread);
     }
 
     auto entire_file = builder.build();
@@ -79,124 +75,123 @@ KResultOr<NonnullOwnPtr<KBuffer>> Inode::read_entire(FileDescription* descriptio
     return entire_file.release_nonnull();
 }
 
-KResultOr<NonnullRefPtr<Custody>> Inode::resolve_as_link(Custody& base, RefPtr<Custody>* out_parent, int options, int symlink_recursion_level) const
+ErrorOr<NonnullRefPtr<Custody>> Inode::resolve_as_link(Custody& base, RefPtr<Custody>* out_parent, int options, int symlink_recursion_level) const
 {
     // The default implementation simply treats the stored
     // contents as a path and resolves that. That is, it
     // behaves exactly how you would expect a symlink to work.
-    auto contents_or = read_entire();
-    if (contents_or.is_error())
-        return contents_or.error();
-
-    auto& contents = contents_or.value();
-    auto path = StringView(contents->data(), contents->size());
-    return VFS::the().resolve_path(path, base, out_parent, options, symlink_recursion_level);
+    auto contents = TRY(read_entire());
+    return VirtualFileSystem::the().resolve_path(StringView { contents->bytes() }, base, out_parent, options, symlink_recursion_level);
 }
 
-Inode::Inode(FS& fs, InodeIndex index)
-    : m_fs(fs)
+Inode::Inode(FileSystem& fs, InodeIndex index)
+    : m_file_system(fs)
     , m_index(index)
 {
-    ScopedSpinLock all_inodes_lock(s_all_inodes_lock);
-    all_with_lock().append(*this);
+    Inode::all_instances().with([&](auto& all_inodes) { all_inodes.append(*this); });
 }
 
 Inode::~Inode()
 {
-    ScopedSpinLock all_inodes_lock(s_all_inodes_lock);
-    all_with_lock().remove(*this);
-
-    for (auto& watcher : m_watchers) {
+    m_watchers.for_each([&](auto& watcher) {
         watcher->unregister_by_inode({}, identifier());
-    }
+    });
 }
 
 void Inode::will_be_destroyed()
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_inode_lock);
     if (m_metadata_dirty)
-        flush_metadata();
+        (void)flush_metadata();
 }
 
-KResult Inode::set_atime(time_t)
+ErrorOr<void> Inode::set_atime(time_t)
 {
     return ENOTIMPL;
 }
 
-KResult Inode::set_ctime(time_t)
+ErrorOr<void> Inode::set_ctime(time_t)
 {
     return ENOTIMPL;
 }
 
-KResult Inode::set_mtime(time_t)
+ErrorOr<void> Inode::set_mtime(time_t)
 {
     return ENOTIMPL;
 }
 
-KResult Inode::increment_link_count()
+ErrorOr<void> Inode::increment_link_count()
 {
     return ENOTIMPL;
 }
 
-KResult Inode::decrement_link_count()
+ErrorOr<void> Inode::decrement_link_count()
 {
     return ENOTIMPL;
 }
 
-void Inode::set_shared_vmobject(SharedInodeVMObject& vmobject)
+ErrorOr<void> Inode::set_shared_vmobject(Memory::SharedInodeVMObject& vmobject)
 {
-    Locker locker(m_lock);
-    m_shared_vmobject = vmobject;
+    MutexLocker locker(m_inode_lock);
+    m_shared_vmobject = TRY(vmobject.try_make_weak_ptr<Memory::SharedInodeVMObject>());
+    return {};
+}
+
+RefPtr<LocalSocket> Inode::bound_socket() const
+{
+    return m_bound_socket;
 }
 
 bool Inode::bind_socket(LocalSocket& socket)
 {
-    Locker locker(m_lock);
-    if (m_socket)
+    MutexLocker locker(m_inode_lock);
+    if (m_bound_socket)
         return false;
-    m_socket = socket;
+    m_bound_socket = socket;
     return true;
 }
 
 bool Inode::unbind_socket()
 {
-    Locker locker(m_lock);
-    if (!m_socket)
+    MutexLocker locker(m_inode_lock);
+    if (!m_bound_socket)
         return false;
-    m_socket = nullptr;
+    m_bound_socket = nullptr;
     return true;
 }
 
-void Inode::register_watcher(Badge<InodeWatcher>, InodeWatcher& watcher)
+ErrorOr<void> Inode::register_watcher(Badge<InodeWatcher>, InodeWatcher& watcher)
 {
-    Locker locker(m_lock);
-    VERIFY(!m_watchers.contains(&watcher));
-    m_watchers.set(&watcher);
+    return m_watchers.with([&](auto& watchers) -> ErrorOr<void> {
+        VERIFY(!watchers.contains(&watcher));
+        TRY(watchers.try_set(&watcher));
+        return {};
+    });
 }
 
 void Inode::unregister_watcher(Badge<InodeWatcher>, InodeWatcher& watcher)
 {
-    Locker locker(m_lock);
-    VERIFY(m_watchers.contains(&watcher));
-    m_watchers.remove(&watcher);
+    m_watchers.with([&](auto& watchers) {
+        VERIFY(watchers.contains(&watcher));
+        watchers.remove(&watcher);
+    });
 }
 
-NonnullRefPtr<FIFO> Inode::fifo()
+ErrorOr<NonnullRefPtr<FIFO>> Inode::fifo()
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_inode_lock);
     VERIFY(metadata().is_fifo());
 
     // FIXME: Release m_fifo when it is closed by all readers and writers
     if (!m_fifo)
-        m_fifo = FIFO::create(metadata().uid);
+        m_fifo = TRY(FIFO::try_create(metadata().uid));
 
-    VERIFY(m_fifo);
-    return *m_fifo;
+    return NonnullRefPtr { *m_fifo };
 }
 
 void Inode::set_metadata_dirty(bool metadata_dirty)
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_inode_lock);
 
     if (metadata_dirty) {
         // Sanity check.
@@ -210,56 +205,50 @@ void Inode::set_metadata_dirty(bool metadata_dirty)
     if (m_metadata_dirty) {
         // FIXME: Maybe we should hook into modification events somewhere else, I'm not sure where.
         //        We don't always end up on this particular code path, for instance when writing to an ext2fs file.
-        for (auto& watcher : m_watchers) {
+        m_watchers.for_each([&](auto& watcher) {
             watcher->notify_inode_event({}, identifier(), InodeWatcherEvent::Type::MetadataModified);
-        }
+        });
     }
 }
 
-void Inode::did_add_child(InodeIdentifier const&, String const& name)
+void Inode::did_add_child(InodeIdentifier, StringView name)
 {
-    Locker locker(m_lock);
-
-    for (auto& watcher : m_watchers) {
+    m_watchers.for_each([&](auto& watcher) {
         watcher->notify_inode_event({}, identifier(), InodeWatcherEvent::Type::ChildCreated, name);
-    }
+    });
 }
 
-void Inode::did_remove_child(InodeIdentifier const&, String const& name)
+void Inode::did_remove_child(InodeIdentifier, StringView name)
 {
-    Locker locker(m_lock);
-
     if (name == "." || name == "..") {
         // These are just aliases and are not interesting to userspace.
         return;
     }
 
-    for (auto& watcher : m_watchers) {
+    m_watchers.for_each([&](auto& watcher) {
         watcher->notify_inode_event({}, identifier(), InodeWatcherEvent::Type::ChildDeleted, name);
-    }
+    });
 }
 
 void Inode::did_modify_contents()
 {
-    Locker locker(m_lock);
-    for (auto& watcher : m_watchers) {
+    m_watchers.for_each([&](auto& watcher) {
         watcher->notify_inode_event({}, identifier(), InodeWatcherEvent::Type::ContentModified);
-    }
+    });
 }
 
 void Inode::did_delete_self()
 {
-    Locker locker(m_lock);
-    for (auto& watcher : m_watchers) {
+    m_watchers.for_each([&](auto& watcher) {
         watcher->notify_inode_event({}, identifier(), InodeWatcherEvent::Type::Deleted);
-    }
+    });
 }
 
-KResult Inode::prepare_to_write_data()
+ErrorOr<void> Inode::prepare_to_write_data()
 {
     // FIXME: It's a poor design that filesystems are expected to call this before writing out data.
-    //        We should funnel everything through an interface at the VFS layer so this can happen from a single place.
-    Locker locker(m_lock);
+    //        We should funnel everything through an interface at the VirtualFileSystem layer so this can happen from a single place.
+    MutexLocker locker(m_inode_lock);
     if (fs().is_readonly())
         return EROFS;
     auto metadata = this->metadata();
@@ -267,19 +256,122 @@ KResult Inode::prepare_to_write_data()
         dbgln("Inode::prepare_to_write_data(): Stripping SUID/SGID bits from {}", identifier());
         return chmod(metadata.mode & ~(04000 | 02000));
     }
-    return KSuccess;
+    return {};
 }
 
-RefPtr<SharedInodeVMObject> Inode::shared_vmobject() const
+RefPtr<Memory::SharedInodeVMObject> Inode::shared_vmobject() const
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_inode_lock);
     return m_shared_vmobject.strong_ref();
 }
 
-bool Inode::is_shared_vmobject(const SharedInodeVMObject& other) const
+template<typename T>
+static inline bool range_overlap(T start1, T len1, T start2, T len2)
 {
-    Locker locker(m_lock);
-    return m_shared_vmobject.unsafe_ptr() == &other;
+    return ((start1 < start2 + len2) || len2 == 0) && ((start2 < start1 + len1) || len1 == 0);
+}
+
+static inline ErrorOr<void> normalize_flock(OpenFileDescription const& description, flock& lock)
+{
+    off_t start;
+    switch (lock.l_whence) {
+    case SEEK_SET:
+        start = lock.l_start;
+        break;
+    case SEEK_CUR:
+        start = description.offset() + lock.l_start;
+        break;
+    case SEEK_END:
+        // FIXME: Implement SEEK_END and negative lengths.
+        return ENOTSUP;
+    default:
+        return EINVAL;
+    }
+    lock = { lock.l_type, SEEK_SET, start, lock.l_len, 0 };
+    return {};
+}
+
+ErrorOr<void> Inode::can_apply_flock(OpenFileDescription const& description, flock const& new_lock) const
+{
+    VERIFY(new_lock.l_whence == SEEK_SET);
+
+    return m_flocks.with([&](auto& flocks) -> ErrorOr<void> {
+        if (new_lock.l_type == F_UNLCK) {
+            for (auto const& lock : flocks) {
+                if (&description == lock.owner && lock.start == new_lock.l_start && lock.len == new_lock.l_len)
+                    return {};
+            }
+            return EINVAL;
+        }
+        for (auto const& lock : flocks) {
+            if (!range_overlap(lock.start, lock.len, new_lock.l_start, new_lock.l_len))
+                continue;
+
+            if (new_lock.l_type == F_RDLCK && lock.type == F_WRLCK)
+                return EAGAIN;
+
+            if (new_lock.l_type == F_WRLCK)
+                return EAGAIN;
+        }
+        return {};
+    });
+}
+
+ErrorOr<void> Inode::apply_flock(Process const& process, OpenFileDescription const& description, Userspace<flock const*> input_lock)
+{
+    auto new_lock = TRY(copy_typed_from_user(input_lock));
+    TRY(normalize_flock(description, new_lock));
+
+    return m_flocks.with([&](auto& flocks) -> ErrorOr<void> {
+        TRY(can_apply_flock(description, new_lock));
+
+        if (new_lock.l_type == F_UNLCK) {
+            for (size_t i = 0; i < flocks.size(); ++i) {
+                if (&description == flocks[i].owner && flocks[i].start == new_lock.l_start && flocks[i].len == new_lock.l_len) {
+                    flocks.remove(i);
+                    return {};
+                }
+            }
+            return EINVAL;
+        }
+
+        TRY(flocks.try_append(Flock { new_lock.l_start, new_lock.l_len, &description, process.pid().value(), new_lock.l_type }));
+        return {};
+    });
+}
+
+ErrorOr<void> Inode::get_flock(OpenFileDescription const& description, Userspace<flock*> reference_lock) const
+{
+    flock lookup = {};
+    TRY(copy_from_user(&lookup, reference_lock));
+    TRY(normalize_flock(description, lookup));
+
+    return m_flocks.with([&](auto& flocks) {
+        for (auto const& lock : flocks) {
+            if (!range_overlap(lock.start, lock.len, lookup.l_start, lookup.l_len))
+                continue;
+
+            if ((lookup.l_type == F_RDLCK && lock.type == F_WRLCK) || lookup.l_type == F_WRLCK) {
+                lookup = { lock.type, SEEK_SET, lock.start, lock.len, lock.pid };
+                return copy_to_user(reference_lock, &lookup);
+            }
+        }
+
+        lookup.l_type = F_UNLCK;
+        return copy_to_user(reference_lock, &lookup);
+    });
+}
+
+void Inode::remove_flocks_for_description(OpenFileDescription const& description)
+{
+    m_flocks.with([&](auto& flocks) {
+        flocks.remove_all_matching([&](auto& entry) { return entry.owner == &description; });
+    });
+}
+
+bool Inode::has_watchers() const
+{
+    return !m_watchers.with([&](auto& watchers) { return watchers.is_empty(); });
 }
 
 }

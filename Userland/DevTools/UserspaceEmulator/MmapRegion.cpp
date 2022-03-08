@@ -6,6 +6,7 @@
 
 #include "MmapRegion.h"
 #include "Emulator.h"
+#include <AK/ByteReader.h>
 #include <string.h>
 #include <sys/mman.h>
 
@@ -27,8 +28,8 @@ static void free_pages(void* ptr, size_t bytes)
 
 NonnullOwnPtr<MmapRegion> MmapRegion::create_anonymous(u32 base, u32 size, u32 prot, String name)
 {
-    auto data = (u8*)mmap_initialized(size, 0, nullptr);
-    auto shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
+    auto* data = (u8*)mmap_initialized(size, 0, String::formatted("(UE) {}", name).characters());
+    auto* shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
     auto region = adopt_own(*new MmapRegion(base, size, prot, data, shadow_data));
     region->m_name = move(name);
     return region;
@@ -36,11 +37,11 @@ NonnullOwnPtr<MmapRegion> MmapRegion::create_anonymous(u32 base, u32 size, u32 p
 
 NonnullOwnPtr<MmapRegion> MmapRegion::create_file_backed(u32 base, u32 size, u32 prot, int flags, int fd, off_t offset, String name)
 {
-    // Since we put the memory to an arbitrary location, do not pass MAP_FIXED to the Kernel.
-    auto real_flags = flags & ~MAP_FIXED;
-    auto data = (u8*)mmap_with_name(nullptr, size, prot, real_flags, fd, offset, name.is_empty() ? nullptr : name.characters());
+    // Since we put the memory to an arbitrary location, do not pass MAP_FIXED and MAP_FIXED_NOREPLACE to the Kernel.
+    auto real_flags = flags & ~(MAP_FIXED | MAP_FIXED_NOREPLACE);
+    auto* data = (u8*)mmap_with_name(nullptr, size, prot, real_flags, fd, offset, name.is_empty() ? nullptr : String::formatted("(UE) {}", name).characters());
     VERIFY(data != MAP_FAILED);
-    auto shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
+    auto* shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
     auto region = adopt_own(*new MmapRegion(base, size, prot, data, shadow_data));
     region->m_file_backed = true;
     region->m_name = move(name);
@@ -75,7 +76,7 @@ ValueWithShadow<u8> MmapRegion::read8(FlatPtr offset)
     }
 
     VERIFY(offset < size());
-    return { *reinterpret_cast<const u8*>(m_data + offset), *reinterpret_cast<const u8*>(m_shadow_data + offset) };
+    return { m_data[offset], m_shadow_data[offset] };
 }
 
 ValueWithShadow<u16> MmapRegion::read16(u32 offset)
@@ -92,7 +93,11 @@ ValueWithShadow<u16> MmapRegion::read16(u32 offset)
     }
 
     VERIFY(offset + 1 < size());
-    return { *reinterpret_cast<const u16*>(m_data + offset), *reinterpret_cast<const u16*>(m_shadow_data + offset) };
+    u16 value, shadow;
+    ByteReader::load(m_data + offset, value);
+    ByteReader::load(m_shadow_data + offset, shadow);
+
+    return { value, shadow };
 }
 
 ValueWithShadow<u32> MmapRegion::read32(u32 offset)
@@ -109,7 +114,11 @@ ValueWithShadow<u32> MmapRegion::read32(u32 offset)
     }
 
     VERIFY(offset + 3 < size());
-    return { *reinterpret_cast<const u32*>(m_data + offset), *reinterpret_cast<const u32*>(m_shadow_data + offset) };
+    u32 value, shadow;
+    ByteReader::load(m_data + offset, value);
+    ByteReader::load(m_shadow_data + offset, shadow);
+
+    return { value, shadow };
 }
 
 ValueWithShadow<u64> MmapRegion::read64(u32 offset)
@@ -126,7 +135,11 @@ ValueWithShadow<u64> MmapRegion::read64(u32 offset)
     }
 
     VERIFY(offset + 7 < size());
-    return { *reinterpret_cast<const u64*>(m_data + offset), *reinterpret_cast<const u64*>(m_shadow_data + offset) };
+    u64 value, shadow;
+    ByteReader::load(m_data + offset, value);
+    ByteReader::load(m_shadow_data + offset, shadow);
+
+    return { value, shadow };
 }
 
 ValueWithShadow<u128> MmapRegion::read128(u32 offset)
@@ -143,7 +156,10 @@ ValueWithShadow<u128> MmapRegion::read128(u32 offset)
     }
 
     VERIFY(offset + 15 < size());
-    return { *reinterpret_cast<const u128*>(m_data + offset), *reinterpret_cast<const u128*>(m_shadow_data + offset) };
+    u128 value, shadow;
+    ByteReader::load(m_data + offset, value);
+    ByteReader::load(m_shadow_data + offset, shadow);
+    return { value, shadow };
 }
 
 ValueWithShadow<u256> MmapRegion::read256(u32 offset)
@@ -160,7 +176,10 @@ ValueWithShadow<u256> MmapRegion::read256(u32 offset)
     }
 
     VERIFY(offset + 31 < size());
-    return { *reinterpret_cast<const u256*>(m_data + offset), *reinterpret_cast<const u256*>(m_shadow_data + offset) };
+    u256 value, shadow;
+    ByteReader::load(m_data + offset, value);
+    ByteReader::load(m_shadow_data + offset, shadow);
+    return { value, shadow };
 }
 
 void MmapRegion::write8(u32 offset, ValueWithShadow<u8> value)
@@ -177,8 +196,8 @@ void MmapRegion::write8(u32 offset, ValueWithShadow<u8> value)
     }
 
     VERIFY(offset < size());
-    *reinterpret_cast<u8*>(m_data + offset) = value.value();
-    *reinterpret_cast<u8*>(m_shadow_data + offset) = value.shadow();
+    m_data[offset] = value.value();
+    m_shadow_data[offset] = value.shadow()[0];
 }
 
 void MmapRegion::write16(u32 offset, ValueWithShadow<u16> value)
@@ -195,8 +214,8 @@ void MmapRegion::write16(u32 offset, ValueWithShadow<u16> value)
     }
 
     VERIFY(offset + 1 < size());
-    *reinterpret_cast<u16*>(m_data + offset) = value.value();
-    *reinterpret_cast<u16*>(m_shadow_data + offset) = value.shadow();
+    ByteReader::store(m_data + offset, value.value());
+    ByteReader::store(m_shadow_data + offset, value.shadow());
 }
 
 void MmapRegion::write32(u32 offset, ValueWithShadow<u32> value)
@@ -214,8 +233,8 @@ void MmapRegion::write32(u32 offset, ValueWithShadow<u32> value)
 
     VERIFY(offset + 3 < size());
     VERIFY(m_data != m_shadow_data);
-    *reinterpret_cast<u32*>(m_data + offset) = value.value();
-    *reinterpret_cast<u32*>(m_shadow_data + offset) = value.shadow();
+    ByteReader::store(m_data + offset, value.value());
+    ByteReader::store(m_shadow_data + offset, value.shadow());
 }
 
 void MmapRegion::write64(u32 offset, ValueWithShadow<u64> value)
@@ -233,8 +252,8 @@ void MmapRegion::write64(u32 offset, ValueWithShadow<u64> value)
 
     VERIFY(offset + 7 < size());
     VERIFY(m_data != m_shadow_data);
-    *reinterpret_cast<u64*>(m_data + offset) = value.value();
-    *reinterpret_cast<u64*>(m_shadow_data + offset) = value.shadow();
+    ByteReader::store(m_data + offset, value.value());
+    ByteReader::store(m_shadow_data + offset, value.shadow());
 }
 
 void MmapRegion::write128(u32 offset, ValueWithShadow<u128> value)
@@ -249,11 +268,10 @@ void MmapRegion::write128(u32 offset, ValueWithShadow<u128> value)
         if (auto* tracer = emulator().malloc_tracer())
             tracer->audit_write(*this, base() + offset, 16);
     }
-
     VERIFY(offset + 15 < size());
     VERIFY(m_data != m_shadow_data);
-    *reinterpret_cast<u128*>(m_data + offset) = value.value();
-    *reinterpret_cast<u128*>(m_shadow_data + offset) = value.shadow();
+    ByteReader::store(m_data + offset, value.value());
+    ByteReader::store(m_shadow_data + offset, value.shadow());
 }
 
 void MmapRegion::write256(u32 offset, ValueWithShadow<u256> value)
@@ -268,11 +286,10 @@ void MmapRegion::write256(u32 offset, ValueWithShadow<u256> value)
         if (auto* tracer = emulator().malloc_tracer())
             tracer->audit_write(*this, base() + offset, 32);
     }
-
     VERIFY(offset + 31 < size());
     VERIFY(m_data != m_shadow_data);
-    *reinterpret_cast<u256*>(m_data + offset) = value.value();
-    *reinterpret_cast<u256*>(m_shadow_data + offset) = value.shadow();
+    ByteReader::store(m_data + offset, value.value());
+    ByteReader::store(m_shadow_data + offset, value.shadow());
 }
 
 NonnullOwnPtr<MmapRegion> MmapRegion::split_at(VirtualAddress offset)
@@ -299,6 +316,12 @@ void MmapRegion::set_prot(int prot)
             exit(1);
         }
     }
+}
+
+void MmapRegion::set_name(String name)
+{
+    m_name = move(name);
+    set_mmap_name(range().base().as_ptr(), range().size(), String::formatted("(UE) {}", m_name).characters());
 }
 
 }

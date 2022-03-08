@@ -1,10 +1,13 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
+
+#include "KeypadValue.h"
 
 // This type implements the regular calculator
 // behavior, such as performing arithmetic
@@ -15,8 +18,8 @@
 
 class Calculator final {
 public:
-    Calculator();
-    ~Calculator();
+    Calculator() = default;
+    ~Calculator() = default;
 
     enum class Operation {
         None,
@@ -36,8 +39,8 @@ public:
         MemAdd
     };
 
-    double begin_operation(Operation, double);
-    double finish_operation(double);
+    KeypadValue begin_operation(Operation, KeypadValue);
+    KeypadValue finish_operation(KeypadValue);
 
     bool has_error() const { return m_has_error; }
 
@@ -45,8 +48,24 @@ public:
     void clear_error() { m_has_error = false; }
 
 private:
+    static bool should_be_rounded(KeypadValue);
+    static void round(KeypadValue&);
+
+    static constexpr auto rounding_threshold = []() consteval
+    {
+        using used_type = u64;
+
+        auto count = 1;
+        used_type res = 10;
+        while (!__builtin_mul_overflow(res, (used_type)10, &res)) {
+            count++;
+        }
+        return count;
+    }
+    ();
+
     Operation m_operation_in_progress { Operation::None };
-    double m_saved_argument { 0.0 };
-    double m_mem { 0.0 };
+    KeypadValue m_saved_argument { (i64)0 };
+    KeypadValue m_mem { (i64)0 };
     bool m_has_error { false };
 };

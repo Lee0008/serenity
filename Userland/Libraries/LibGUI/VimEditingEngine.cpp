@@ -415,6 +415,39 @@ Optional<TextRange> VimMotion::get_range(VimEditingEngine& engine, bool normaliz
     return { TextRange { { m_start_line, m_start_column }, { m_end_line, m_end_column } } };
 }
 
+Optional<TextRange> VimMotion::get_repeat_range(VimEditingEngine& engine, VimMotion::Unit unit, bool normalize_for_position)
+{
+    TextEditor& editor = engine.editor();
+
+    if (m_amount > 0) {
+        m_amount--;
+    } else if (m_amount < 0) {
+        m_amount++;
+    }
+    auto position = editor.cursor();
+    int amount = abs(m_amount);
+    bool forwards = m_amount >= 0;
+    VimCursor cursor { editor, position, forwards };
+
+    m_start_line = m_end_line = position.line();
+    m_start_column = m_end_column = position.column();
+
+    switch (unit) {
+    case Unit::Line: {
+        calculate_line_range(editor, normalize_for_position);
+        break;
+    }
+    case Unit::Character: {
+        calculate_character_range(cursor, amount, normalize_for_position);
+        break;
+    }
+    default:
+        return {};
+    }
+
+    return { TextRange { { m_start_line, m_start_column }, { m_end_line, m_end_column } } };
+}
+
 void VimMotion::calculate_document_range(TextEditor& editor)
 {
     if (m_amount >= 0) {
@@ -761,6 +794,22 @@ bool VimEditingEngine::on_key_in_insert_mode(const KeyEvent& event)
     if (EditingEngine::on_key(event))
         return true;
 
+    if (event.ctrl()) {
+        switch (event.key()) {
+        case KeyCode::Key_W:
+            m_editor->delete_previous_word();
+            return true;
+        case KeyCode::Key_H:
+            m_editor->delete_previous_char();
+            return true;
+        case KeyCode::Key_U:
+            m_editor->delete_from_line_start_to_cursor();
+            return true;
+        default:
+            break;
+        }
+    }
+
     if (event.key() == KeyCode::Key_Escape || (event.ctrl() && event.key() == KeyCode::Key_LeftBracket) || (event.ctrl() && event.key() == KeyCode::Key_C)) {
         if (m_editor->cursor().column() > 0)
             move_one_left();
@@ -782,8 +831,15 @@ bool VimEditingEngine::on_key_in_normal_mode(const KeyEvent& event)
 
     if (m_previous_key == KeyCode::Key_D) {
         if (event.key() == KeyCode::Key_D && !m_motion.should_consume_next_character()) {
-            yank(Line);
-            delete_line();
+            if (m_motion.amount()) {
+                auto range = m_motion.get_repeat_range(*this, VimMotion::Unit::Line);
+                VERIFY(range.has_value());
+                yank(*range, Line);
+                m_editor->delete_text_range(*range);
+            } else {
+                yank(Line);
+                delete_line();
+            }
             m_motion.reset();
             m_previous_key = {};
         } else {
@@ -804,7 +860,13 @@ bool VimEditingEngine::on_key_in_normal_mode(const KeyEvent& event)
         }
     } else if (m_previous_key == KeyCode::Key_Y) {
         if (event.key() == KeyCode::Key_Y && !m_motion.should_consume_next_character()) {
-            yank(Line);
+            if (m_motion.amount()) {
+                auto range = m_motion.get_repeat_range(*this, VimMotion::Unit::Line);
+                VERIFY(range.has_value());
+                yank(*range, Line);
+            } else {
+                yank(Line);
+            }
             m_motion.reset();
             m_previous_key = {};
         } else {
@@ -834,10 +896,10 @@ bool VimEditingEngine::on_key_in_normal_mode(const KeyEvent& event)
             delete_line();
             if (was_second_last_line || (m_editor->cursor().line() != 0 && m_editor->cursor().line() != m_editor->line_count() - 1)) {
                 move_one_up(event);
-                move_to_line_end();
+                move_to_logical_line_end();
                 m_editor->add_code_point(0x0A);
             } else if (m_editor->cursor().line() == 0) {
-                move_to_line_beginning();
+                move_to_logical_line_beginning();
                 m_editor->add_code_point(0x0A);
                 move_one_up(event);
             } else if (m_editor->cursor().line() == m_editor->line_count() - 1) {
@@ -896,26 +958,51 @@ bool VimEditingEngine::on_key_in_normal_mode(const KeyEvent& event)
         if (event.shift() && !event.ctrl() && !event.alt()) {
             switch (event.key()) {
             case (KeyCode::Key_A):
-                move_to_line_end();
+                move_to_logical_line_end();
                 switch_to_insert_mode();
                 return true;
             case (KeyCode::Key_I):
-                move_to_line_beginning();
+                move_to_logical_line_beginning();
                 switch_to_insert_mode();
                 return true;
             case (KeyCode::Key_O):
-                move_to_line_beginning();
+                move_to_logical_line_beginning();
                 m_editor->add_code_point(0x0A);
                 move_one_up(event);
                 switch_to_insert_mode();
                 return true;
-            // FIXME: Integrate these into vim motions too.
-            case (KeyCode::Key_LeftBrace):
-                move_to_previous_empty_lines_block();
+            case (KeyCode::Key_LeftBrace): {
+                auto amount = m_motion.amount() > 0 ? m_motion.amount() : 1;
+                m_motion.reset();
+                for (int i = 0; i < amount; i++)
+                    move_to_previous_empty_lines_block();
                 return true;
-            case (KeyCode::Key_RightBrace):
-                move_to_next_empty_lines_block();
+            }
+            case (KeyCode::Key_RightBrace): {
+                auto amount = m_motion.amount() > 0 ? m_motion.amount() : 1;
+                m_motion.reset();
+                for (int i = 0; i < amount; i++)
+                    move_to_next_empty_lines_block();
                 return true;
+            }
+            case (KeyCode::Key_J): {
+                // Looks a bit strange, but join without a repeat, with 1 as the repeat or 2 as the repeat all join the current and next lines
+                auto amount = (m_motion.amount() > 2) ? (m_motion.amount() - 1) : 1;
+                m_motion.reset();
+                for (int i = 0; i < amount; i++) {
+                    if (m_editor->cursor().line() + 1 >= m_editor->line_count())
+                        return true;
+                    move_to_logical_line_end();
+                    m_editor->add_code_point(' ');
+                    TextPosition next_line = { m_editor->cursor().line() + 1, 0 };
+                    m_editor->delete_text_range({ m_editor->cursor(), next_line });
+                    move_one_left();
+                }
+                return true;
+            }
+            case (KeyCode::Key_P):
+                put_before();
+                break;
             default:
                 break;
             }
@@ -958,17 +1045,25 @@ bool VimEditingEngine::on_key_in_normal_mode(const KeyEvent& event)
                 switch_to_insert_mode();
                 return true;
             case (KeyCode::Key_O):
-                move_to_line_end();
+                move_to_logical_line_end();
                 m_editor->add_code_point(0x0A);
                 switch_to_insert_mode();
                 return true;
             case (KeyCode::Key_U):
                 m_editor->undo();
                 return true;
-            case (KeyCode::Key_X):
-                yank({ m_editor->cursor(), { m_editor->cursor().line(), m_editor->cursor().column() + 1 } });
-                delete_char();
+            case (KeyCode::Key_X): {
+                TextRange range = { m_editor->cursor(), { m_editor->cursor().line(), m_editor->cursor().column() + 1 } };
+                if (m_motion.amount()) {
+                    auto opt = m_motion.get_repeat_range(*this, VimMotion::Unit::Character);
+                    VERIFY(opt.has_value());
+                    range = *opt;
+                    m_motion.reset();
+                }
+                yank(range, Selection);
+                m_editor->delete_text_range(range);
                 return true;
+            }
             case (KeyCode::Key_V):
                 switch_to_visual_mode();
                 return true;
@@ -976,7 +1071,7 @@ bool VimEditingEngine::on_key_in_normal_mode(const KeyEvent& event)
                 m_previous_key = event.key();
                 return true;
             case (KeyCode::Key_P):
-                put();
+                put_after();
                 return true;
             case (KeyCode::Key_PageUp):
                 move_page_up();
@@ -1043,11 +1138,11 @@ bool VimEditingEngine::on_key_in_visual_mode(const KeyEvent& event)
     if (event.shift() && !event.ctrl() && !event.alt()) {
         switch (event.key()) {
         case (KeyCode::Key_A):
-            move_to_line_end();
+            move_to_logical_line_end();
             switch_to_insert_mode();
             return true;
         case (KeyCode::Key_I):
-            move_to_line_beginning();
+            move_to_logical_line_beginning();
             switch_to_insert_mode();
             return true;
         default:
@@ -1154,7 +1249,7 @@ void VimEditingEngine::switch_to_visual_mode()
     m_editor->reset_cursor_blink();
     m_previous_key = {};
     m_selection_start_position = m_editor->cursor();
-    m_editor->selection()->set(m_editor->cursor(), { m_editor->cursor().line(), m_editor->cursor().column() + 1 });
+    m_editor->selection().set(m_editor->cursor(), { m_editor->cursor().line(), m_editor->cursor().column() + 1 });
     m_editor->did_update_selection();
     m_motion.reset();
 }
@@ -1172,7 +1267,7 @@ void VimEditingEngine::update_selection_on_cursor_move()
         end.set_column(end.column() + 1);
     }
 
-    m_editor->selection()->set(start, end);
+    m_editor->selection().set(start, end);
     m_editor->did_update_selection();
 }
 
@@ -1188,7 +1283,7 @@ void VimEditingEngine::clamp_cursor_position()
 void VimEditingEngine::clear_visual_mode_data()
 {
     if (m_editor->has_selection()) {
-        m_editor->selection()->clear();
+        m_editor->selection().clear();
         m_editor->did_update_selection();
         clamp_cursor_position();
     }
@@ -1221,26 +1316,57 @@ void VimEditingEngine::yank(YankType type)
         m_yank_buffer = m_yank_buffer.trim_whitespace(TrimMode::Left);
 }
 
-void VimEditingEngine::yank(TextRange range)
+void VimEditingEngine::yank(TextRange range, YankType yank_type)
 {
-    m_yank_type = YankType::Selection;
-    m_yank_buffer = m_editor->document().text_in_range(range);
+    m_yank_type = yank_type;
+    m_yank_buffer = m_editor->document().text_in_range(range).trim_whitespace(AK::TrimMode::Right);
 }
 
-void VimEditingEngine::put()
+void VimEditingEngine::put_before()
 {
+    auto amount = m_motion.amount() ? m_motion.amount() : 1;
+    m_motion.reset();
     if (m_yank_type == YankType::Line) {
-        move_to_line_end();
+        move_to_logical_line_beginning();
+        StringBuilder sb = StringBuilder(amount * (m_yank_buffer.length() + 1));
+        for (auto i = 0; i < amount; i++) {
+            sb.append(m_yank_buffer);
+            sb.append_code_point(0x0A);
+        }
+        m_editor->insert_at_cursor_or_replace_selection(sb.to_string());
+        m_editor->set_cursor({ m_editor->cursor().line(), m_editor->current_line().first_non_whitespace_column() });
+    } else {
+        StringBuilder sb = StringBuilder(m_yank_buffer.length() * amount);
+        for (auto i = 0; i < amount; i++) {
+            sb.append(m_yank_buffer);
+        }
+        m_editor->insert_at_cursor_or_replace_selection(sb.to_string());
+        move_one_left();
+    }
+}
+
+void VimEditingEngine::put_after()
+{
+    auto amount = m_motion.amount() ? m_motion.amount() : 1;
+    m_motion.reset();
+    if (m_yank_type == YankType::Line) {
+        move_to_logical_line_end();
         StringBuilder sb = StringBuilder(m_yank_buffer.length() + 1);
-        sb.append_code_point(0x0A);
-        sb.append(m_yank_buffer);
+        for (auto i = 0; i < amount; i++) {
+            sb.append_code_point(0x0A);
+            sb.append(m_yank_buffer);
+        }
         m_editor->insert_at_cursor_or_replace_selection(sb.to_string());
         m_editor->set_cursor({ m_editor->cursor().line(), m_editor->current_line().first_non_whitespace_column() });
     } else {
         // FIXME: If attempting to put on the last column a line,
-        // the buffer will bne placed on the next line due to the move_one_left/right behaviour.
+        // the buffer will bne placed on the next line due to the move_one_left/right behavior.
         move_one_right();
-        m_editor->insert_at_cursor_or_replace_selection(m_yank_buffer);
+        StringBuilder sb = StringBuilder(m_yank_buffer.length() * amount);
+        for (auto i = 0; i < amount; i++) {
+            sb.append(m_yank_buffer);
+        }
+        m_editor->insert_at_cursor_or_replace_selection(sb.to_string());
         move_one_left();
     }
 }

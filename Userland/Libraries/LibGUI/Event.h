@@ -52,9 +52,11 @@ public:
         DragMove,
         Drop,
         ThemeChange,
-        ScreenRectChange,
+        FontsChange,
+        ScreenRectsChange,
         ActionEnter,
         ActionLeave,
+        AppletAreaRectChange,
 
         __Begin_WM_Events,
         WM_WindowRemoved,
@@ -63,6 +65,10 @@ public:
         WM_WindowIconBitmapChanged,
         WM_AppletAreaSizeChanged,
         WM_SuperKeyPressed,
+        WM_SuperSpaceKeyPressed,
+        WM_SuperDigitKeyPressed,
+        WM_WorkspaceChanged,
+        WM_KeymapChanged,
         __End_WM_Events,
     };
 
@@ -102,6 +108,28 @@ public:
     }
 };
 
+class WMSuperSpaceKeyPressedEvent : public WMEvent {
+public:
+    explicit WMSuperSpaceKeyPressedEvent(int client_id)
+        : WMEvent(Event::Type::WM_SuperSpaceKeyPressed, client_id, 0)
+    {
+    }
+};
+
+class WMSuperDigitKeyPressedEvent : public WMEvent {
+public:
+    WMSuperDigitKeyPressedEvent(int client_id, u8 digit)
+        : WMEvent(Event::Type::WM_SuperDigitKeyPressed, client_id, 0)
+        , m_digit(digit)
+    {
+    }
+
+    u8 digit() const { return m_digit; }
+
+private:
+    u8 m_digit { 0 };
+};
+
 class WMAppletAreaSizeChangedEvent : public WMEvent {
 public:
     explicit WMAppletAreaSizeChangedEvent(const Gfx::IntSize& size)
@@ -126,13 +154,15 @@ public:
 
 class WMWindowStateChangedEvent : public WMEvent {
 public:
-    WMWindowStateChangedEvent(int client_id, int window_id, int parent_client_id, int parent_window_id, const StringView& title, const Gfx::IntRect& rect, bool is_active, bool is_modal, WindowType window_type, bool is_minimized, bool is_frameless, Optional<int> progress)
+    WMWindowStateChangedEvent(int client_id, int window_id, int parent_client_id, int parent_window_id, StringView title, const Gfx::IntRect& rect, unsigned workspace_row, unsigned workspace_column, bool is_active, bool is_modal, WindowType window_type, bool is_minimized, bool is_frameless, Optional<int> progress)
         : WMEvent(Event::Type::WM_WindowStateChanged, client_id, window_id)
         , m_parent_client_id(parent_client_id)
         , m_parent_window_id(parent_window_id)
         , m_title(title)
         , m_rect(rect)
         , m_window_type(window_type)
+        , m_workspace_row(workspace_row)
+        , m_workspace_column(workspace_column)
         , m_active(is_active)
         , m_modal(is_modal)
         , m_minimized(is_minimized)
@@ -151,6 +181,8 @@ public:
     bool is_minimized() const { return m_minimized; }
     bool is_frameless() const { return m_frameless; }
     Optional<int> progress() const { return m_progress; }
+    unsigned workspace_row() const { return m_workspace_row; }
+    unsigned workspace_column() const { return m_workspace_column; }
 
 private:
     int m_parent_client_id;
@@ -158,6 +190,8 @@ private:
     String m_title;
     Gfx::IntRect m_rect;
     WindowType m_window_type;
+    unsigned m_workspace_row;
+    unsigned m_workspace_column;
     bool m_active;
     bool m_modal;
     bool m_minimized;
@@ -193,11 +227,42 @@ private:
     RefPtr<Gfx::Bitmap> m_bitmap;
 };
 
+class WMWorkspaceChangedEvent : public WMEvent {
+public:
+    explicit WMWorkspaceChangedEvent(int client_id, unsigned current_row, unsigned current_column)
+        : WMEvent(Event::Type::WM_WorkspaceChanged, client_id, 0)
+        , m_current_row(current_row)
+        , m_current_column(current_column)
+    {
+    }
+
+    unsigned current_row() const { return m_current_row; }
+    unsigned current_column() const { return m_current_column; }
+
+private:
+    const unsigned m_current_row;
+    const unsigned m_current_column;
+};
+
+class WMKeymapChangedEvent : public WMEvent {
+public:
+    explicit WMKeymapChangedEvent(int client_id, String const& keymap)
+        : WMEvent(Event::Type::WM_KeymapChanged, client_id, 0)
+        , m_keymap(keymap)
+    {
+    }
+
+    String const& keymap() const { return m_keymap; }
+
+private:
+    const String m_keymap;
+};
+
 class MultiPaintEvent final : public Event {
 public:
-    explicit MultiPaintEvent(const Vector<Gfx::IntRect, 32>& rects, const Gfx::IntSize& window_size)
+    explicit MultiPaintEvent(Vector<Gfx::IntRect, 32> rects, Gfx::IntSize const& window_size)
         : Event(Event::MultiPaint)
-        , m_rects(rects)
+        , m_rects(move(rects))
         , m_window_size(window_size)
     {
     }
@@ -276,10 +341,10 @@ public:
 
 enum MouseButton : u8 {
     None = 0,
-    Left = 1,
-    Right = 2,
+    Primary = 1,
+    Secondary = 2,
     Middle = 4,
-    Back = 8,
+    Backward = 8,
     Forward = 16,
 };
 
@@ -297,6 +362,7 @@ public:
     KeyCode key() const { return m_key; }
     bool ctrl() const { return m_modifiers & Mod_Ctrl; }
     bool alt() const { return m_modifiers & Mod_Alt; }
+    bool altgr() const { return m_modifiers & Mod_AltGr; }
     bool shift() const { return m_modifiers & Mod_Shift; }
     bool super() const { return m_modifiers & Mod_Super; }
     u8 modifiers() const { return m_modifiers; }
@@ -311,8 +377,21 @@ public:
 
     String to_string() const;
 
+    bool is_arrow_key() const
+    {
+        switch (m_key) {
+        case KeyCode::Key_Up:
+        case KeyCode::Key_Down:
+        case KeyCode::Key_Left:
+        case KeyCode::Key_Right:
+            return true;
+        default:
+            return false;
+        }
+    }
+
 private:
-    friend class WindowServerConnection;
+    friend class ConnectionToWindowServer;
     KeyCode m_key { KeyCode::Key_Invalid };
     u8 m_modifiers { 0 };
     u32 m_code_point { 0 };
@@ -321,13 +400,14 @@ private:
 
 class MouseEvent final : public Event {
 public:
-    MouseEvent(Type type, const Gfx::IntPoint& position, unsigned buttons, MouseButton button, unsigned modifiers, int wheel_delta)
+    MouseEvent(Type type, const Gfx::IntPoint& position, unsigned buttons, MouseButton button, unsigned modifiers, int wheel_delta_x, int wheel_delta_y)
         : Event(type)
         , m_position(position)
         , m_buttons(buttons)
         , m_button(button)
         , m_modifiers(modifiers)
-        , m_wheel_delta(wheel_delta)
+        , m_wheel_delta_x(wheel_delta_x)
+        , m_wheel_delta_y(wheel_delta_y)
     {
     }
 
@@ -341,14 +421,16 @@ public:
     bool shift() const { return m_modifiers & Mod_Shift; }
     bool super() const { return m_modifiers & Mod_Super; }
     unsigned modifiers() const { return m_modifiers; }
-    int wheel_delta() const { return m_wheel_delta; }
+    int wheel_delta_x() const { return m_wheel_delta_x; }
+    int wheel_delta_y() const { return m_wheel_delta_y; }
 
 private:
     Gfx::IntPoint m_position;
     unsigned m_buttons { 0 };
     MouseButton m_button { MouseButton::None };
     unsigned m_modifiers { 0 };
-    int m_wheel_delta { 0 };
+    int m_wheel_delta_x { 0 };
+    int m_wheel_delta_y { 0 };
 };
 
 class DragEvent final : public Event {
@@ -392,18 +474,43 @@ public:
     }
 };
 
-class ScreenRectChangeEvent final : public Event {
+class FontsChangeEvent final : public Event {
 public:
-    explicit ScreenRectChangeEvent(const Gfx::IntRect& rect)
-        : Event(Type::ScreenRectChange)
+    FontsChangeEvent()
+        : Event(Type::FontsChange)
+    {
+    }
+};
+
+class ScreenRectsChangeEvent final : public Event {
+public:
+    explicit ScreenRectsChangeEvent(const Vector<Gfx::IntRect, 4>& rects, size_t main_screen_index)
+        : Event(Type::ScreenRectsChange)
+        , m_rects(rects)
+        , m_main_screen_index(main_screen_index)
+    {
+    }
+
+    const Vector<Gfx::IntRect, 4>& rects() const { return m_rects; }
+    size_t main_screen_index() const { return m_main_screen_index; }
+
+private:
+    Vector<Gfx::IntRect, 4> m_rects;
+    size_t m_main_screen_index;
+};
+
+class AppletAreaRectChangeEvent final : public Event {
+public:
+    explicit AppletAreaRectChangeEvent(Gfx::IntRect rect)
+        : Event(Type::AppletAreaRectChange)
         , m_rect(rect)
     {
     }
 
-    const Gfx::IntRect& rect() const { return m_rect; }
+    Gfx::IntRect rect() const { return m_rect; }
 
 private:
-    Gfx::IntRect m_rect;
+    Gfx::IntRect const m_rect;
 };
 
 class FocusEvent final : public Event {

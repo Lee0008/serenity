@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2019-2020, William McPherson <willmcpherson2@gmail.com>
+ * Copyright (c) 2021, JJ Roberts-White <computerfido@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,22 +22,30 @@ class TrackManager {
 
 public:
     TrackManager();
-    ~TrackManager();
+    ~TrackManager() = default;
 
     Track& current_track() { return *m_tracks[m_current_track]; }
     Span<const Sample> buffer() const { return m_current_front_buffer; }
     int octave() const { return m_octave; }
     int octave_base() const { return (m_octave - octave_min) * 12; }
+    int track_count() { return m_tracks.size(); };
+    void set_current_track(size_t track_index)
+    {
+        VERIFY((int)track_index < track_count());
+        m_current_track = track_index;
+    }
+
     int time() const { return m_time; }
+    void time_forward(int amount);
 
     void fill_buffer(Span<Sample>);
     void reset();
+    void set_keyboard_note(int note, Switch note_switch);
     void set_should_loop(bool b) { m_should_loop = b; }
-    void set_note_current_octave(int note, Switch);
     void set_octave(Direction);
     void set_octave(int octave);
     void add_track();
-    void next_track();
+    int next_track_index();
 
 private:
     Vector<NonnullOwnPtr<Track>> m_tracks;

@@ -9,7 +9,6 @@
 #include <LibGUI/Painter.h>
 #include <LibGUI/Slider.h>
 #include <LibGfx/Palette.h>
-#include <LibGfx/StylePainter.h>
 
 namespace GUI {
 
@@ -54,7 +53,7 @@ void AbstractSlider::set_range(int min, int max)
     update();
 }
 
-void AbstractSlider::set_value(int value)
+void AbstractSlider::set_value(int value, AllowCallback allow_callback)
 {
     value = clamp(value, m_min, m_max);
     if (m_value == value)
@@ -62,7 +61,7 @@ void AbstractSlider::set_value(int value)
     m_value = value;
     update();
 
-    if (on_change)
+    if (on_change && allow_callback == AllowCallback::Yes)
         on_change(m_value);
 }
 

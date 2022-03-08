@@ -20,6 +20,11 @@ void glDisable(GLenum cap)
     g_gl_context->gl_disable(cap);
 }
 
+GLboolean glIsEnabled(GLenum cap)
+{
+    return g_gl_context->gl_is_enabled(cap);
+}
+
 void glFrontFace(GLenum mode)
 {
     g_gl_context->gl_front_face(mode);
@@ -43,6 +48,16 @@ void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
 void glClearDepth(GLdouble depth)
 {
     g_gl_context->gl_clear_depth(depth);
+}
+
+void glClearDepthf(GLfloat depth)
+{
+    g_gl_context->gl_clear_depth(static_cast<double>(depth));
+}
+
+void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
+{
+    g_gl_context->gl_color_mask(red, green, blue, alpha);
 }
 
 GLubyte* glGetString(GLenum name)
@@ -80,12 +95,97 @@ void glReadBuffer(GLenum mode)
     g_gl_context->gl_read_buffer(mode);
 }
 
+void glDrawBuffer(GLenum buffer)
+{
+    g_gl_context->gl_draw_buffer(buffer);
+}
+
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid* pixels)
 {
     g_gl_context->gl_read_pixels(x, y, width, height, format, type, pixels);
 }
 
+void glGetBooleanv(GLenum pname, GLboolean* data)
+{
+    g_gl_context->gl_get_booleanv(pname, data);
+}
+
+void glGetDoublev(GLenum pname, GLdouble* params)
+{
+    g_gl_context->gl_get_doublev(pname, params);
+}
+
 void glGetFloatv(GLenum pname, GLfloat* params)
 {
     g_gl_context->gl_get_floatv(pname, params);
+}
+
+void glGetIntegerv(GLenum pname, GLint* data)
+{
+    g_gl_context->gl_get_integerv(pname, data);
+}
+
+void glDepthMask(GLboolean flag)
+{
+    g_gl_context->gl_depth_mask(flag);
+}
+
+void glEnableClientState(GLenum cap)
+{
+    g_gl_context->gl_enable_client_state(cap);
+}
+
+void glDisableClientState(GLenum cap)
+{
+    g_gl_context->gl_disable_client_state(cap);
+}
+
+void glClientActiveTextureARB(GLenum target)
+{
+    glClientActiveTexture(target);
+}
+
+void glClientActiveTexture(GLenum target)
+{
+    g_gl_context->gl_client_active_texture(target);
+}
+
+void glDepthRange(GLdouble min, GLdouble max)
+{
+    g_gl_context->gl_depth_range(min, max);
+}
+
+void glDepthFunc(GLenum func)
+{
+    g_gl_context->gl_depth_func(func);
+}
+
+void glPolygonMode(GLenum face, GLenum mode)
+{
+    g_gl_context->gl_polygon_mode(face, mode);
+}
+
+void glPolygonOffset(GLfloat factor, GLfloat units)
+{
+    g_gl_context->gl_polygon_offset(factor, units);
+}
+
+void glPixelStorei(GLenum pname, GLint param)
+{
+    g_gl_context->gl_pixel_storei(pname, param);
+}
+
+void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
+{
+    g_gl_context->gl_scissor(x, y, width, height);
+}
+
+void glPushAttrib(GLbitfield mask)
+{
+    g_gl_context->gl_push_attrib(mask);
+}
+
+void glPopAttrib()
+{
+    g_gl_context->gl_pop_attrib();
 }

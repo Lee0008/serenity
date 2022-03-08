@@ -4,31 +4,37 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/Process.h>
 #include <Kernel/Time/TimeManagement.h>
-#include <limits.h>
 
 namespace Kernel {
 
-KResultOr<long> Process::sys$sysconf(int name)
+ErrorOr<FlatPtr> Process::sys$sysconf(int name)
 {
+    VERIFY_NO_PROCESS_BIG_LOCK(this)
     switch (name) {
     case _SC_MONOTONIC_CLOCK:
         return 1;
     case _SC_NPROCESSORS_CONF:
     case _SC_NPROCESSORS_ONLN:
-        return Processor::processor_count();
+        return Processor::count();
     case _SC_OPEN_MAX:
-        return max_open_file_descriptors();
+        return OpenFileDescriptions::max_open();
     case _SC_PAGESIZE:
         return PAGE_SIZE;
+    case _SC_HOST_NAME_MAX:
+        return HOST_NAME_MAX;
     case _SC_TTY_NAME_MAX:
         return TTY_NAME_MAX;
     case _SC_GETPW_R_SIZE_MAX:
         return 4096; // idk
     case _SC_CLK_TCK:
         return TimeManagement::the().ticks_per_second();
+    case _SC_SYMLOOP_MAX:
+        return Kernel::VirtualFileSystem::symlink_recursion_limit;
+    case _SC_ARG_MAX:
+        return Process::max_arguments_size;
     default:
         return EINVAL;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,10 +20,6 @@ LevelSelectDialog::LevelSelectDialog(Window* parent_window)
     build();
 }
 
-LevelSelectDialog::~LevelSelectDialog()
-{
-}
-
 int LevelSelectDialog::show(int& board_number, Window* parent_window)
 {
     auto box = LevelSelectDialog::construct(parent_window);
@@ -41,7 +37,7 @@ void LevelSelectDialog::build()
     main_widget.set_fill_with_background_color(true);
 
     auto& layout = main_widget.set_layout<GUI::VerticalBoxLayout>();
-    layout.set_margins({ 4, 4, 4, 4 });
+    layout.set_margins(4);
 
     main_widget.add<GUI::Label>("Choose a level").set_text_alignment(Gfx::TextAlignment::Center);
 

@@ -11,10 +11,12 @@
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Rect.h>
+#include <WindowServer/MultiScaleBitmaps.h>
 
 namespace WindowServer {
 
 class MouseEvent;
+class Screen;
 class WindowFrame;
 
 class Button : public Weakable<Button> {
@@ -28,22 +30,22 @@ public:
     Gfx::IntRect rect() const { return { {}, m_relative_rect.size() }; }
     Gfx::IntRect screen_rect() const;
 
-    void paint(Gfx::Painter&);
+    void paint(Screen&, Gfx::Painter&);
 
     void on_mouse_event(const MouseEvent&);
 
     Function<void(Button&)> on_click;
-    Function<void(Button&)> on_right_click;
+    Function<void(Button&)> on_secondary_click;
     Function<void(Button&)> on_middle_click;
 
     bool is_visible() const { return m_visible; }
 
-    void set_icon(const Gfx::Bitmap& icon) { m_icon = icon; }
+    void set_icon(const RefPtr<MultiScaleBitmaps>& icon) { m_icon = icon; }
 
 private:
     WindowFrame& m_frame;
     Gfx::IntRect m_relative_rect;
-    RefPtr<Gfx::Bitmap> m_icon;
+    RefPtr<MultiScaleBitmaps> m_icon;
     bool m_pressed { false };
     bool m_visible { true };
     bool m_hovered { false };

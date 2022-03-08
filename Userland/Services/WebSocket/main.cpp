@@ -6,37 +6,26 @@
 
 #include <LibCore/EventLoop.h>
 #include <LibCore/LocalServer.h>
-#include <LibIPC/ClientConnection.h>
+#include <LibCore/System.h>
+#include <LibIPC/SingleServer.h>
+#include <LibMain/Main.h>
 #include <LibTLS/Certificate.h>
-#include <WebSocket/ClientConnection.h>
+#include <WebSocket/ConnectionFromClient.h>
 
-int main(int, char**)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    if (pledge("stdio inet unix rpath sendfd recvfd", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio inet unix rpath sendfd recvfd"));
 
     // Ensure the certificates are read out here.
     [[maybe_unused]] auto& certs = DefaultRootCACertificates::the();
 
     Core::EventLoop event_loop;
     // FIXME: Establish a connection to LookupServer and then drop "unix"?
-    if (pledge("stdio inet unix sendfd recvfd", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-    if (unveil("/tmp/portal/lookup", "rw") < 0) {
-        perror("unveil");
-        return 1;
-    }
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil("/tmp/portal/lookup", "rw"));
+    TRY(Core::System::unveil("/etc/timezone", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    auto socket = Core::LocalSocket::take_over_accepted_socket_from_system_server();
-    VERIFY(socket);
-    IPC::new_client_connection<WebSocket::ClientConnection>(socket.release_nonnull(), 1);
+    auto client = TRY(IPC::take_over_accepted_client_from_system_server<WebSocket::ConnectionFromClient>());
+
     return event_loop.exec();
 }

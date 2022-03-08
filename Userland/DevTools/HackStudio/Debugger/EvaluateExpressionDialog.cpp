@@ -48,7 +48,7 @@ void EvaluateExpressionDialog::build(Window* parent_window)
     widget.set_layout<GUI::VerticalBoxLayout>();
     widget.set_fill_with_background_color(true);
 
-    widget.layout()->set_margins({ 6, 6, 6, 6 });
+    widget.layout()->set_margins(6);
     widget.layout()->set_spacing(6);
 
     m_text_editor = widget.add<GUI::TextBox>();
@@ -59,11 +59,11 @@ void EvaluateExpressionDialog::build(Window* parent_window)
 
     auto base_document = Web::DOM::Document::create();
     base_document->append_child(adopt_ref(*new Web::DOM::DocumentType(base_document)));
-    auto html_element = base_document->create_element("html");
+    auto html_element = base_document->create_element("html").release_value();
     base_document->append_child(html_element);
-    auto head_element = base_document->create_element("head");
+    auto head_element = base_document->create_element("head").release_value();
     html_element->append_child(head_element);
-    auto body_element = base_document->create_element("body");
+    auto body_element = base_document->create_element("body").release_value();
     html_element->append_child(body_element);
     m_output_container = body_element;
 
@@ -77,7 +77,7 @@ void EvaluateExpressionDialog::build(Window* parent_window)
     auto& button_container_inner = button_container_outer.add<GUI::Widget>();
     button_container_inner.set_layout<GUI::HorizontalBoxLayout>();
     button_container_inner.layout()->set_spacing(6);
-    button_container_inner.layout()->set_margins({ 4, 4, 0, 4 });
+    button_container_inner.layout()->set_margins({ 4, 0, 4 });
     button_container_inner.layout()->add_spacer();
 
     m_evaluate_button = button_container_inner.add<GUI::Button>();
@@ -108,25 +108,23 @@ void EvaluateExpressionDialog::handle_evaluation(const String& expression)
     m_output_container->remove_all_children();
     m_output_view->update();
 
-    auto parser = JS::Parser(JS::Lexer(expression));
-    auto program = parser.parse_program();
+    auto script_or_error = JS::Script::parse(expression, m_interpreter->realm());
 
     StringBuilder output_html;
-    if (parser.has_errors()) {
-        auto error = parser.errors()[0];
+    auto result = JS::ThrowCompletionOr<JS::Value> { JS::js_undefined() };
+    if (script_or_error.is_error()) {
+        auto error = script_or_error.error()[0];
         auto hint = error.source_location_hint(expression);
         if (!hint.is_empty())
             output_html.append(String::formatted("<pre>{}</pre>", escape_html_entities(hint)));
-        m_interpreter->vm().throw_exception<JS::SyntaxError>(m_interpreter->global_object(), error.to_string());
+        result = m_interpreter->vm().throw_completion<JS::SyntaxError>(m_interpreter->global_object(), error.to_string());
     } else {
-        m_interpreter->run(m_interpreter->global_object(), *program);
+        result = m_interpreter->run(script_or_error.value());
     }
 
-    if (m_interpreter->exception()) {
-        auto* exception = m_interpreter->exception();
-        m_interpreter->vm().clear_exception();
+    if (result.is_error()) {
         output_html.append("Uncaught exception: ");
-        auto error = exception->value();
+        auto error = *result.throw_completion().value();
         if (error.is_object())
             output_html.append(JS::MarkupGenerator::html_from_error(error.as_object()));
         else
@@ -135,17 +133,15 @@ void EvaluateExpressionDialog::handle_evaluation(const String& expression)
         return;
     }
 
-    set_output(JS::MarkupGenerator::html_from_value(m_interpreter->vm().last_value()));
+    set_output(JS::MarkupGenerator::html_from_value(result.value()));
 }
 
-void EvaluateExpressionDialog::set_output(const StringView& html)
+void EvaluateExpressionDialog::set_output(StringView html)
 {
-    auto paragraph = m_output_container->document().create_element("p");
+    auto paragraph = m_output_container->document().create_element("p").release_value();
     paragraph->set_inner_html(html);
 
     m_output_container->append_child(paragraph);
-    m_output_container->document().invalidate_layout();
-    m_output_container->document().update_layout();
 }
 
 }

@@ -1,16 +1,18 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BuiltinWrappers.h>
 #include <AK/Format.h>
 #include <AK/PrintfImplementation.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
-#include <LibC/bits/pthread_integration.h>
+#include <LibC/bits/mutex_locker.h>
+#include <LibC/bits/stdio_file_implementation.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -25,117 +27,14 @@
 #include <syscall.h>
 #include <unistd.h>
 
-struct FILE {
-public:
-    FILE(int fd, int mode)
-        : m_fd(fd)
-        , m_mode(mode)
-    {
-        __pthread_mutex_init(&m_mutex, nullptr);
-    }
-    ~FILE();
+static constinit pthread_mutex_t s_open_streams_lock = __PTHREAD_MUTEX_INITIALIZER;
 
-    static FILE* create(int fd, int mode);
-
-    void setbuf(u8* data, int mode, size_t size) { m_buffer.setbuf(data, mode, size); }
-
-    bool flush();
-    void purge();
-    bool close();
-
-    int fileno() const { return m_fd; }
-    bool eof() const { return m_eof; }
-    int mode() const { return m_mode; }
-    u8 flags() const { return m_flags; }
-
-    int error() const { return m_error; }
-    void clear_err() { m_error = 0; }
-
-    size_t read(u8*, size_t);
-    size_t write(const u8*, size_t);
-
-    bool gets(u8*, size_t);
-    bool ungetc(u8 byte) { return m_buffer.enqueue_front(byte); }
-
-    int seek(off_t offset, int whence);
-    off_t tell();
-
-    pid_t popen_child() { return m_popen_child; }
-    void set_popen_child(pid_t child_pid) { m_popen_child = child_pid; }
-
-    void reopen(int fd, int mode);
-
-    enum Flags : u8 {
-        None = 0,
-        LastRead = 1,
-        LastWrite = 2,
-    };
-
-private:
-    struct Buffer {
-        // A ringbuffer that also transparently implements ungetc().
-    public:
-        ~Buffer();
-
-        int mode() const { return m_mode; }
-        void setbuf(u8* data, int mode, size_t size);
-        // Make sure to call realize() before enqueuing any data.
-        // Dequeuing can be attempted without it.
-        void realize(int fd);
-        void drop();
-
-        bool may_use() const { return m_ungotten || m_mode != _IONBF; }
-        bool is_not_empty() const { return m_ungotten || !m_empty; }
-        size_t buffered_size() const;
-
-        const u8* begin_dequeue(size_t& available_size) const;
-        void did_dequeue(size_t actual_size);
-
-        u8* begin_enqueue(size_t& available_size) const;
-        void did_enqueue(size_t actual_size);
-
-        bool enqueue_front(u8 byte);
-
-    private:
-        // Note: the fields here are arranged this way
-        // to make sizeof(Buffer) smaller.
-        u8* m_data { nullptr };
-        size_t m_capacity { BUFSIZ };
-        size_t m_begin { 0 };
-        size_t m_end { 0 };
-
-        int m_mode { -1 };
-        u8 m_unget_buffer { 0 };
-        bool m_ungotten : 1 { false };
-        bool m_data_is_malloced : 1 { false };
-        // When m_begin == m_end, we want to distinguish whether
-        // the buffer is full or empty.
-        bool m_empty : 1 { true };
-    };
-
-    // Read or write using the underlying fd, bypassing the buffer.
-    ssize_t do_read(u8*, size_t);
-    ssize_t do_write(const u8*, size_t);
-
-    // Read some data into the buffer.
-    bool read_into_buffer();
-    // Flush *some* data from the buffer.
-    bool write_from_buffer();
-
-    void lock();
-    void unlock();
-
-    int m_fd { -1 };
-    int m_mode { 0 };
-    u8 m_flags { Flags::None };
-    int m_error { 0 };
-    bool m_eof { false };
-    pid_t m_popen_child { -1 };
-    Buffer m_buffer;
-    __pthread_mutex_t m_mutex;
-
-    friend class ScopedFileLock;
-};
+// The list of open files is initialized in __stdio_init.
+// We cannot rely on global constructors to initialize it, because it must
+// be initialized before other global constructors run. Similarly, we cannot
+// allow global destructors to destruct it.
+alignas(FILE::List) static u8 s_open_streams_storage[sizeof(FILE::List)];
+static FILE::List* const s_open_streams = reinterpret_cast<FILE::List*>(s_open_streams_storage);
 
 FILE::~FILE()
 {
@@ -145,9 +44,13 @@ FILE::~FILE()
 
 FILE* FILE::create(int fd, int mode)
 {
-    void* file = calloc(1, sizeof(FILE));
-    new (file) FILE(fd, mode);
-    return (FILE*)file;
+    void* file_location = calloc(1, sizeof(FILE));
+    if (file_location == nullptr)
+        return nullptr;
+    auto* file = new (file_location) FILE(fd, mode);
+    LibC::MutexLocker locker(s_open_streams_lock);
+    s_open_streams->append(*file);
+    return file;
 }
 
 bool FILE::close()
@@ -174,8 +77,9 @@ bool FILE::flush()
     }
     if (m_mode & O_RDONLY) {
         // When open for reading, just drop the buffered data.
-        VERIFY(m_buffer.buffered_size() <= NumericLimits<off_t>::max());
-        off_t had_buffered = m_buffer.buffered_size();
+        if constexpr (sizeof(size_t) >= sizeof(off_t))
+            VERIFY(m_buffer.buffered_size() <= NumericLimits<off_t>::max());
+        off_t had_buffered = static_cast<off_t>(m_buffer.buffered_size());
         m_buffer.drop();
         // Attempt to reset the underlying file position to what the user
         // expects.
@@ -344,7 +248,8 @@ size_t FILE::write(const u8* data, size_t size)
     return total_written;
 }
 
-bool FILE::gets(u8* data, size_t size)
+template<typename T>
+bool FILE::gets(T* data, size_t size)
 {
     // gets() is a lot like read(), but it is different enough in how it
     // processes newlines and null-terminates the buffer that it deserves a
@@ -361,7 +266,8 @@ bool FILE::gets(u8* data, size_t size)
         if (m_buffer.may_use()) {
             // Let's see if the buffer has something queued for us.
             size_t queued_size;
-            const u8* queued_data = m_buffer.begin_dequeue(queued_size);
+            const T* queued_data = bit_cast<const T*>(m_buffer.begin_dequeue(queued_size));
+            queued_size /= sizeof(T);
             if (queued_size == 0) {
                 // Nothing buffered; we're going to have to read some.
                 bool read_some_more = read_into_buffer();
@@ -373,11 +279,17 @@ bool FILE::gets(u8* data, size_t size)
                 return total_read > 0;
             }
             size_t actual_size = min(size - 1, queued_size);
-            u8* newline = reinterpret_cast<u8*>(memchr(queued_data, '\n', actual_size));
-            if (newline)
-                actual_size = newline - queued_data + 1;
-            memcpy(data, queued_data, actual_size);
-            m_buffer.did_dequeue(actual_size);
+            T const* newline = nullptr;
+            for (size_t i = 0; i < actual_size; ++i) {
+                if (queued_data[i] != '\n')
+                    continue;
+
+                newline = &queued_data[i];
+                actual_size = i + 1;
+                break;
+            }
+            memcpy(data, queued_data, actual_size * sizeof(T));
+            m_buffer.did_dequeue(actual_size * sizeof(T));
             total_read += actual_size;
             data += actual_size;
             size -= actual_size;
@@ -385,18 +297,18 @@ bool FILE::gets(u8* data, size_t size)
                 break;
         } else {
             // Sadly, we have to actually read these characters one by one.
-            u8 byte;
-            ssize_t nread = do_read(&byte, 1);
+            T value;
+            ssize_t nread = do_read(bit_cast<u8*>(&value), sizeof(T));
             if (nread <= 0) {
                 *data = 0;
                 return total_read > 0;
             }
-            VERIFY(nread == 1);
-            *data = byte;
+            VERIFY(nread == sizeof(T));
+            *data = value;
             total_read++;
             data++;
             size--;
-            if (byte == '\n')
+            if (value == '\n')
                 break;
         }
     }
@@ -453,6 +365,11 @@ FILE::Buffer::~Buffer()
         free(m_data);
 }
 
+bool FILE::Buffer::may_use() const
+{
+    return m_ungotten != 0u || m_mode != _IONBF;
+}
+
 void FILE::Buffer::realize(int fd)
 {
     if (m_mode == -1)
@@ -483,7 +400,7 @@ void FILE::Buffer::drop()
     }
     m_begin = m_end = 0;
     m_empty = true;
-    m_ungotten = false;
+    m_ungotten = 0u;
 }
 
 size_t FILE::Buffer::buffered_size() const
@@ -501,9 +418,10 @@ size_t FILE::Buffer::buffered_size() const
 
 const u8* FILE::Buffer::begin_dequeue(size_t& available_size) const
 {
-    if (m_ungotten) {
-        available_size = 1;
-        return &m_unget_buffer;
+    if (m_ungotten != 0u) {
+        auto available_bytes = count_trailing_zeroes(m_ungotten) + 1;
+        available_size = available_bytes;
+        return &m_unget_buffer[unget_buffer_size - available_bytes];
     }
 
     if (m_empty) {
@@ -523,9 +441,10 @@ void FILE::Buffer::did_dequeue(size_t actual_size)
 {
     VERIFY(actual_size > 0);
 
-    if (m_ungotten) {
-        VERIFY(actual_size == 1);
-        m_ungotten = false;
+    if (m_ungotten != 0u) {
+        VERIFY(actual_size <= static_cast<size_t>(popcount(m_ungotten & ungotten_mask)));
+        auto available_bytes = count_trailing_zeroes(m_ungotten);
+        m_ungotten &= (0xffffffffu << (actual_size + available_bytes));
         return;
     }
 
@@ -575,13 +494,21 @@ void FILE::Buffer::did_enqueue(size_t actual_size)
 
 bool FILE::Buffer::enqueue_front(u8 byte)
 {
-    if (m_ungotten) {
-        // Sorry, the place is already taken!
-        return false;
+    size_t placement_index;
+    if (m_ungotten == 0u) {
+        placement_index = 3u;
+        m_ungotten = 1u;
+    } else {
+        auto first_zero_index = count_trailing_zeroes(bit_cast<u32>(~m_ungotten)); // Thanks C.
+        if (first_zero_index >= unget_buffer_size) {
+            // Sorry, the place is already taken!
+            return false;
+        }
+        placement_index = unget_buffer_size - first_zero_index - 1;
+        m_ungotten |= (1 << first_zero_index);
     }
 
-    m_ungotten = true;
-    m_unget_buffer = byte;
+    m_unget_buffer[placement_index] = byte;
     return true;
 }
 
@@ -595,39 +522,27 @@ void FILE::unlock()
     __pthread_mutex_unlock(&m_mutex);
 }
 
-class ScopedFileLock {
-public:
-    ScopedFileLock(FILE* file)
-        : m_file(file)
-    {
-        m_file->lock();
-    }
-
-    ~ScopedFileLock()
-    {
-        m_file->unlock();
-    }
-
-private:
-    FILE* m_file;
-};
-
 extern "C" {
 
-static u8 default_streams[3][sizeof(FILE)];
+alignas(FILE) static u8 default_streams[3][sizeof(FILE)];
 FILE* stdin = reinterpret_cast<FILE*>(&default_streams[0]);
 FILE* stdout = reinterpret_cast<FILE*>(&default_streams[1]);
 FILE* stderr = reinterpret_cast<FILE*>(&default_streams[2]);
 
 void __stdio_init()
 {
+    new (s_open_streams) FILE::List();
     new (stdin) FILE(0, O_RDONLY);
     new (stdout) FILE(1, O_WRONLY);
     new (stderr) FILE(2, O_WRONLY);
     stderr->setbuf(nullptr, _IONBF, 0);
+    s_open_streams->append(*stdin);
+    s_open_streams->append(*stdout);
+    s_open_streams->append(*stderr);
     __stdio_is_initialized = true;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/setvbuf.html
 int setvbuf(FILE* stream, char* buf, int mode, size_t size)
 {
     VERIFY(stream);
@@ -640,6 +555,7 @@ int setvbuf(FILE* stream, char* buf, int mode, size_t size)
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/setbuf.html
 void setbuf(FILE* stream, char* buf)
 {
     setvbuf(stream, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
@@ -650,6 +566,7 @@ void setlinebuf(FILE* stream)
     setvbuf(stream, nullptr, _IOLBF, 0);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fileno.html
 int fileno(FILE* stream)
 {
     VERIFY(stream);
@@ -657,6 +574,7 @@ int fileno(FILE* stream)
     return stream->fileno();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/feof.html
 int feof(FILE* stream)
 {
     VERIFY(stream);
@@ -664,16 +582,23 @@ int feof(FILE* stream)
     return stream->eof();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fflush.html
 int fflush(FILE* stream)
 {
     if (!stream) {
-        dbgln("FIXME: fflush(nullptr) should flush all open streams");
-        return 0;
+        int rc = 0;
+        LibC::MutexLocker locker(s_open_streams_lock);
+        for (auto& file : *s_open_streams) {
+            ScopedFileLock lock(&file);
+            rc = file.flush() ? rc : EOF;
+        }
+        return rc;
     }
     ScopedFileLock lock(stream);
     return stream->flush() ? 0 : EOF;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fgets.html
 char* fgets(char* buffer, int size, FILE* stream)
 {
     VERIFY(stream);
@@ -682,6 +607,7 @@ char* fgets(char* buffer, int size, FILE* stream)
     return ok ? buffer : nullptr;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fgetc.html
 int fgetc(FILE* stream)
 {
     VERIFY(stream);
@@ -702,6 +628,7 @@ int fgetc_unlocked(FILE* stream)
     return EOF;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/getc.html
 int getc(FILE* stream)
 {
     return fgetc(stream);
@@ -712,11 +639,13 @@ int getc_unlocked(FILE* stream)
     return fgetc_unlocked(stream);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/getchar.html
 int getchar()
 {
     return getc(stdin);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/getdelim.html
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream)
 {
     if (!lineptr || !n) {
@@ -763,11 +692,13 @@ ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream)
     }
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/getline.html
 ssize_t getline(char** lineptr, size_t* n, FILE* stream)
 {
     return getdelim(lineptr, n, '\n', stream);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/ungetc.html
 int ungetc(int c, FILE* stream)
 {
     VERIFY(stream);
@@ -776,6 +707,7 @@ int ungetc(int c, FILE* stream)
     return ok ? c : EOF;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fputc.html
 int fputc(int ch, FILE* stream)
 {
     VERIFY(stream);
@@ -788,16 +720,19 @@ int fputc(int ch, FILE* stream)
     return byte;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/putc.html
 int putc(int ch, FILE* stream)
 {
     return fputc(ch, stream);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/putchar.html
 int putchar(int ch)
 {
     return putc(ch, stdout);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fputs.html
 int fputs(const char* s, FILE* stream)
 {
     VERIFY(stream);
@@ -809,6 +744,7 @@ int fputs(const char* s, FILE* stream)
     return 1;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/puts.html
 int puts(const char* s)
 {
     int rc = fputs(s, stdout);
@@ -817,6 +753,7 @@ int puts(const char* s)
     return fputc('\n', stdout);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/clearerr.html
 void clearerr(FILE* stream)
 {
     VERIFY(stream);
@@ -824,6 +761,7 @@ void clearerr(FILE* stream)
     stream->clear_err();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/ferror.html
 int ferror(FILE* stream)
 {
     VERIFY(stream);
@@ -842,6 +780,7 @@ size_t fread_unlocked(void* ptr, size_t size, size_t nmemb, FILE* stream)
     return nread / size;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fread.html
 size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
     VERIFY(stream);
@@ -849,6 +788,7 @@ size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream)
     return fread_unlocked(ptr, size, nmemb, stream);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fwrite.html
 size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
     VERIFY(stream);
@@ -861,6 +801,7 @@ size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)
     return nwritten / size;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fseek.html
 int fseek(FILE* stream, long offset, int whence)
 {
     VERIFY(stream);
@@ -868,6 +809,7 @@ int fseek(FILE* stream, long offset, int whence)
     return stream->seek(offset, whence);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fseeko.html
 int fseeko(FILE* stream, off_t offset, int whence)
 {
     VERIFY(stream);
@@ -875,6 +817,7 @@ int fseeko(FILE* stream, off_t offset, int whence)
     return stream->seek(offset, whence);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/ftell.html
 long ftell(FILE* stream)
 {
     VERIFY(stream);
@@ -882,6 +825,7 @@ long ftell(FILE* stream)
     return stream->tell();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/ftello.html
 off_t ftello(FILE* stream)
 {
     VERIFY(stream);
@@ -889,6 +833,7 @@ off_t ftello(FILE* stream)
     return stream->tell();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fgetpos.html
 int fgetpos(FILE* stream, fpos_t* pos)
 {
     VERIFY(stream);
@@ -903,6 +848,7 @@ int fgetpos(FILE* stream, fpos_t* pos)
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fsetpos.html
 int fsetpos(FILE* stream, const fpos_t* pos)
 {
     VERIFY(stream);
@@ -912,6 +858,7 @@ int fsetpos(FILE* stream, const fpos_t* pos)
     return stream->seek(*pos, SEEK_SET);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/rewind.html
 void rewind(FILE* stream)
 {
     fseek(stream, 0, SEEK_SET);
@@ -923,18 +870,13 @@ ALWAYS_INLINE void stdout_putch(char*&, char ch)
     putchar(ch);
 }
 
-static FILE* __current_stream = nullptr;
-ALWAYS_INLINE static void stream_putch(char*&, char ch)
-{
-    fputc(ch, __current_stream);
-}
-
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vfprintf.html
 int vfprintf(FILE* stream, const char* fmt, va_list ap)
 {
-    __current_stream = stream;
-    return printf_internal(stream_putch, nullptr, fmt, ap);
+    return printf_internal([stream](auto, char ch) { fputc(ch, stream); }, nullptr, fmt, ap);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fprintf.html
 int fprintf(FILE* stream, const char* fmt, ...)
 {
     va_list ap;
@@ -944,11 +886,13 @@ int fprintf(FILE* stream, const char* fmt, ...)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vprintf.html
 int vprintf(const char* fmt, va_list ap)
 {
     return printf_internal(stdout_putch, nullptr, fmt, ap);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/printf.html
 int printf(const char* fmt, ...)
 {
     va_list ap;
@@ -958,6 +902,7 @@ int printf(const char* fmt, ...)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vasprintf.html
 int vasprintf(char** strp, const char* fmt, va_list ap)
 {
     StringBuilder builder;
@@ -968,6 +913,7 @@ int vasprintf(char** strp, const char* fmt, va_list ap)
     return length;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/asprintf.html
 int asprintf(char** strp, const char* fmt, ...)
 {
     StringBuilder builder;
@@ -986,6 +932,7 @@ static void buffer_putch(char*& bufptr, char ch)
     *bufptr++ = ch;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vsprintf.html
 int vsprintf(char* buffer, const char* fmt, va_list ap)
 {
     int ret = printf_internal(buffer_putch, buffer, fmt, ap);
@@ -993,6 +940,7 @@ int vsprintf(char* buffer, const char* fmt, va_list ap)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sprintf.html
 int sprintf(char* buffer, const char* fmt, ...)
 {
     va_list ap;
@@ -1002,24 +950,23 @@ int sprintf(char* buffer, const char* fmt, ...)
     return ret;
 }
 
-static size_t __vsnprintf_space_remaining;
-ALWAYS_INLINE void sized_buffer_putch(char*& bufptr, char ch)
-{
-    if (__vsnprintf_space_remaining) {
-        *bufptr++ = ch;
-        --__vsnprintf_space_remaining;
-    }
-}
-
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vsnprintf.html
 int vsnprintf(char* buffer, size_t size, const char* fmt, va_list ap)
 {
+    size_t space_remaining = 0;
     if (size) {
-        __vsnprintf_space_remaining = size - 1;
+        space_remaining = size - 1;
     } else {
-        __vsnprintf_space_remaining = 0;
+        space_remaining = 0;
     }
+    auto sized_buffer_putch = [&](char*& bufptr, char ch) {
+        if (space_remaining) {
+            *bufptr++ = ch;
+            --space_remaining;
+        }
+    };
     int ret = printf_internal(sized_buffer_putch, buffer, fmt, ap);
-    if (__vsnprintf_space_remaining) {
+    if (space_remaining) {
         buffer[ret] = '\0';
     } else if (size > 0) {
         buffer[size - 1] = '\0';
@@ -1027,6 +974,7 @@ int vsnprintf(char* buffer, size_t size, const char* fmt, va_list ap)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/snprintf.html
 int snprintf(char* buffer, size_t size, const char* fmt, ...)
 {
     va_list ap;
@@ -1036,6 +984,7 @@ int snprintf(char* buffer, size_t size, const char* fmt, ...)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/perror.html
 void perror(const char* s)
 {
     int saved_errno = errno;
@@ -1080,6 +1029,7 @@ static int parse_mode(const char* mode)
     return flags;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fopen.html
 FILE* fopen(const char* pathname, const char* mode)
 {
     int flags = parse_mode(mode);
@@ -1089,6 +1039,7 @@ FILE* fopen(const char* pathname, const char* mode)
     return FILE::create(fd, flags);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/freopen.html
 FILE* freopen(const char* pathname, const char* mode, FILE* stream)
 {
     VERIFY(stream);
@@ -1106,6 +1057,7 @@ FILE* freopen(const char* pathname, const char* mode, FILE* stream)
     return stream;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fdopen.html
 FILE* fdopen(int fd, const char* mode)
 {
     int flags = parse_mode(mode);
@@ -1115,11 +1067,19 @@ FILE* fdopen(int fd, const char* mode)
     return FILE::create(fd, flags);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fmemopen.html
+FILE* fmemopen(void*, size_t, const char*)
+{
+    // FIXME: Implement me :^)
+    TODO();
+}
+
 static inline bool is_default_stream(FILE* stream)
 {
     return stream == stdin || stream == stdout || stream == stderr;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fclose.html
 int fclose(FILE* stream)
 {
     VERIFY(stream);
@@ -1131,6 +1091,10 @@ int fclose(FILE* stream)
     }
     ScopedValueRollback errno_restorer(errno);
 
+    {
+        LibC::MutexLocker locker(s_open_streams_lock);
+        s_open_streams->remove(*stream);
+    }
     stream->~FILE();
     if (!is_default_stream(stream))
         free(stream);
@@ -1138,6 +1102,7 @@ int fclose(FILE* stream)
     return ok ? 0 : EOF;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/rename.html
 int rename(const char* oldpath, const char* newpath)
 {
     if (!oldpath || !newpath) {
@@ -1149,22 +1114,19 @@ int rename(const char* oldpath, const char* newpath)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-void dbgputch(char ch)
-{
-    syscall(SC_dbgputch, ch);
-}
-
 void dbgputstr(const char* characters, size_t length)
 {
     syscall(SC_dbgputstr, characters, length);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/tmpnam.html
 char* tmpnam(char*)
 {
     dbgln("FIXME: Implement tmpnam()");
     TODO();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/popen.html
 FILE* popen(const char* command, const char* type)
 {
     if (!type || (*type != 'r' && *type != 'w')) {
@@ -1174,8 +1136,7 @@ FILE* popen(const char* command, const char* type)
 
     int pipe_fds[2];
 
-    int rc = pipe(pipe_fds);
-    if (rc < 0) {
+    if (pipe(pipe_fds) < 0) {
         ScopedValueRollback rollback(errno);
         perror("pipe");
         return nullptr;
@@ -1190,16 +1151,14 @@ FILE* popen(const char* command, const char* type)
         return nullptr;
     } else if (child_pid == 0) {
         if (*type == 'r') {
-            int rc = dup2(pipe_fds[1], STDOUT_FILENO);
-            if (rc < 0) {
+            if (dup2(pipe_fds[1], STDOUT_FILENO) < 0) {
                 perror("dup2");
                 exit(1);
             }
             close(pipe_fds[0]);
             close(pipe_fds[1]);
         } else if (*type == 'w') {
-            int rc = dup2(pipe_fds[0], STDIN_FILENO);
-            if (rc < 0) {
+            if (dup2(pipe_fds[0], STDIN_FILENO) < 0) {
                 perror("dup2");
                 exit(1);
             }
@@ -1207,8 +1166,7 @@ FILE* popen(const char* command, const char* type)
             close(pipe_fds[1]);
         }
 
-        int rc = execl("/bin/sh", "sh", "-c", command, nullptr);
-        if (rc < 0)
+        if (execl("/bin/sh", "sh", "-c", command, nullptr) < 0)
             perror("execl");
         exit(1);
     }
@@ -1226,27 +1184,31 @@ FILE* popen(const char* command, const char* type)
     return file;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/pclose.html
 int pclose(FILE* stream)
 {
     VERIFY(stream);
     VERIFY(stream->popen_child() != 0);
 
     int wstatus = 0;
-    int rc = waitpid(stream->popen_child(), &wstatus, 0);
-    if (rc < 0)
-        return rc;
+    if (waitpid(stream->popen_child(), &wstatus, 0) < 0)
+        return -1;
 
     return wstatus;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/remove.html
 int remove(const char* pathname)
 {
-    int rc = unlink(pathname);
-    if (rc < 0 && errno == EISDIR)
-        return rmdir(pathname);
-    return rc;
+    if (unlink(pathname) < 0) {
+        if (errno == EISDIR)
+            return rmdir(pathname);
+        return -1;
+    }
+    return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/scanf.html
 int scanf(const char* fmt, ...)
 {
     va_list ap;
@@ -1256,6 +1218,7 @@ int scanf(const char* fmt, ...)
     return count;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/fscanf.html
 int fscanf(FILE* stream, const char* fmt, ...)
 {
     va_list ap;
@@ -1265,6 +1228,7 @@ int fscanf(FILE* stream, const char* fmt, ...)
     return count;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sscanf.html
 int sscanf(const char* buffer, const char* fmt, ...)
 {
     va_list ap;
@@ -1274,6 +1238,7 @@ int sscanf(const char* buffer, const char* fmt, ...)
     return count;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vfscanf.html
 int vfscanf(FILE* stream, const char* fmt, va_list ap)
 {
     char buffer[BUFSIZ];
@@ -1282,21 +1247,27 @@ int vfscanf(FILE* stream, const char* fmt, va_list ap)
     return vsscanf(buffer, fmt, ap);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/vscanf.html
 int vscanf(const char* fmt, va_list ap)
 {
     return vfscanf(stdin, fmt, ap);
 }
 
-void flockfile([[maybe_unused]] FILE* filehandle)
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/flockfile.html
+void flockfile(FILE* filehandle)
 {
-    dbgln("FIXME: Implement flockfile()");
+    VERIFY(filehandle);
+    filehandle->lock();
 }
 
-void funlockfile([[maybe_unused]] FILE* filehandle)
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/funlockfile.html
+void funlockfile(FILE* filehandle)
 {
-    dbgln("FIXME: Implement funlockfile()");
+    VERIFY(filehandle);
+    filehandle->unlock();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/tmpfile.html
 FILE* tmpfile()
 {
     char tmp_path[] = "/tmp/XXXXXX";
@@ -1336,3 +1307,6 @@ void __fpurge(FILE* stream)
     stream->purge();
 }
 }
+
+template bool FILE::gets<u8>(u8*, size_t);
+template bool FILE::gets<u32>(u32*, size_t);

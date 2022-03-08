@@ -9,65 +9,70 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$pledge(Userspace<const Syscall::SC_pledge_params*> user_params)
+ErrorOr<FlatPtr> Process::sys$pledge(Userspace<const Syscall::SC_pledge_params*> user_params)
 {
-    Syscall::SC_pledge_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto params = TRY(copy_typed_from_user(user_params));
 
     if (params.promises.length > 1024 || params.execpromises.length > 1024)
         return E2BIG;
 
-    String promises;
+    OwnPtr<KString> promises;
     if (params.promises.characters) {
-        promises = copy_string_from_user(params.promises);
-        if (promises.is_null())
-            return EFAULT;
+        promises = TRY(try_copy_kstring_from_user(params.promises));
     }
 
-    String execpromises;
+    OwnPtr<KString> execpromises;
     if (params.execpromises.characters) {
-        execpromises = copy_string_from_user(params.execpromises);
-        if (execpromises.is_null())
-            return EFAULT;
+        execpromises = TRY(try_copy_kstring_from_user(params.execpromises));
     }
 
-    auto parse_pledge = [&](auto& pledge_spec, u32& mask) {
-        auto parts = pledge_spec.split_view(' ');
-        for (auto& part : parts) {
+    auto parse_pledge = [&](auto pledge_spec, u32& mask) {
+        auto found_invalid_pledge = true;
+        pledge_spec.for_each_split_view(' ', false, [&mask, &found_invalid_pledge](auto const& part) {
 #define __ENUMERATE_PLEDGE_PROMISE(x)   \
-    if (part == #x) {                   \
+    if (part == StringView { #x }) {    \
         mask |= (1u << (u32)Pledge::x); \
-        continue;                       \
+        return;                         \
     }
             ENUMERATE_PLEDGE_PROMISES
 #undef __ENUMERATE_PLEDGE_PROMISE
-            return false;
-        }
-        return true;
+            found_invalid_pledge = false;
+        });
+        return found_invalid_pledge;
     };
+
+    u32 new_promises = 0;
+    if (promises) {
+        if (!parse_pledge(promises->view(), new_promises))
+            return EINVAL;
+        if (m_protected_values.has_promises && (new_promises & ~m_protected_values.promises))
+            return EPERM;
+    }
+
+    u32 new_execpromises = 0;
+    if (execpromises) {
+        if (!parse_pledge(execpromises->view(), new_execpromises))
+            return EINVAL;
+        if (m_protected_values.has_execpromises && (new_execpromises & ~m_protected_values.execpromises))
+            return EPERM;
+    }
+
+    // Only apply promises after all validation has occurred, this ensures
+    // we don't introduce logic bugs like applying the promises, and then
+    // erroring out when parsing the exec promises later. Such bugs silently
+    // leave the caller in an unexpected state.
 
     ProtectedDataMutationScope scope { *this };
 
-    if (!promises.is_null()) {
-        u32 new_promises = 0;
-        if (!parse_pledge(promises, new_promises))
-            return EINVAL;
-        if (m_promises && (!new_promises || new_promises & ~m_promises))
-            return EPERM;
-
-        m_has_promises = true;
-        m_promises = new_promises;
+    if (promises) {
+        m_protected_values.has_promises = true;
+        m_protected_values.promises = new_promises;
     }
 
-    if (!execpromises.is_null()) {
-        u32 new_execpromises = 0;
-        if (!parse_pledge(execpromises, new_execpromises))
-            return EINVAL;
-        if (m_execpromises && (!new_execpromises || new_execpromises & ~m_execpromises))
-            return EPERM;
-        m_has_execpromises = true;
-        m_execpromises = new_execpromises;
+    if (execpromises) {
+        m_protected_values.has_execpromises = true;
+        m_protected_values.execpromises = new_execpromises;
     }
 
     return 0;

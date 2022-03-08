@@ -22,7 +22,7 @@ constexpr u32 ctrl(char c) { return c & 0x3f; }
 
 namespace Line {
 
-Function<bool(Editor&)> Editor::find_internal_function(const StringView& name)
+Function<bool(Editor&)> Editor::find_internal_function(StringView name)
 {
 #define __ENUMERATE(internal_name) \
     if (name == #internal_name)    \
@@ -170,6 +170,7 @@ void Editor::kill_line()
     for (size_t i = 0; i < m_cursor; ++i)
         remove_at_index(0);
     m_cursor = 0;
+    m_inline_search_cursor = m_cursor;
     m_refresh_needed = true;
 }
 
@@ -265,7 +266,7 @@ void Editor::enter_search()
             search_editor.finish();
             m_reset_buffer_on_search_end = true;
             search_editor.end_search();
-            search_editor.deferred_invoke([&search_editor](auto&) { search_editor.really_quit_event_loop(); });
+            search_editor.deferred_invoke([&search_editor] { search_editor.really_quit_event_loop(); });
             return false;
         });
 
@@ -342,12 +343,13 @@ void Editor::enter_search()
         auto& search_string = search_string_result.value();
 
         // Manually cleanup the search line.
-        reposition_cursor();
+        OutputFileStream stderr_stream { stderr };
+        reposition_cursor(stderr_stream);
         auto search_metrics = actual_rendered_string_metrics(search_string);
         auto metrics = actual_rendered_string_metrics(search_prompt);
-        VT::clear_lines(0, metrics.lines_with_addition(search_metrics, m_num_columns) + search_end_row - m_origin_row - 1);
+        VT::clear_lines(0, metrics.lines_with_addition(search_metrics, m_num_columns) + search_end_row - m_origin_row - 1, stderr_stream);
 
-        reposition_cursor();
+        reposition_cursor(stderr_stream);
 
         m_refresh_needed = true;
         m_cached_prompt_valid = false;
@@ -432,8 +434,9 @@ void Editor::go_end()
 
 void Editor::clear_screen()
 {
-    fprintf(stderr, "\033[3J\033[H\033[2J"); // Clear screen.
-    VT::move_absolute(1, 1);
+    warn("\033[3J\033[H\033[2J");
+    OutputFileStream stream { stderr };
+    VT::move_absolute(1, 1, stream);
     set_origin(1, 1);
     m_refresh_needed = true;
     m_cached_prompt_valid = false;
@@ -551,10 +554,10 @@ void Editor::edit_in_external_editor()
     };
 
     Vector<const char*> args { editor_command, file_path, nullptr };
-    auto pid = vfork();
+    auto pid = fork();
 
     if (pid == -1) {
-        perror("vfork");
+        perror("fork");
         return;
     }
 

@@ -10,6 +10,8 @@
 #include <AK/Endian.h>
 #include <AK/Random.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <arpa/inet.h>
 #include <inttypes.h>
 #include <math.h>
@@ -46,7 +48,7 @@ struct [[gnu::packed]] NtpPacket {
     uint8_t version_number() const { return (li_vn_mode >> 3) & 7; }
     uint8_t mode() const { return li_vn_mode & 7; }
 };
-static_assert(sizeof(NtpPacket) == 48);
+static_assert(AssertSize<NtpPacket, 48>());
 
 // NTP measures time in seconds since 1900-01-01, POSIX in seconds since 1970-01-01.
 // 1900 wasn't a leap year, so there are 70/4 leap years between 1900 and 1970.
@@ -88,14 +90,14 @@ static String format_ntp_timestamp(NtpTimestamp ntp_timestamp)
     buffer[written] = '\0';
     return buffer;
 }
-
+#ifdef __serenity__
+ErrorOr<int> serenity_main(Main::Arguments arguments)
+#else
 int main(int argc, char** argv)
+#endif
 {
 #ifdef __serenity__
-    if (pledge("stdio inet unix settime", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio inet unix settime"));
 #endif
 
     bool adjust_time = false;
@@ -117,7 +119,11 @@ int main(int argc, char** argv)
     args_parser.add_option(set_time, "Immediately set system time (requires root)", "set", 's');
     args_parser.add_option(verbose, "Verbose output", "verbose", 'v');
     args_parser.add_positional_argument(host, "NTP server", "host", Core::ArgsParser::Required::No);
+#ifdef __serenity__
+    args_parser.parse(arguments);
+#else
     args_parser.parse(argc, argv);
+#endif
 
     if (adjust_time && set_time) {
         warnln("-a and -s are mutually exclusive");
@@ -126,10 +132,7 @@ int main(int argc, char** argv)
 
 #ifdef __serenity__
     if (!adjust_time && !set_time) {
-        if (pledge("stdio inet unix", nullptr) < 0) {
-            perror("pledge");
-            return 1;
-        }
+        TRY(Core::System::pledge("stdio inet unix"));
     }
 #endif
 
@@ -140,11 +143,8 @@ int main(int argc, char** argv)
     }
 
 #ifdef __serenity__
-    if (pledge((adjust_time || set_time) ? "stdio inet settime" : "stdio inet", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-    unveil(nullptr, nullptr);
+    TRY(Core::System::pledge((adjust_time || set_time) ? "stdio inet settime" : "stdio inet"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 #endif
 
     int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -292,7 +292,7 @@ int main(int argc, char** argv)
     NtpTimestamp T3 = transmit_timestamp;
     NtpTimestamp T4 = destination_timestamp;
     auto timestamp_difference_in_seconds = [](NtpTimestamp from, NtpTimestamp to) {
-        return static_cast<int64_t>(to - from) / pow(2.0, 32);
+        return static_cast<i64>(to - from) >> 32;
     };
 
     // The network round-trip time of the request.
@@ -322,4 +322,6 @@ int main(int argc, char** argv)
             return 1;
         }
     }
+
+    return 0;
 }

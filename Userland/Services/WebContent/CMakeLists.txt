@@ -1,8 +1,14 @@
+serenity_component(
+    WebContent
+    TARGETS WebContent
+)
+
 compile_ipc(WebContentServer.ipc WebContentServerEndpoint.h)
 compile_ipc(WebContentClient.ipc WebContentClientEndpoint.h)
 
 set(SOURCES
-    ClientConnection.cpp
+    ConnectionFromClient.cpp
+    ConsoleGlobalObject.cpp
     main.cpp
     PageHost.cpp
     WebContentConsoleClient.cpp
@@ -11,4 +17,5 @@ set(SOURCES
 )
 
 serenity_bin(WebContent)
-target_link_libraries(WebContent LibCore LibIPC LibGfx LibWeb)
+target_link_libraries(WebContent LibCore LibIPC LibGfx LibWeb LibMain)
+link_with_unicode_data(WebContent)

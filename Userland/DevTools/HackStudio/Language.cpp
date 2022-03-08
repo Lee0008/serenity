@@ -5,22 +5,34 @@
  */
 
 #include "Language.h"
+#include <AK/LexicalPath.h>
 
 namespace HackStudio {
 
-Language language_from_file_extension(const String& extension)
+Language language_from_file(const LexicalPath& file)
 {
+    if (file.title() == "COMMIT_EDITMSG")
+        return Language::GitCommit;
+
+    auto extension = file.extension();
     VERIFY(!extension.starts_with("."));
-    if (extension == "cpp" || extension == "h")
+    if (extension == "c" || extension == "cc" || extension == "cxx" || extension == "cpp" || extension == "c++"
+        || extension == "h" || extension == "hh" || extension == "hxx" || extension == "hpp" || extension == "h++")
         return Language::Cpp;
-    else if (extension == "js")
+    if (extension == "js" || extension == "mjs" || extension == "json")
         return Language::JavaScript;
-    else if (extension == "gml")
+    if (extension == "html" || extension == "htm")
+        return Language::HTML;
+    if (extension == "css")
+        return Language::CSS;
+    if (extension == "gml")
         return Language::GML;
-    else if (extension == "ini")
+    if (extension == "ini" || extension == "af")
         return Language::Ini;
-    else if (extension == "sh")
+    if (extension == "sh" || extension == "bash")
         return Language::Shell;
+    if (extension == "sql")
+        return Language::SQL;
 
     return Language::Unknown;
 }
@@ -33,8 +45,42 @@ Language language_from_name(const String& name)
         return Language::JavaScript;
     if (name == "Shell")
         return Language::Shell;
+    if (name == "GitCommit")
+        return Language::GitCommit;
 
     return Language::Unknown;
+}
+
+String language_name_from_file(const LexicalPath& file)
+{
+    if (file.title() == "COMMIT_EDITMSG")
+        return "GitCommit";
+
+    auto extension = file.extension();
+    VERIFY(!extension.starts_with("."));
+    if (extension == "c" || extension == "cc" || extension == "cxx" || extension == "cpp" || extension == "c++"
+        || extension == "h" || extension == "hh" || extension == "hxx" || extension == "hpp" || extension == "h++")
+        return "C++";
+    if (extension == "js" || extension == "mjs" || extension == "json")
+        return "JavaScript";
+    if (extension == "gml")
+        return "GML";
+    if (extension == "ini")
+        return "Ini";
+    if (extension == "sh" || extension == "bash")
+        return "Shell";
+    if (extension == "md")
+        return "Markdown";
+    if (extension == "html" || extension == "htm")
+        return "HTML";
+    if (extension == "css")
+        return "CSS";
+    if (extension == "sql")
+        return "SQL";
+    if (extension == "txt")
+        return "Plaintext";
+
+    return "Unknown";
 }
 
 }

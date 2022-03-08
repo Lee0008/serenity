@@ -49,7 +49,7 @@ struct [[gnu::packed]] GUIDPartitionHeader {
 
 Result<NonnullOwnPtr<GUIDPartitionTable>, PartitionTable::Error> GUIDPartitionTable::try_to_initialize(const StorageDevice& device)
 {
-    auto table = make<GUIDPartitionTable>(device);
+    auto table = adopt_nonnull_own_or_enomem(new (nothrow) GUIDPartitionTable(device)).release_value_but_fixme_should_propagate_errors();
     if (!table->is_valid())
         return { PartitionTable::Error::Invalid };
     return table;
@@ -58,7 +58,8 @@ Result<NonnullOwnPtr<GUIDPartitionTable>, PartitionTable::Error> GUIDPartitionTa
 GUIDPartitionTable::GUIDPartitionTable(const StorageDevice& device)
     : MBRPartitionTable(device)
 {
-    m_cached_header = ByteBuffer::create_zeroed(m_device->block_size());
+    // FIXME: Handle OOM failure here.
+    m_cached_header = ByteBuffer::create_zeroed(m_device->block_size()).release_value_but_fixme_should_propagate_errors();
     VERIFY(partitions_count() == 0);
     if (!initialize())
         m_valid = false;
@@ -87,7 +88,12 @@ bool GUIDPartitionTable::initialize()
         return false;
     }
 
-    auto entries_buffer = ByteBuffer::create_zeroed(m_device->block_size());
+    auto entries_buffer_result = ByteBuffer::create_zeroed(m_device->block_size());
+    if (entries_buffer_result.is_error()) {
+        dbgln("GUIPartitionTable: not enough memory for entries buffer");
+        return false;
+    }
+    auto entries_buffer = entries_buffer_result.release_value();
     auto raw_entries_buffer = UserOrKernelBuffer::for_kernel_buffer(entries_buffer.data());
     size_t raw_byte_index = header().partition_array_start_lba * m_device->block_size();
     for (size_t entry_index = 0; entry_index < header().entries_count; entry_index++) {
@@ -107,9 +113,8 @@ bool GUIDPartitionTable::initialize()
 
         Array<u8, 16> unique_guid {};
         unique_guid.span().overwrite(0, entry.unique_guid, unique_guid.size());
-        String name = entry.partition_name;
         dbgln("Detected GPT partition (entry={}), offset={}, limit={}", entry_index, entry.first_lba, entry.last_lba);
-        m_partitions.append({ entry.first_lba, entry.last_lba, partition_type, unique_guid, entry.attributes, "" });
+        m_partitions.append({ entry.first_lba, entry.last_lba, partition_type, unique_guid, entry.attributes });
         raw_byte_index += header().partition_entry_size;
     }
 
@@ -118,7 +123,7 @@ bool GUIDPartitionTable::initialize()
 
 bool GUIDPartitionTable::is_unused_entry(Array<u8, 16> partition_type) const
 {
-    return all_of(partition_type.begin(), partition_type.end(), [](const auto octet) { return octet == 0; });
+    return all_of(partition_type, [](const auto octet) { return octet == 0; });
 }
 
 }

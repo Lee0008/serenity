@@ -165,7 +165,7 @@ UnsignedBigInteger random_number(const UnsignedBigInteger& min, const UnsignedBi
     UnsignedBigInteger base;
     auto size = range.trimmed_length() * sizeof(u32) + 2;
     // "+2" is intentional (see below).
-    auto buffer = ByteBuffer::create_uninitialized(size);
+    auto buffer = ByteBuffer::create_uninitialized(size).release_value_but_fixme_should_propagate_errors(); // FIXME: Handle possible OOM situation.
     auto* buf = buffer.data();
 
     fill_with_random(buf, size);
@@ -218,7 +218,7 @@ bool is_probably_prime(const UnsignedBigInteger& p)
 UnsignedBigInteger random_big_prime(size_t bits)
 {
     VERIFY(bits >= 33);
-    UnsignedBigInteger min = UnsignedBigInteger::from_base10("6074001000").shift_left(bits - 33);
+    UnsignedBigInteger min = UnsignedBigInteger::from_base(10, "6074001000").shift_left(bits - 33);
     UnsignedBigInteger max = UnsignedBigInteger { 1 }.shift_left(bits).minus(1);
     for (;;) {
         auto p = random_number(min, max);

@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,10 +8,9 @@
 #include "DownloadWidget.h"
 #include <AK/NumberFormat.h>
 #include <AK/StringBuilder.h>
-#include <LibCore/ConfigFile.h>
-#include <LibCore/File.h>
-#include <LibCore/FileStream.h>
+#include <LibConfig/Client.h>
 #include <LibCore/StandardPaths.h>
+#include <LibCore/Stream.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
@@ -22,7 +22,6 @@
 #include <LibGUI/Window.h>
 #include <LibProtocol/RequestClient.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <math.h>
 
 namespace Browser {
 
@@ -37,8 +36,7 @@ DownloadWidget::DownloadWidget(const URL& url)
         m_destination_path = builder.to_string();
     }
 
-    auto browser_config = Core::ConfigFile::get_for_app("Browser");
-    auto close_on_finish = browser_config->read_bool_entry("Preferences", "CloseDownloadWidgetOnFinish", false);
+    auto close_on_finish = Config::read_bool("Browser", "Preferences", "CloseDownloadWidgetOnFinish", false);
 
     m_elapsed_timer.start();
     m_download = Web::ResourceLoader::the().protocol_client().start_request("GET", url);
@@ -48,13 +46,13 @@ DownloadWidget::DownloadWidget(const URL& url)
     };
 
     {
-        auto file_or_error = Core::File::open(m_destination_path, Core::OpenMode::WriteOnly);
+        auto file_or_error = Core::Stream::File::open(m_destination_path, Core::Stream::OpenMode::Write);
         if (file_or_error.is_error()) {
             GUI::MessageBox::show(window(), String::formatted("Cannot open {} for writing", m_destination_path), "Download failed", GUI::MessageBox::Type::Error);
             window()->close();
             return;
         }
-        m_output_file_stream = make<Core::OutputFileStream>(*file_or_error.value());
+        m_output_file_stream = file_or_error.release_value();
     }
 
     m_download->on_finish = [this](bool success, auto) { did_finish(success); };
@@ -62,7 +60,7 @@ DownloadWidget::DownloadWidget(const URL& url)
 
     set_fill_with_background_color(true);
     auto& layout = set_layout<GUI::VerticalBoxLayout>();
-    layout.set_margins({ 4, 4, 4, 4 });
+    layout.set_margins(4);
 
     auto& animation_container = add<GUI::Widget>();
     animation_container.set_fixed_height(32);
@@ -91,8 +89,7 @@ DownloadWidget::DownloadWidget(const URL& url)
     m_close_on_finish_checkbox->set_checked(close_on_finish);
 
     m_close_on_finish_checkbox->on_checked = [&](bool checked) {
-        auto browser_config = Core::ConfigFile::get_for_app("Browser");
-        browser_config->write_bool_entry("Preferences", "CloseDownloadWidgetOnFinish", checked);
+        Config::write_bool("Browser", "Preferences", "CloseDownloadWidgetOnFinish", checked);
     };
 
     auto& button_container = add<GUI::Widget>();
@@ -112,10 +109,6 @@ DownloadWidget::DownloadWidget(const URL& url)
     m_close_button->on_click = [this](auto) {
         window()->close();
     };
-}
-
-DownloadWidget::~DownloadWidget()
-{
 }
 
 void DownloadWidget::did_progress(Optional<u32> total_size, u32 downloaded_size)

@@ -18,6 +18,19 @@ describe("[[Get]] trap normal behavior", () => {
         p.foo;
     });
 
+    test("correct arguments passed to trap even for number", () => {
+        let o = {};
+        let p = new Proxy(o, {
+            get(target, property, receiver) {
+                expect(target).toBe(o);
+                expect(property).toBe("1");
+                expect(receiver).toBe(p);
+            },
+        });
+
+        p[1];
+    });
+
     test("conditional return", () => {
         let o = { foo: 1 };
         let p = new Proxy(o, {
@@ -93,4 +106,13 @@ describe("[[Get]] invariants", () => {
             "Proxy handler's get trap violates invariant: the returned value must be undefined if the property exists on the target as a non-configurable accessor property with an undefined get attribute"
         );
     });
+});
+
+test("Proxy handler that has the Proxy itself as its prototype", () => {
+    const handler = {};
+    const proxy = new Proxy({}, handler);
+    handler.__proto__ = proxy;
+    expect(() => {
+        proxy.foo;
+    }).toThrowWithMessage(InternalError, "Call stack size limit exceeded");
 });

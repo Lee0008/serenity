@@ -4,28 +4,19 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Assertions.h>
 #include <AK/JsonObject.h>
 #include <AK/QuickSort.h>
 #include <AK/String.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    if (unveil("/proc", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    unveil(nullptr, nullptr);
+    TRY(Core::System::pledge("stdio rpath"));
+    TRY(Core::System::unveil("/proc", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     const char* pid;
     static bool extended = false;
@@ -33,34 +24,35 @@ int main(int argc, char** argv)
     Core::ArgsParser args_parser;
     args_parser.add_option(extended, "Extended output", nullptr, 'x');
     args_parser.add_positional_argument(pid, "PID", "PID", Core::ArgsParser::Required::Yes);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
-    auto file = Core::File::construct(String::formatted("/proc/{}/vm", pid));
-    if (!file->open(Core::OpenMode::ReadOnly)) {
-        warnln("Failed to open {}: {}", file->name(), file->error_string());
-        return 1;
-    }
+    auto file = TRY(Core::File::open(String::formatted("/proc/{}/vm", pid), Core::OpenMode::ReadOnly));
 
     outln("{}:", pid);
 
+#if ARCH(I386)
+    auto padding = "";
+#else
+    auto padding = "        ";
+#endif
+
     if (extended) {
-        outln("Address         Size   Resident      Dirty Access  VMObject Type  Purgeable   CoW Pages Name");
+        outln("Address{}           Size   Resident      Dirty Access  VMObject Type  Purgeable   CoW Pages Name", padding);
     } else {
-        outln("Address         Size Access  Name");
+        outln("Address{}           Size Access  Name", padding);
     }
 
     auto file_contents = file->read_all();
-    auto json = JsonValue::from_string(file_contents);
-    VERIFY(json.has_value());
+    auto json = TRY(JsonValue::from_string(file_contents));
 
-    Vector<JsonValue> sorted_regions = json.value().as_array().values();
+    Vector<JsonValue> sorted_regions = json.as_array().values();
     quick_sort(sorted_regions, [](auto& a, auto& b) {
-        return a.as_object().get("address").to_u32() < b.as_object().get("address").to_u32();
+        return a.as_object().get("address").to_addr() < b.as_object().get("address").to_addr();
     });
 
     for (auto& value : sorted_regions) {
         auto& map = value.as_object();
-        auto address = map.get("address").to_uint();
+        auto address = map.get("address").to_addr();
         auto size = map.get("size").to_string();
 
         auto access = String::formatted("{}{}{}{}{}",
@@ -70,7 +62,7 @@ int main(int argc, char** argv)
             (map.get("shared").to_bool() ? "s" : "-"),
             (map.get("syscall").to_bool() ? "c" : "-"));
 
-        out("{:08x}  ", address);
+        out("{:p}  ", address);
         out("{:>10} ", size);
         if (extended) {
             auto resident = map.get("amount_resident").to_string();

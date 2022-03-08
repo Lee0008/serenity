@@ -5,10 +5,10 @@
  */
 
 #include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <AK/String.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
+#include <LibCore/MappedFile.h>
 #include <LibCore/StandardPaths.h>
 #include <LibELF/Image.h>
 #include <LibGUI/FileIconProvider.h>
@@ -16,6 +16,7 @@
 #include <LibGUI/Painter.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/PNGLoader.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -48,16 +49,25 @@ static void initialize_executable_icon_if_needed()
     s_executable_icon = Icon::default_icon("filetype-executable");
 }
 
+static void initialize_filetype_image_icon_if_needed()
+{
+    static bool initialized = false;
+    if (initialized)
+        return;
+    initialized = true;
+    s_filetype_image_icon = Icon::default_icon("filetype-image");
+}
+
 static void initialize_if_needed()
 {
     static bool s_initialized = false;
     if (s_initialized)
         return;
 
-    auto config = Core::ConfigFile::open("/etc/FileIconProvider.ini");
+    auto config = Core::ConfigFile::open("/etc/FileIconProvider.ini").release_value_but_fixme_should_propagate_errors();
 
-    s_symlink_emblem = Gfx::Bitmap::load_from_file("/res/icons/symlink-emblem.png");
-    s_symlink_emblem_small = Gfx::Bitmap::load_from_file("/res/icons/symlink-emblem-small.png");
+    s_symlink_emblem = Gfx::Bitmap::try_load_from_file("/res/icons/symlink-emblem.png").release_value_but_fixme_should_propagate_errors();
+    s_symlink_emblem_small = Gfx::Bitmap::try_load_from_file("/res/icons/symlink-emblem-small.png").release_value_but_fixme_should_propagate_errors();
 
     s_hard_disk_icon = Icon::default_icon("hard-disk");
     s_directory_icon = Icon::default_icon("filetype-folder");
@@ -70,8 +80,7 @@ static void initialize_if_needed()
     s_symlink_icon = Icon::default_icon("filetype-symlink");
     s_socket_icon = Icon::default_icon("filetype-socket");
 
-    s_filetype_image_icon = Icon::default_icon("filetype-image");
-
+    initialize_filetype_image_icon_if_needed();
     initialize_executable_icon_if_needed();
 
     for (auto& filetype : config->keys("Icons")) {
@@ -114,7 +123,7 @@ Icon FileIconProvider::home_directory_open_icon()
 
 Icon FileIconProvider::filetype_image_icon()
 {
-    initialize_if_needed();
+    initialize_filetype_image_icon_if_needed();
     return s_filetype_image_icon;
 }
 
@@ -138,7 +147,7 @@ Icon FileIconProvider::icon_for_executable(const String& path)
     // If the icon for an app isn't in the cache we attempt to load the file as an ELF image and extract
     // the serenity_app_icon_* sections which should contain the icons as raw PNG data. In the future it would
     // be better if the binary signalled the image format being used or we deduced it, e.g. using magic bytes.
-    auto file_or_error = MappedFile::map(path);
+    auto file_or_error = Core::MappedFile::map(path);
     if (file_or_error.is_error()) {
         app_icon_cache.set(path, s_executable_icon);
         return s_executable_icon;
@@ -179,7 +188,11 @@ Icon FileIconProvider::icon_for_executable(const String& path)
         if (!section.has_value()) {
             bitmap = s_executable_icon.bitmap_for_size(icon_section.image_size);
         } else {
-            bitmap = Gfx::load_png_from_memory(reinterpret_cast<u8 const*>(section->raw_data()), section->size());
+            // FIXME: Use the ImageDecoder service.
+            auto frame_or_error = Gfx::PNGImageDecoderPlugin(reinterpret_cast<u8 const*>(section->raw_data()), section->size()).frame(0);
+            if (!frame_or_error.is_error()) {
+                bitmap = frame_or_error.value().image;
+            }
         }
 
         if (!bitmap) {
@@ -222,7 +235,7 @@ Icon FileIconProvider::icon_for_path(const String& path, mode_t mode)
         if (raw_symlink_target.starts_with('/')) {
             target_path = raw_symlink_target;
         } else {
-            target_path = Core::File::real_path_for(String::formatted("{}/{}", LexicalPath(path).dirname(), raw_symlink_target));
+            target_path = Core::File::real_path_for(String::formatted("{}/{}", LexicalPath::dirname(path), raw_symlink_target));
         }
         auto target_icon = icon_for_path(target_path);
 
@@ -231,11 +244,12 @@ Icon FileIconProvider::icon_for_path(const String& path, mode_t mode)
             auto& emblem = size < 32 ? *s_symlink_emblem_small : *s_symlink_emblem;
             auto original_bitmap = target_icon.bitmap_for_size(size);
             VERIFY(original_bitmap);
-            auto generated_bitmap = original_bitmap->clone();
-            if (!generated_bitmap) {
+            auto generated_bitmap_or_error = original_bitmap->clone();
+            if (generated_bitmap_or_error.is_error()) {
                 dbgln("Failed to clone {}x{} icon for symlink variant", size, size);
                 return s_symlink_icon;
             }
+            auto generated_bitmap = generated_bitmap_or_error.release_value_but_fixme_should_propagate_errors();
             GUI::Painter painter(*generated_bitmap);
             painter.blit({ size - emblem.width(), size - emblem.height() }, emblem, emblem.rect());
 
@@ -253,8 +267,10 @@ Icon FileIconProvider::icon_for_path(const String& path, mode_t mode)
         return s_filetype_image_icon;
 
     for (auto& filetype : s_filetype_icons.keys()) {
-        auto patterns = s_filetype_patterns.get(filetype).value();
-        for (auto& pattern : patterns) {
+        auto pattern_it = s_filetype_patterns.find(filetype);
+        if (pattern_it == s_filetype_patterns.end())
+            continue;
+        for (auto& pattern : pattern_it->value) {
             if (path.matches(pattern, CaseSensitivity::CaseInsensitive))
                 return s_filetype_icons.get(filetype).value();
         }

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -11,9 +12,6 @@
 #include <LibGfx/Palette.h>
 
 namespace HackStudio {
-GitFilesView::~GitFilesView()
-{
-}
 
 void GitFilesView::paint_list_item(GUI::Painter& painter, int row_index, int painted_item_index)
 {
@@ -37,7 +35,7 @@ GitFilesView::GitFilesView(GitFileActionCallback callback, NonnullRefPtr<Gfx::Bi
 
 void GitFilesView::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left) {
+    if (event.button() != GUI::MouseButton::Primary) {
         ListView::mousedown_event(event);
         return;
     }
@@ -56,7 +54,7 @@ void GitFilesView::mousedown_event(GUI::MouseEvent& event)
     auto data = model()->index(item_index, model_column()).data();
 
     VERIFY(data.is_string());
-    m_action_callback(LexicalPath(data.to_string()));
+    m_action_callback(data.to_string());
 }
 
 };

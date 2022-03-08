@@ -9,13 +9,15 @@
 #include "HackStudioWidget.h"
 #include "Project.h"
 #include <AK/StringBuilder.h>
+#include <LibConfig/Client.h>
 #include <LibCore/ArgsParser.h>
-#include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Menubar.h>
 #include <LibGUI/Notification.h>
 #include <LibGUI/Window.h>
+#include <LibMain/Main.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -25,25 +27,23 @@
 
 using namespace HackStudio;
 
-static RefPtr<GUI::Window> s_window;
-static RefPtr<HackStudioWidget> s_hack_studio_widget;
+static WeakPtr<HackStudioWidget> s_hack_studio_widget;
 
 static bool make_is_available();
 static void notify_make_not_available();
 static void update_path_environment_variable();
+static Optional<String> last_opened_project_path();
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd tty rpath cpath wpath proc exec unix fattr thread ptrace", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd tty rpath cpath wpath proc exec unix fattr thread ptrace"));
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = GUI::Application::construct(arguments.argc, arguments.argv);
+    Config::pledge_domains({ "HackStudio", "Terminal" });
 
-    s_window = GUI::Window::construct();
-    s_window->resize(840, 600);
-    s_window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-hack-studio.png"));
+    auto window = GUI::Window::construct();
+    window->resize(840, 600);
+    window->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-hack-studio.png").release_value_but_fixme_should_propagate_errors());
 
     update_path_environment_variable();
 
@@ -52,34 +52,41 @@ int main(int argc, char** argv)
     }
 
     const char* path_argument = nullptr;
+    bool mode_coredump = false;
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(path_argument, "Path to a workspace or a file", "path", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.add_option(mode_coredump, "Debug a coredump in HackStudio", "coredump", 'c');
+    args_parser.parse(arguments);
 
     auto argument_absolute_path = Core::File::real_path_for(path_argument);
 
-    auto project_path = argument_absolute_path;
-    if (argument_absolute_path.is_null())
-        project_path = Core::File::real_path_for(".");
+    auto project_path = Core::File::real_path_for(".");
+    if (!mode_coredump) {
+        if (!argument_absolute_path.is_null())
+            project_path = argument_absolute_path;
+        else if (auto path = last_opened_project_path(); path.has_value())
+            project_path = path.release_value();
+    }
 
-    s_hack_studio_widget = s_window->set_main_widget<HackStudioWidget>(project_path);
+    auto hack_studio_widget = TRY(window->try_set_main_widget<HackStudioWidget>(project_path));
+    s_hack_studio_widget = hack_studio_widget;
 
-    s_window->set_title(String::formatted("{} - Hack Studio", s_hack_studio_widget->project().name()));
+    window->set_title(String::formatted("{} - Hack Studio", hack_studio_widget->project().name()));
 
-    auto menubar = GUI::Menubar::construct();
-    s_hack_studio_widget->initialize_menubar(menubar);
-    s_window->set_menubar(menubar);
+    hack_studio_widget->initialize_menubar(*window);
 
-    s_window->on_close_request = [&]() -> GUI::Window::CloseRequestDecision {
-        s_hack_studio_widget->locator().close();
-        if (s_hack_studio_widget->warn_unsaved_changes("There are unsaved changes, do you want to save before exiting?") == HackStudioWidget::ContinueDecision::Yes)
+    window->on_close_request = [&]() -> GUI::Window::CloseRequestDecision {
+        hack_studio_widget->locator().close();
+        if (hack_studio_widget->warn_unsaved_changes("There are unsaved changes, do you want to save before exiting?") == HackStudioWidget::ContinueDecision::Yes)
             return GUI::Window::CloseRequestDecision::Close;
         return GUI::Window::CloseRequestDecision::StayOpen;
     };
 
-    s_window->show();
+    window->show();
+    hack_studio_widget->update_actions();
 
-    s_hack_studio_widget->update_actions();
+    if (mode_coredump)
+        hack_studio_widget->open_coredump(argument_absolute_path);
 
     return app->exec();
 }
@@ -105,7 +112,7 @@ static bool make_is_available()
 static void notify_make_not_available()
 {
     auto notification = GUI::Notification::construct();
-    notification->set_icon(Gfx::Bitmap::load_from_file("/res/icons/32x32/app-hack-studio.png"));
+    notification->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/32x32/app-hack-studio.png").release_value_but_fixme_should_propagate_errors());
     notification->set_title("'make' Not Available");
     notification->set_text("You probably want to install the binutils, gcc, and make ports from the root of the Serenity repository");
     notification->show();
@@ -117,8 +124,20 @@ static void update_path_environment_variable()
     path.append(getenv("PATH"));
     if (path.length())
         path.append(":");
-    path.append("/bin:/usr/bin:/usr/local/bin");
+    path.append("/usr/local/bin:/usr/bin:/bin");
     setenv("PATH", path.to_string().characters(), true);
+}
+
+static Optional<String> last_opened_project_path()
+{
+    auto projects = HackStudioWidget::read_recent_projects();
+    if (projects.size() == 0)
+        return {};
+
+    if (!Core::File::exists(projects[0]))
+        return {};
+
+    return { projects[0] };
 }
 
 namespace HackStudio {
@@ -135,8 +154,7 @@ void open_file(const String& filename)
 
 void open_file(const String& filename, size_t line, size_t column)
 {
-    s_hack_studio_widget->open_file(filename);
-    s_hack_studio_widget->current_editor_wrapper().editor().set_cursor({ line, column });
+    s_hack_studio_widget->open_file(filename, line, column);
 }
 
 RefPtr<EditorWrapper> current_editor_wrapper()
@@ -166,6 +184,16 @@ void set_current_editor_wrapper(RefPtr<EditorWrapper> wrapper)
 Locator& locator()
 {
     return s_hack_studio_widget->locator();
+}
+
+void for_each_open_file(Function<void(ProjectFile const&)> func)
+{
+    s_hack_studio_widget->for_each_open_file(move(func));
+}
+
+bool semantic_syntax_highlighting_is_enabled()
+{
+    return s_hack_studio_widget->semantic_syntax_highlighting_is_enabled();
 }
 
 }

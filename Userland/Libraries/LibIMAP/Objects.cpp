@@ -120,7 +120,7 @@ String serialize_astring(StringView string)
         auto non_atom_chars = { '(', ')', '{', ' ', '%', '*', '"', '\\', ']' };
         return AK::find(non_atom_chars.begin(), non_atom_chars.end(), x) != non_atom_chars.end();
     };
-    auto is_atom = all_of(string.begin(), string.end(), [&](auto ch) { return is_ascii_control(ch) && !is_non_atom_char(ch); });
+    auto is_atom = all_of(string, [&](auto ch) { return is_ascii_control(ch) && !is_non_atom_char(ch); });
     if (is_atom) {
         return string;
     }
@@ -128,9 +128,7 @@ String serialize_astring(StringView string)
     // Try to quote
     auto can_be_quoted = !(string.contains('\n') || string.contains('\r'));
     if (can_be_quoted) {
-        auto escaped_str = string.to_string();
-        escaped_str.replace("\\", "\\\\");
-        escaped_str.replace("\"", "\\\"");
+        auto escaped_str = string.replace("\\", "\\\\").replace("\"", "\\\"");
         return String::formatted("\"{}\"", escaped_str);
     }
 
@@ -140,7 +138,6 @@ String serialize_astring(StringView string)
 String SearchKey::serialize() const
 {
     return data.visit(
-        [&](Empty const&) { VERIFY_NOT_REACHED(); return String("The compiler complains if you remove this."); },
         [&](All const&) { return String("ALL"); },
         [&](Answered const&) { return String("ANSWERED"); },
         [&](Bcc const& x) { return String::formatted("BCC {}", serialize_astring(x.bcc)); },

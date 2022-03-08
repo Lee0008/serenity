@@ -12,9 +12,14 @@ namespace HackStudio {
 
 GUI::ModelIndex VariablesModel::index(int row, int column, const GUI::ModelIndex& parent_index) const
 {
-    if (!parent_index.is_valid())
+    if (!parent_index.is_valid()) {
+        if (static_cast<size_t>(row) >= m_variables.size())
+            return {};
         return create_index(row, column, &m_variables[row]);
+    }
     auto* parent = static_cast<const Debug::DebugInfo::VariableInfo*>(parent_index.internal_data());
+    if (static_cast<size_t>(row) >= parent->members.size())
+        return {};
     auto* child = &parent->members[row];
     return create_index(row, column, child);
 }
@@ -58,7 +63,7 @@ static String variable_value_as_string(const Debug::DebugInfo::VariableInfo& var
     auto variable_address = variable.location_data.address;
 
     if (variable.is_enum_type()) {
-        auto value = Debugger::the().session()->peek((u32*)variable_address);
+        auto value = Debugger::the().session()->peek(variable_address);
         VERIFY(value.has_value());
         auto it = variable.type->members.find_if([&enumerator_value = value.value()](const auto& enumerator) {
             return enumerator->constant_data.as_u32 == enumerator_value;
@@ -69,19 +74,19 @@ static String variable_value_as_string(const Debug::DebugInfo::VariableInfo& var
     }
 
     if (variable.type_name == "int") {
-        auto value = Debugger::the().session()->peek((u32*)variable_address);
+        auto value = Debugger::the().session()->peek(variable_address);
         VERIFY(value.has_value());
         return String::formatted("{}", static_cast<int>(value.value()));
     }
 
     if (variable.type_name == "char") {
-        auto value = Debugger::the().session()->peek((u32*)variable_address);
+        auto value = Debugger::the().session()->peek(variable_address);
         VERIFY(value.has_value());
         return String::formatted("'{0:c}'", (char)value.value());
     }
 
     if (variable.type_name == "bool") {
-        auto value = Debugger::the().session()->peek((u32*)variable_address);
+        auto value = Debugger::the().session()->peek(variable_address);
         VERIFY(value.has_value());
         return (value.value() & 1) ? "true" : "false";
     }
@@ -89,7 +94,7 @@ static String variable_value_as_string(const Debug::DebugInfo::VariableInfo& var
     return String::formatted("type: {} @ {:p}, ", variable.type_name, variable_address);
 }
 
-static Optional<u32> string_to_variable_value(const StringView& string_value, const Debug::DebugInfo::VariableInfo& variable)
+static Optional<u32> string_to_variable_value(StringView string_value, const Debug::DebugInfo::VariableInfo& variable)
 {
     if (variable.is_enum_type()) {
         auto prefix_string = String::formatted("{}::", variable.type_name);
@@ -124,14 +129,14 @@ static Optional<u32> string_to_variable_value(const StringView& string_value, co
     return {};
 }
 
-void VariablesModel::set_variable_value(const GUI::ModelIndex& index, const StringView& string_value, GUI::Window* parent_window)
+void VariablesModel::set_variable_value(const GUI::ModelIndex& index, StringView string_value, GUI::Window* parent_window)
 {
     auto variable = static_cast<const Debug::DebugInfo::VariableInfo*>(index.internal_data());
 
     auto value = string_to_variable_value(string_value, *variable);
 
     if (value.has_value()) {
-        auto success = Debugger::the().session()->poke((u32*)variable->location_data.address, value.value());
+        auto success = Debugger::the().session()->poke(variable->location_data.address, value.value());
         VERIFY(success);
         return;
     }
@@ -158,18 +163,13 @@ GUI::Variant VariablesModel::data(const GUI::ModelIndex& index, GUI::ModelRole r
     }
 }
 
-void VariablesModel::update()
+RefPtr<VariablesModel> VariablesModel::create(Debug::ProcessInspector& inspector, PtraceRegisters const& regs)
 {
-    did_update();
-}
-
-RefPtr<VariablesModel> VariablesModel::create(const PtraceRegisters& regs)
-{
-    auto lib = Debugger::the().session()->library_at(regs.eip);
+    auto lib = inspector.library_at(regs.ip());
     if (!lib)
         return nullptr;
     auto variables = lib->debug_info->get_variables_in_current_scope(regs);
-    return adopt_ref(*new VariablesModel(move(variables), regs));
+    return adopt_ref(*new VariablesModel(inspector, move(variables), regs));
 }
 
 }

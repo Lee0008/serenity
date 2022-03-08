@@ -1,21 +1,20 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Singleton.h>
-#include <AK/StringBuilder.h>
-#include <AK/StringView.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/FileSystem/DevPtsFS.h>
 #include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/TTY/SlavePTY.h>
 
 namespace Kernel {
 
-NonnullRefPtr<DevPtsFS> DevPtsFS::create()
+ErrorOr<NonnullRefPtr<DevPtsFS>> DevPtsFS::try_create()
 {
-    return adopt_ref(*new DevPtsFS);
+    return adopt_nonnull_ref_or_enomem(new (nothrow) DevPtsFS);
 }
 
 DevPtsFS::DevPtsFS()
@@ -26,19 +25,16 @@ DevPtsFS::~DevPtsFS()
 {
 }
 
-static AK::Singleton<HashTable<unsigned>> s_ptys;
-
-bool DevPtsFS::initialize()
+ErrorOr<void> DevPtsFS::initialize()
 {
-    m_root_inode = adopt_ref(*new DevPtsFSInode(*this, 1, nullptr));
+    m_root_inode = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) DevPtsFSInode(*this, 1, nullptr)));
     m_root_inode->m_metadata.inode = { fsid(), 1 };
     m_root_inode->m_metadata.mode = 0040555;
     m_root_inode->m_metadata.uid = 0;
     m_root_inode->m_metadata.gid = 0;
     m_root_inode->m_metadata.size = 0;
     m_root_inode->m_metadata.mtime = mepoch;
-
-    return true;
+    return {};
 }
 
 static unsigned inode_index_to_pty_index(InodeIndex inode_index)
@@ -52,21 +48,21 @@ static InodeIndex pty_index_to_inode_index(unsigned pty_index)
     return pty_index + 2;
 }
 
-NonnullRefPtr<Inode> DevPtsFS::root_inode() const
+Inode& DevPtsFS::root_inode()
 {
     return *m_root_inode;
 }
 
-RefPtr<Inode> DevPtsFS::get_inode(InodeIdentifier inode_id) const
+ErrorOr<NonnullRefPtr<Inode>> DevPtsFS::get_inode(InodeIdentifier inode_id) const
 {
     if (inode_id.index() == 1)
-        return m_root_inode;
+        return *m_root_inode;
 
     unsigned pty_index = inode_index_to_pty_index(inode_id.index());
-    auto* device = Device::get_device(201, pty_index);
+    auto* device = DeviceManagement::the().get_device(201, pty_index);
     VERIFY(device);
 
-    auto inode = adopt_ref(*new DevPtsFSInode(const_cast<DevPtsFS&>(*this), inode_id.index(), static_cast<SlavePTY*>(device)));
+    auto inode = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) DevPtsFSInode(const_cast<DevPtsFS&>(*this), inode_id.index(), static_cast<SlavePTY*>(device))));
     inode->m_metadata.inode = inode_id;
     inode->m_metadata.size = 0;
     inode->m_metadata.uid = device->uid();
@@ -75,18 +71,7 @@ RefPtr<Inode> DevPtsFS::get_inode(InodeIdentifier inode_id) const
     inode->m_metadata.major_device = device->major();
     inode->m_metadata.minor_device = device->minor();
     inode->m_metadata.mtime = mepoch;
-
     return inode;
-}
-
-void DevPtsFS::register_slave_pty(SlavePTY& slave_pty)
-{
-    s_ptys->set(slave_pty.index());
-}
-
-void DevPtsFS::unregister_slave_pty(SlavePTY& slave_pty)
-{
-    s_ptys->remove(slave_pty.index());
 }
 
 DevPtsFSInode::DevPtsFSInode(DevPtsFS& fs, InodeIndex index, SlavePTY* pty)
@@ -100,12 +85,12 @@ DevPtsFSInode::~DevPtsFSInode()
 {
 }
 
-KResultOr<ssize_t> DevPtsFSInode::read_bytes(off_t, ssize_t, UserOrKernelBuffer&, FileDescription*) const
+ErrorOr<size_t> DevPtsFSInode::read_bytes(off_t, size_t, UserOrKernelBuffer&, OpenFileDescription*) const
 {
     VERIFY_NOT_REACHED();
 }
 
-KResultOr<ssize_t> DevPtsFSInode::write_bytes(off_t, ssize_t, const UserOrKernelBuffer&, FileDescription*)
+ErrorOr<size_t> DevPtsFSInode::write_bytes(off_t, size_t, const UserOrKernelBuffer&, OpenFileDescription*)
 {
     VERIFY_NOT_REACHED();
 }
@@ -120,72 +105,72 @@ InodeMetadata DevPtsFSInode::metadata() const
     return m_metadata;
 }
 
-KResult DevPtsFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)> callback) const
+ErrorOr<void> DevPtsFSInode::traverse_as_directory(Function<ErrorOr<void>(FileSystem::DirectoryEntryView const&)> callback) const
 {
     if (identifier().index() > 1)
         return ENOTDIR;
 
-    callback({ ".", identifier(), 0 });
-    callback({ "..", identifier(), 0 });
+    TRY(callback({ ".", identifier(), 0 }));
+    TRY(callback({ "..", identifier(), 0 }));
 
-    for (unsigned pty_index : *s_ptys) {
-        String name = String::number(pty_index);
-        InodeIdentifier identifier = { fsid(), pty_index_to_inode_index(pty_index) };
-        callback({ name, identifier, 0 });
-    }
-
-    return KSuccess;
+    return SlavePTY::all_instances().with([&](auto& list) -> ErrorOr<void> {
+        StringBuilder builder;
+        for (SlavePTY& slave_pty : list) {
+            builder.clear();
+            TRY(builder.try_appendff("{}", slave_pty.index()));
+            TRY(callback({ builder.string_view(), { fsid(), pty_index_to_inode_index(slave_pty.index()) }, 0 }));
+        }
+        return {};
+    });
 }
 
-KResultOr<size_t> DevPtsFSInode::directory_entry_count() const
-{
-    VERIFY(identifier().index() == 1);
-
-    return 2 + s_ptys->size();
-}
-
-RefPtr<Inode> DevPtsFSInode::lookup(StringView name)
+ErrorOr<NonnullRefPtr<Inode>> DevPtsFSInode::lookup(StringView name)
 {
     VERIFY(identifier().index() == 1);
 
     if (name == "." || name == "..")
-        return this;
-
-    auto& fs = static_cast<DevPtsFS&>(this->fs());
+        return *this;
 
     auto pty_index = name.to_uint();
-    if (pty_index.has_value() && s_ptys->contains(pty_index.value())) {
-        return fs.get_inode({ fsid(), pty_index_to_inode_index(pty_index.value()) });
-    }
+    if (!pty_index.has_value())
+        return ENOENT;
 
+    return SlavePTY::all_instances().with([&](auto& list) -> ErrorOr<NonnullRefPtr<Inode>> {
+        for (SlavePTY& slave_pty : list) {
+            if (slave_pty.index() != pty_index.value())
+                continue;
+            return fs().get_inode({ fsid(), pty_index_to_inode_index(pty_index.value()) });
+        }
+        return ENOENT;
+    });
+}
+
+ErrorOr<void> DevPtsFSInode::flush_metadata()
+{
     return {};
 }
 
-void DevPtsFSInode::flush_metadata()
-{
-}
-
-KResult DevPtsFSInode::add_child(Inode&, const StringView&, mode_t)
+ErrorOr<void> DevPtsFSInode::add_child(Inode&, StringView, mode_t)
 {
     return EROFS;
 }
 
-KResultOr<NonnullRefPtr<Inode>> DevPtsFSInode::create_child(const String&, mode_t, dev_t, uid_t, gid_t)
+ErrorOr<NonnullRefPtr<Inode>> DevPtsFSInode::create_child(StringView, mode_t, dev_t, UserID, GroupID)
 {
     return EROFS;
 }
 
-KResult DevPtsFSInode::remove_child(const StringView&)
+ErrorOr<void> DevPtsFSInode::remove_child(StringView)
 {
     return EROFS;
 }
 
-KResult DevPtsFSInode::chmod(mode_t)
+ErrorOr<void> DevPtsFSInode::chmod(mode_t)
 {
     return EROFS;
 }
 
-KResult DevPtsFSInode::chown(uid_t, gid_t)
+ErrorOr<void> DevPtsFSInode::chown(UserID, GroupID)
 {
     return EROFS;
 }

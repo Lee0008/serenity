@@ -8,12 +8,13 @@
 
 namespace Kernel {
 
-KResultOr<mode_t> Process::sys$umask(mode_t mask)
+ErrorOr<FlatPtr> Process::sys$umask(mode_t mask)
 {
-    REQUIRE_PROMISE(stdio);
-    auto old_mask = m_umask;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::stdio));
+    auto old_mask = m_protected_values.umask;
     ProtectedDataMutationScope scope { *this };
-    m_umask = mask & 0777;
+    m_protected_values.umask = mask & 0777;
     return old_mask;
 }
 

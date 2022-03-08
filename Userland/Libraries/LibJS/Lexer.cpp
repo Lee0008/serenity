@@ -8,24 +8,29 @@
 #include "Lexer.h"
 #include <AK/CharacterTypes.h>
 #include <AK/Debug.h>
+#include <AK/GenericLexer.h>
 #include <AK/HashMap.h>
+#include <AK/Utf8View.h>
+#include <LibUnicode/CharacterTypes.h>
 #include <stdio.h>
 
 namespace JS {
 
-HashMap<String, TokenType> Lexer::s_keywords;
+HashMap<FlyString, TokenType> Lexer::s_keywords;
 HashMap<String, TokenType> Lexer::s_three_char_tokens;
 HashMap<String, TokenType> Lexer::s_two_char_tokens;
 HashMap<char, TokenType> Lexer::s_single_char_tokens;
 
 Lexer::Lexer(StringView source, StringView filename, size_t line_number, size_t line_column)
     : m_source(source)
-    , m_current_token(TokenType::Eof, {}, StringView(nullptr), StringView(nullptr), filename, 0, 0)
+    , m_current_token(TokenType::Eof, {}, StringView(nullptr), StringView(nullptr), filename, 0, 0, 0)
     , m_filename(filename)
     , m_line_number(line_number)
     , m_line_column(line_column)
+    , m_parsed_identifiers(adopt_ref(*new ParsedIdentifiers))
 {
     if (s_keywords.is_empty()) {
+        s_keywords.set("async", TokenType::Async);
         s_keywords.set("await", TokenType::Await);
         s_keywords.set("break", TokenType::Break);
         s_keywords.set("case", TokenType::Case);
@@ -137,11 +142,11 @@ Lexer::Lexer(StringView source, StringView filename, size_t line_number, size_t 
 void Lexer::consume()
 {
     auto did_reach_eof = [this] {
-        if (m_position != m_source.length())
+        if (m_position < m_source.length())
             return false;
         m_eof = true;
         m_current_char = '\0';
-        m_position++;
+        m_position = m_source.length() + 1;
         m_line_column++;
         return true;
     };
@@ -186,11 +191,53 @@ void Lexer::consume()
         } else {
             dbgln_if(LEXER_DEBUG, "Previous was CR, this is LF - not incrementing line number again.");
         }
+    } else if (is_unicode_character()) {
+        size_t char_size = 1;
+        if ((m_current_char & 64) == 0) {
+            m_hit_invalid_unicode = m_position;
+        } else if ((m_current_char & 32) == 0) {
+            char_size = 2;
+        } else if ((m_current_char & 16) == 0) {
+            char_size = 3;
+        } else if ((m_current_char & 8) == 0) {
+            char_size = 4;
+        }
+
+        VERIFY(char_size >= 1);
+        --char_size;
+
+        for (size_t i = m_position; i < m_position + char_size; i++) {
+            if (i >= m_source.length() || (m_source[i] & 0b11000000) != 0b10000000) {
+                m_hit_invalid_unicode = m_position;
+                break;
+            }
+        }
+
+        if (m_hit_invalid_unicode.has_value())
+            m_position = m_source.length();
+        else
+            m_position += char_size;
+
+        if (did_reach_eof())
+            return;
+
+        m_line_column++;
     } else {
         m_line_column++;
     }
 
     m_current_char = m_source[m_position++];
+}
+
+bool Lexer::consume_decimal_number()
+{
+    if (!is_ascii_digit(m_current_char))
+        return false;
+
+    while (is_ascii_digit(m_current_char) || match_numeric_literal_separator_followed_by(is_ascii_digit)) {
+        consume();
+    }
+    return true;
 }
 
 bool Lexer::consume_exponent()
@@ -202,21 +249,22 @@ bool Lexer::consume_exponent()
     if (!is_ascii_digit(m_current_char))
         return false;
 
-    while (is_ascii_digit(m_current_char)) {
-        consume();
-    }
-    return true;
+    return consume_decimal_number();
+}
+
+static constexpr bool is_octal_digit(char ch)
+{
+    return ch >= '0' && ch <= '7';
 }
 
 bool Lexer::consume_octal_number()
 {
     consume();
-    if (!(m_current_char >= '0' && m_current_char <= '7'))
+    if (!is_octal_digit(m_current_char))
         return false;
 
-    while (m_current_char >= '0' && m_current_char <= '7') {
+    while (is_octal_digit(m_current_char) || match_numeric_literal_separator_followed_by(is_octal_digit))
         consume();
-    }
 
     return true;
 }
@@ -227,22 +275,36 @@ bool Lexer::consume_hexadecimal_number()
     if (!is_ascii_hex_digit(m_current_char))
         return false;
 
-    while (is_ascii_hex_digit(m_current_char))
+    while (is_ascii_hex_digit(m_current_char) || match_numeric_literal_separator_followed_by(is_ascii_hex_digit))
         consume();
 
     return true;
 }
 
+static constexpr bool is_binary_digit(char ch)
+{
+    return ch == '0' || ch == '1';
+}
+
 bool Lexer::consume_binary_number()
 {
     consume();
-    if (!(m_current_char == '0' || m_current_char == '1'))
+    if (!is_binary_digit(m_current_char))
         return false;
 
-    while (m_current_char == '0' || m_current_char == '1')
+    while (is_binary_digit(m_current_char) || match_numeric_literal_separator_followed_by(is_binary_digit))
         consume();
 
     return true;
+}
+
+template<typename Callback>
+bool Lexer::match_numeric_literal_separator_followed_by(Callback callback) const
+{
+    if (m_position >= m_source.length())
+        return false;
+    return m_current_char == '_'
+        && callback(m_source[m_position]);
 }
 
 bool Lexer::match(char a, char b) const
@@ -280,35 +342,144 @@ bool Lexer::is_eof() const
     return m_eof;
 }
 
-bool Lexer::is_line_terminator() const
+ALWAYS_INLINE bool Lexer::is_line_terminator() const
 {
     if (m_current_char == '\n' || m_current_char == '\r')
         return true;
-    if (m_position > 0 && m_position + 1 < m_source.length()) {
-        auto three_chars_view = m_source.substring_view(m_position - 1, 3);
-        return (three_chars_view == LINE_SEPARATOR) || (three_chars_view == PARAGRAPH_SEPARATOR);
-    }
+    if (!is_unicode_character())
+        return false;
+
+    auto code_point = current_code_point();
+    return code_point == LINE_SEPARATOR || code_point == PARAGRAPH_SEPARATOR;
+}
+
+ALWAYS_INLINE bool Lexer::is_unicode_character() const
+{
+    return (m_current_char & 128) != 0;
+}
+
+ALWAYS_INLINE u32 Lexer::current_code_point() const
+{
+    static constexpr const u32 REPLACEMENT_CHARACTER = 0xFFFD;
+    if (m_position == 0)
+        return REPLACEMENT_CHARACTER;
+    auto substring = m_source.substring_view(m_position - 1);
+    if (substring.is_empty())
+        return REPLACEMENT_CHARACTER;
+    if (is_ascii(substring[0]))
+        return substring[0];
+    Utf8View utf_8_view { substring };
+    return *utf_8_view.begin();
+}
+
+bool Lexer::is_whitespace() const
+{
+    if (is_ascii_space(m_current_char))
+        return true;
+    if (!is_unicode_character())
+        return false;
+    auto code_point = current_code_point();
+    if (code_point == NO_BREAK_SPACE || code_point == ZERO_WIDTH_NO_BREAK_SPACE)
+        return true;
+
+    static auto space_separator_category = Unicode::general_category_from_string("Space_Separator"sv);
+    if (space_separator_category.has_value())
+        return Unicode::code_point_has_general_category(code_point, *space_separator_category);
     return false;
 }
 
-bool Lexer::is_identifier_start() const
+// UnicodeEscapeSequence :: https://tc39.es/ecma262/#prod-UnicodeEscapeSequence
+//          u Hex4Digits
+//          u{ CodePoint }
+Optional<u32> Lexer::is_identifier_unicode_escape(size_t& identifier_length) const
 {
-    return is_ascii_alpha(m_current_char) || m_current_char == '_' || m_current_char == '$';
+    GenericLexer lexer(source().substring_view(m_position - 1));
+
+    if (auto code_point_or_error = lexer.consume_escaped_code_point(false); !code_point_or_error.is_error()) {
+        identifier_length = lexer.tell();
+        return code_point_or_error.value();
+    }
+
+    return {};
 }
 
-bool Lexer::is_identifier_middle() const
+// IdentifierStart :: https://tc39.es/ecma262/#prod-IdentifierStart
+//          UnicodeIDStart
+//          $
+//          _
+//          \ UnicodeEscapeSequence
+Optional<u32> Lexer::is_identifier_start(size_t& identifier_length) const
 {
-    return is_identifier_start() || is_ascii_digit(m_current_char);
+    u32 code_point = current_code_point();
+    identifier_length = 1;
+
+    if (code_point == '\\') {
+        if (auto maybe_code_point = is_identifier_unicode_escape(identifier_length); maybe_code_point.has_value())
+            code_point = *maybe_code_point;
+        else
+            return {};
+    }
+
+    if (is_ascii_alpha(code_point) || code_point == '_' || code_point == '$')
+        return code_point;
+
+    // Optimization: the first codepoint with the ID_Start property after A-Za-z is outside the
+    // ASCII range (0x00AA), so we can skip code_point_has_property() for any ASCII characters.
+    if (is_ascii(code_point))
+        return {};
+
+    static auto id_start_category = Unicode::property_from_string("ID_Start"sv);
+    if (id_start_category.has_value() && Unicode::code_point_has_property(code_point, *id_start_category))
+        return code_point;
+
+    return {};
+}
+
+// IdentifierPart :: https://tc39.es/ecma262/#prod-IdentifierPart
+//          UnicodeIDContinue
+//          $
+//          \ UnicodeEscapeSequence
+//          <ZWNJ>
+//          <ZWJ>
+Optional<u32> Lexer::is_identifier_middle(size_t& identifier_length) const
+{
+    u32 code_point = current_code_point();
+    identifier_length = 1;
+
+    if (code_point == '\\') {
+        if (auto maybe_code_point = is_identifier_unicode_escape(identifier_length); maybe_code_point.has_value())
+            code_point = *maybe_code_point;
+        else
+            return {};
+    }
+
+    if (is_ascii_alphanumeric(code_point) || (code_point == '$') || (code_point == ZERO_WIDTH_NON_JOINER) || (code_point == ZERO_WIDTH_JOINER))
+        return code_point;
+
+    // Optimization: the first codepoint with the ID_Continue property after A-Za-z0-9_ is outside the
+    // ASCII range (0x00AA), so we can skip code_point_has_property() for any ASCII characters.
+    if (code_point == '_')
+        return code_point;
+    if (is_ascii(code_point))
+        return {};
+
+    static auto id_continue_category = Unicode::property_from_string("ID_Continue"sv);
+    if (id_continue_category.has_value() && Unicode::code_point_has_property(code_point, *id_continue_category))
+        return code_point;
+
+    return {};
 }
 
 bool Lexer::is_line_comment_start(bool line_has_token_yet) const
 {
     return match('/', '/')
-        || match('<', '!', '-', '-')
+        || (m_allow_html_comments && match('<', '!', '-', '-'))
         // "-->" is considered a line comment start if the current line is only whitespace and/or
         // other block comment(s); or in other words: the current line does not have a token or
         // ongoing line comment yet
-        || (match('-', '-', '>') && !line_has_token_yet);
+        || (m_allow_html_comments && !line_has_token_yet && match('-', '-', '>'))
+        // https://tc39.es/proposal-hashbang/out.html#sec-updated-syntax
+        || (match('#', '!') && m_position == 1);
 }
 
 bool Lexer::is_block_comment_start() const
@@ -334,9 +505,14 @@ bool Lexer::slash_means_division() const
         || type == TokenType::BracketClose
         || type == TokenType::CurlyClose
         || type == TokenType::Identifier
+        || type == TokenType::In
+        || type == TokenType::Instanceof
+        || type == TokenType::MinusMinus
         || type == TokenType::NullLiteral
         || type == TokenType::NumericLiteral
         || type == TokenType::ParenClose
+        || type == TokenType::PlusPlus
+        || type == TokenType::PrivateIdentifier
         || type == TokenType::RegexLiteral
         || type == TokenType::StringLiteral
         || type == TokenType::TemplateLiteralEnd
@@ -358,16 +534,17 @@ Token Lexer::next()
                 do {
                     consume();
                 } while (is_line_terminator());
-            } else if (is_ascii_space(m_current_char)) {
+            } else if (is_whitespace()) {
                 do {
                     consume();
-                } while (is_ascii_space(m_current_char));
+                } while (is_whitespace());
             } else if (is_line_comment_start(line_has_token_yet)) {
                 consume();
                 do {
                     consume();
                 } while (!is_eof() && !is_line_terminator());
             } else if (is_block_comment_start()) {
+                size_t start_line_number = m_line_number;
                 consume();
                 do {
                     consume();
@@ -378,6 +555,9 @@ Token Lexer::next()
                 if (is_eof())
                     unterminated_comment = true;
                 consume(); // consume /
+
+                if (start_line_number != m_line_number)
+                    line_has_token_yet = false;
             } else {
                 break;
             }
@@ -388,12 +568,16 @@ Token Lexer::next()
     size_t value_start_line_number = m_line_number;
     size_t value_start_column_number = m_line_column;
     auto token_type = TokenType::Invalid;
+    auto did_consume_whitespace_or_comments = trivia_start != value_start;
     // This is being used to communicate info about invalid tokens to the parser, which then
     // can turn that into more specific error messages - instead of us having to make up a
     // bunch of Invalid* tokens (bad numeric literals, unterminated comments etc.)
     String token_message;
 
-    if (m_current_token.type() == TokenType::RegexLiteral && !is_eof() && is_ascii_alpha(m_current_char)) {
+    Optional<FlyString> identifier;
+    size_t identifier_length = 0;
+
+    if (m_current_token.type() == TokenType::RegexLiteral && !is_eof() && is_ascii_alpha(m_current_char) && !did_consume_whitespace_or_comments) {
         token_type = TokenType::RegexFlags;
         while (!is_eof() && is_ascii_alpha(m_current_char))
             consume();
@@ -436,19 +620,51 @@ Token Lexer::next()
             else
                 token_type = TokenType::TemplateLiteralString;
         }
-    } else if (is_identifier_start()) {
-        // identifier or keyword
-        do {
-            consume();
-        } while (is_identifier_middle());
+    } else if (m_current_char == '#') {
+        // Note: This has some duplicated code with the identifier lexing below
+        consume();
+        auto code_point = is_identifier_start(identifier_length);
+        if (code_point.has_value()) {
+            StringBuilder builder;
+            builder.append_code_point('#');
+            do {
+                builder.append_code_point(*code_point);
+                for (size_t i = 0; i < identifier_length; ++i)
+                    consume();
 
-        StringView value = m_source.substring_view(value_start - 1, m_position - value_start);
-        auto it = s_keywords.find(value.hash(), [&](auto& entry) { return entry.key == value; });
-        if (it == s_keywords.end()) {
-            token_type = TokenType::Identifier;
+                code_point = is_identifier_middle(identifier_length);
+            } while (code_point.has_value());
+
+            identifier = builder.string_view();
+            token_type = TokenType::PrivateIdentifier;
+
+            m_parsed_identifiers->identifiers.set(*identifier);
         } else {
-            token_type = it->value;
+            token_type = TokenType::Invalid;
+            token_message = "Start of private name '#' but not followed by valid identifier";
         }
+    } else if (auto code_point = is_identifier_start(identifier_length); code_point.has_value()) {
+        bool has_escaped_character = false;
+        // identifier or keyword
+        StringBuilder builder;
+        do {
+            builder.append_code_point(*code_point);
+            for (size_t i = 0; i < identifier_length; ++i)
+                consume();
+
+            has_escaped_character |= identifier_length > 1;
+
+            code_point = is_identifier_middle(identifier_length);
+        } while (code_point.has_value());
+
+        identifier = builder.string_view();
+        m_parsed_identifiers->identifiers.set(*identifier);
+
+        auto it = s_keywords.find(identifier->hash(), [&](auto& entry) { return entry.key == identifier; });
+        if (it == s_keywords.end())
+            token_type = TokenType::Identifier;
+        else
+            token_type = has_escaped_character ? TokenType::EscapedKeyword : it->value;
     } else if (is_numeric_literal_start()) {
         token_type = TokenType::NumericLiteral;
         bool is_invalid_numeric_literal = false;
@@ -495,7 +711,7 @@ Token Lexer::next()
             }
         } else {
             // 1...9 or period
-            while (is_ascii_digit(m_current_char))
+            while (is_ascii_digit(m_current_char) || match_numeric_literal_separator_followed_by(is_ascii_digit))
                 consume();
             if (m_current_char == 'n') {
                 consume();
@@ -503,11 +719,15 @@ Token Lexer::next()
             } else {
                 if (m_current_char == '.') {
                     consume();
-                    while (is_ascii_digit(m_current_char))
+                    if (m_current_char == '_')
+                        is_invalid_numeric_literal = true;
+
+                    while (is_ascii_digit(m_current_char) || match_numeric_literal_separator_followed_by(is_ascii_digit)) {
                         consume();
+                    }
                 }
                 if (m_current_char == 'e' || m_current_char == 'E')
-                    is_invalid_numeric_literal = !consume_exponent();
+                    is_invalid_numeric_literal = is_invalid_numeric_literal || !consume_exponent();
             }
         }
         if (is_invalid_numeric_literal) {
@@ -521,6 +741,9 @@ Token Lexer::next()
         while (m_current_char != stop_char && m_current_char != '\r' && m_current_char != '\n' && !is_eof()) {
             if (m_current_char == '\\') {
                 consume();
+                if (m_current_char == '\r' && m_position < m_source.length() && m_source[m_position] == '\n') {
+                    consume();
+                }
             }
             consume();
         }
@@ -532,27 +755,7 @@ Token Lexer::next()
         }
     } else if (m_current_char == '/' && !slash_means_division()) {
         consume();
-        token_type = TokenType::RegexLiteral;
-
-        while (!is_eof()) {
-            if (m_current_char == '[') {
-                m_regex_is_in_character_class = true;
-            } else if (m_current_char == ']') {
-                m_regex_is_in_character_class = false;
-            } else if (!m_regex_is_in_character_class && m_current_char == '/') {
-                break;
-            }
-
-            if (match('\\', '/') || match('\\', '[') || match('\\', '\\') || (m_regex_is_in_character_class && match('\\', ']')))
-                consume();
-            consume();
-        }
-
-        if (is_eof()) {
-            token_type = TokenType::UnterminatedRegexLiteral;
-        } else {
-            consume();
-        }
+        token_type = consume_regex_literal();
     } else if (m_eof) {
         if (unterminated_comment) {
             token_type = TokenType::Invalid;
@@ -624,14 +827,32 @@ Token Lexer::next()
         }
     }
 
-    m_current_token = Token(
-        token_type,
-        token_message,
-        m_source.substring_view(trivia_start - 1, value_start - trivia_start),
-        m_source.substring_view(value_start - 1, m_position - value_start),
-        m_filename,
-        value_start_line_number,
-        value_start_column_number);
+    if (m_hit_invalid_unicode.has_value()) {
+        value_start = m_hit_invalid_unicode.value() - 1;
+        m_current_token = Token(TokenType::Invalid, "Invalid unicode codepoint in source",
+            "", // Since the invalid unicode can occur anywhere in the current token the trivia is not correct
+            m_source.substring_view(value_start + 1, min(4u, m_source.length() - value_start - 2)),
+            m_filename,
+            m_line_number,
+            m_line_column - 1,
+            value_start + 1);
+        m_hit_invalid_unicode.clear();
+        // Do not produce any further tokens.
+        VERIFY(is_eof());
+    } else {
+        m_current_token = Token(
+            token_type,
+            token_message,
+            m_source.substring_view(trivia_start - 1, value_start - trivia_start),
+            m_source.substring_view(value_start - 1, m_position - value_start),
+            m_filename,
+            value_start_line_number,
+            value_start_column_number,
+            value_start - 1);
+    }
+
+    if (identifier.has_value())
+        m_current_token.set_identifier_value(identifier.release_value());
 
     if constexpr (LEXER_DEBUG) {
         dbgln("------------------------------");
@@ -643,6 +864,72 @@ Token Lexer::next()
     }
 
     return m_current_token;
+}
+
+Token Lexer::force_slash_as_regex()
+{
+    VERIFY(m_current_token.type() == TokenType::Slash || m_current_token.type() == TokenType::SlashEquals);
+
+    bool has_equals = m_current_token.type() == TokenType::SlashEquals;
+
+    VERIFY(m_position > 0);
+    size_t value_start = m_position - 1;
+
+    if (has_equals) {
+        VERIFY(m_source[value_start - 1] == '=');
+        --value_start;
+        --m_position;
+        m_current_char = '=';
+    }
+
+    TokenType token_type = consume_regex_literal();
+
+    m_current_token = Token(
+        token_type,
+        "",
+        m_current_token.trivia(),
+        m_source.substring_view(value_start - 1, m_position - value_start),
+        m_filename,
+        m_current_token.line_number(),
+        m_current_token.line_column(),
+        value_start - 1);
+
+    if constexpr (LEXER_DEBUG) {
+        dbgln("------------------------------");
+        dbgln("Token: {}", m_current_token.name());
+        dbgln("Trivia: _{}_", m_current_token.trivia());
+        dbgln("Value: _{}_", m_current_token.value());
+        dbgln("Line: {}, Column: {}", m_current_token.line_number(), m_current_token.line_column());
+        dbgln("------------------------------");
+    }
+
+    return m_current_token;
+}
+
+TokenType Lexer::consume_regex_literal()
+{
+    while (!is_eof()) {
+        if (is_line_terminator() || (!m_regex_is_in_character_class && m_current_char == '/')) {
+            break;
+        } else if (m_current_char == '[') {
+            m_regex_is_in_character_class = true;
+        } else if (m_current_char == ']') {
+            m_regex_is_in_character_class = false;
+        } else if (!m_regex_is_in_character_class && m_current_char == '/') {
+            break;
+        }
+
+        if (match('\\', '/') || match('\\', '[') || match('\\', '\\') || (m_regex_is_in_character_class && match('\\', ']')))
+            consume();
+        consume();
+    }
+
+    if (m_current_char == '/') {
+        consume();
+        return TokenType::RegexLiteral;
+    }
+
+    return TokenType::UnterminatedRegexLiteral;
 }
 
 }

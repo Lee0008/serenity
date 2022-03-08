@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/Interrupts.h>
 #include <Kernel/Assertions.h>
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
-#include <Kernel/Interrupts/PIC.h>
 
 namespace Kernel {
 GenericInterruptHandler& GenericInterruptHandler::from(u8 interrupt_number)

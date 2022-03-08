@@ -5,16 +5,12 @@
  */
 
 #include <AK/Array.h>
-#include <AK/ByteBuffer.h>
 #include <AK/Debug.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
+#include <AK/IntegralMath.h>
 #include <AK/Memory.h>
 #include <AK/MemoryStream.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <LibGfx/GIFLoader.h>
-#include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 namespace Gfx {
@@ -84,27 +80,6 @@ struct GIFLoadingContext {
     RefPtr<Gfx::Bitmap> prev_frame_buffer;
 };
 
-RefPtr<Gfx::Bitmap> load_gif(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    GIFImageDecoderPlugin gif_decoder((const u8*)file_or_error.value()->data(), file_or_error.value()->size());
-    auto bitmap = gif_decoder.bitmap();
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded GIF: {}", bitmap->size(), LexicalPath::canonicalized_path(path)));
-    return bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_gif_from_memory(const u8* data, size_t length)
-{
-    GIFImageDecoderPlugin gif_decoder(data, length);
-    auto bitmap = gif_decoder.bitmap();
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded GIF: <memory>", bitmap->size()));
-    return bitmap;
-}
-
 enum class GIFFormat {
     GIF87a,
     GIF89a,
@@ -112,8 +87,8 @@ enum class GIFFormat {
 
 static Optional<GIFFormat> decode_gif_header(InputMemoryStream& stream)
 {
-    static const char valid_header_87[] = "GIF87a";
-    static const char valid_header_89[] = "GIF89a";
+    static auto valid_header_87 = "GIF87a"sv;
+    static auto valid_header_89 = "GIF89a"sv;
 
     Array<u8, 6> header;
     stream >> header;
@@ -121,9 +96,9 @@ static Optional<GIFFormat> decode_gif_header(InputMemoryStream& stream)
     if (stream.handle_any_error())
         return {};
 
-    if (header.span() == ReadonlyBytes { valid_header_87, 6 })
+    if (header.span() == valid_header_87.bytes())
         return GIFFormat::GIF87a;
-    if (header.span() == ReadonlyBytes { valid_header_89, 6 })
+    if (header.span() == valid_header_89.bytes())
         return GIFFormat::GIF89a;
 
     return {};
@@ -138,7 +113,7 @@ public:
         : m_lzw_bytes(lzw_bytes)
         , m_code_size(min_code_size)
         , m_original_code_size(min_code_size)
-        , m_table_capacity(pow(2, min_code_size))
+        , m_table_capacity(AK::exp2<u32>(min_code_size))
     {
         init_code_table();
     }
@@ -162,7 +137,7 @@ public:
         m_code_table.clear();
         m_code_table.extend(m_original_code_table);
         m_code_size = m_original_code_size;
-        m_table_capacity = pow(2, m_code_size);
+        m_table_capacity = AK::exp2<u32>(m_code_size);
         m_output.clear();
     }
 
@@ -230,9 +205,9 @@ public:
 private:
     void init_code_table()
     {
-        m_code_table.clear();
+        m_code_table.ensure_capacity(m_table_capacity);
         for (u16 i = 0; i < m_table_capacity; ++i) {
-            m_code_table.append({ (u8)i });
+            m_code_table.unchecked_append({ (u8)i });
         }
         m_original_code_table = m_code_table;
     }
@@ -272,16 +247,15 @@ static void copy_frame_buffer(Bitmap& dest, const Bitmap& src)
 
 static void clear_rect(Bitmap& bitmap, const IntRect& rect, Color color)
 {
-    if (rect.is_empty())
+    auto intersection_rect = rect.intersected(bitmap.rect());
+    if (intersection_rect.is_empty())
         return;
 
-    VERIFY(bitmap.rect().contains(rect));
+    ARGB32* dst = bitmap.scanline(intersection_rect.top()) + intersection_rect.left();
+    const size_t dst_skip = bitmap.pitch() / sizeof(ARGB32);
 
-    RGBA32* dst = bitmap.scanline(rect.top()) + rect.left();
-    const size_t dst_skip = bitmap.pitch() / sizeof(RGBA32);
-
-    for (int i = rect.height() - 1; i >= 0; --i) {
-        fast_u32_fill(dst, color.value(), rect.width());
+    for (int i = intersection_rect.height() - 1; i >= 0; --i) {
+        fast_u32_fill(dst, color.value(), intersection_rect.width());
         dst += dst_skip;
     }
 }
@@ -299,12 +273,18 @@ static bool decode_frame(GIFLoadingContext& context, size_t frame_index)
     size_t start_frame = context.current_frame + 1;
     if (context.state < GIFLoadingContext::State::FrameComplete) {
         start_frame = 0;
-        context.frame_buffer = Bitmap::create_purgeable(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
-        if (!context.frame_buffer)
-            return false;
-        context.prev_frame_buffer = Bitmap::create_purgeable(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
-        if (!context.prev_frame_buffer)
-            return false;
+        {
+            auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
+            if (bitmap_or_error.is_error())
+                return false;
+            context.frame_buffer = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+        }
+        {
+            auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
+            if (bitmap_or_error.is_error())
+                return false;
+            context.prev_frame_buffer = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+        }
     } else if (frame_index < context.current_frame) {
         start_frame = 0;
     }
@@ -336,6 +316,9 @@ static bool decode_frame(GIFLoadingContext& context, size_t frame_index)
             // underlying image contents, therefore we restore the saved previous frame buffer.
             copy_frame_buffer(*context.frame_buffer, *context.prev_frame_buffer);
         }
+
+        if (image.lzw_min_code_size > 8)
+            return false;
 
         LZWDecoder decoder(image.lzw_encoded_bytes, image.lzw_min_code_size);
 
@@ -563,7 +546,7 @@ static bool load_gif_frame_descriptors(GIFLoadingContext& context)
             image.interlaced = (packed_fields & 0x40) != 0;
 
             if (!image.use_global_color_map) {
-                size_t local_color_table_size = pow(2, (packed_fields & 7) + 1);
+                size_t local_color_table_size = AK::exp2<size_t>((packed_fields & 7) + 1);
 
                 for (size_t i = 0; i < local_color_table_size; ++i) {
                     u8 r = 0;
@@ -640,14 +623,6 @@ IntSize GIFImageDecoderPlugin::size()
     return { m_context->logical_screen.width, m_context->logical_screen.height };
 }
 
-RefPtr<Gfx::Bitmap> GIFImageDecoderPlugin::bitmap()
-{
-    if (m_context->state < GIFLoadingContext::State::FrameComplete) {
-        return frame(0).image;
-    }
-    return m_context->frame_buffer;
-}
-
 void GIFImageDecoderPlugin::set_volatile()
 {
     if (m_context->frame_buffer) {
@@ -655,12 +630,11 @@ void GIFImageDecoderPlugin::set_volatile()
     }
 }
 
-bool GIFImageDecoderPlugin::set_nonvolatile()
+bool GIFImageDecoderPlugin::set_nonvolatile(bool& was_purged)
 {
-    if (!m_context->frame_buffer) {
-        return true;
-    }
-    return m_context->frame_buffer->set_nonvolatile();
+    if (!m_context->frame_buffer)
+        return false;
+    return m_context->frame_buffer->set_nonvolatile(was_purged);
 }
 
 bool GIFImageDecoderPlugin::sniff()
@@ -717,30 +691,30 @@ size_t GIFImageDecoderPlugin::frame_count()
     return m_context->images.size();
 }
 
-ImageFrameDescriptor GIFImageDecoderPlugin::frame(size_t i)
+ErrorOr<ImageFrameDescriptor> GIFImageDecoderPlugin::frame(size_t index)
 {
     if (m_context->error_state >= GIFLoadingContext::ErrorState::FailedToDecodeAnyFrame) {
-        return {};
+        return Error::from_string_literal("GIFImageDecoderPlugin: Decoding failed"sv);
     }
 
     if (m_context->state < GIFLoadingContext::State::FrameDescriptorsLoaded) {
         if (!load_gif_frame_descriptors(*m_context)) {
             m_context->error_state = GIFLoadingContext::ErrorState::FailedToLoadFrameDescriptors;
-            return {};
+            return Error::from_string_literal("GIFImageDecoderPlugin: Decoding failed"sv);
         }
     }
 
-    if (m_context->error_state == GIFLoadingContext::ErrorState::NoError && !decode_frame(*m_context, i)) {
+    if (m_context->error_state == GIFLoadingContext::ErrorState::NoError && !decode_frame(*m_context, index)) {
         if (m_context->state < GIFLoadingContext::State::FrameComplete || !decode_frame(*m_context, 0)) {
             m_context->error_state = GIFLoadingContext::ErrorState::FailedToDecodeAnyFrame;
-            return {};
+            return Error::from_string_literal("GIFImageDecoderPlugin: Decoding failed"sv);
         }
         m_context->error_state = GIFLoadingContext::ErrorState::FailedToDecodeAllFrames;
     }
 
     ImageFrameDescriptor frame {};
-    frame.image = m_context->frame_buffer->clone();
-    frame.duration = m_context->images.at(i).duration * 10;
+    frame.image = TRY(m_context->frame_buffer->clone());
+    frame.duration = m_context->images.at(index).duration * 10;
 
     if (frame.duration <= 10) {
         frame.duration = 100;

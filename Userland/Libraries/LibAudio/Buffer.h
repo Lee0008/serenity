@@ -1,134 +1,75 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include "AK/TypedTransfer.h"
 #include <AK/ByteBuffer.h>
+#include <AK/Error.h>
+#include <AK/FixedArray.h>
 #include <AK/MemoryStream.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/RefPtr.h>
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
+#include <AK/kmalloc.h>
+#include <LibAudio/Resampler.h>
+#include <LibAudio/Sample.h>
+#include <LibAudio/SampleFormats.h>
 #include <LibCore/AnonymousBuffer.h>
 #include <string.h>
 
 namespace Audio {
+using namespace AK::Exponentials;
 
-// A single sample in an audio buffer.
-// Values are floating point, and should range from -1.0 to +1.0
-struct Frame {
-    Frame()
-        : left(0)
-        , right(0)
-    {
-    }
-
-    // For mono
-    Frame(double left)
-        : left(left)
-        , right(left)
-    {
-    }
-
-    // For stereo
-    Frame(double left, double right)
-        : left(left)
-        , right(right)
-    {
-    }
-
-    void clip()
-    {
-        if (left > 1)
-            left = 1;
-        else if (left < -1)
-            left = -1;
-
-        if (right > 1)
-            right = 1;
-        else if (right < -1)
-            right = -1;
-    }
-
-    void scale(int percent)
-    {
-        double pct = (double)percent / 100.0;
-        left *= pct;
-        right *= pct;
-    }
-
-    Frame& operator+=(const Frame& other)
-    {
-        left += other.left;
-        right += other.right;
-        return *this;
-    }
-
-    double left;
-    double right;
-};
-
-// Supported PCM sample formats.
-enum PcmSampleFormat : u8 {
-    Uint8,
-    Int16,
-    Int24,
-    Float32,
-    Float64,
-};
-
-// Most of the read code only cares about how many bits to read or write
-u16 pcm_bits_per_sample(PcmSampleFormat format);
-String sample_format_name(PcmSampleFormat format);
-
-// Small helper to resample from one playback rate to another
-// This isn't really "smart", in that we just insert (or drop) samples.
-// Should do better...
-class ResampleHelper {
-public:
-    ResampleHelper(double source, double target);
-
-    void process_sample(double sample_l, double sample_r);
-    bool read_sample(double& next_l, double& next_r);
-
-private:
-    const double m_ratio;
-    double m_current_ratio { 0 };
-    double m_last_sample_l { 0 };
-    double m_last_sample_r { 0 };
-};
-
-// A buffer of audio samples, normalized to 44100hz.
+// A buffer of audio samples.
 class Buffer : public RefCounted<Buffer> {
 public:
-    static RefPtr<Buffer> from_pcm_data(ReadonlyBytes data, ResampleHelper& resampler, int num_channels, PcmSampleFormat sample_format);
-    static RefPtr<Buffer> from_pcm_stream(InputMemoryStream& stream, ResampleHelper& resampler, int num_channels, PcmSampleFormat sample_format, int num_samples);
-    static NonnullRefPtr<Buffer> create_with_samples(Vector<Frame>&& samples)
+    static ErrorOr<NonnullRefPtr<Buffer>> from_pcm_data(ReadonlyBytes data, int num_channels, PcmSampleFormat sample_format);
+    static ErrorOr<NonnullRefPtr<Buffer>> from_pcm_stream(InputMemoryStream& stream, int num_channels, PcmSampleFormat sample_format, int num_samples);
+    template<ArrayLike<Sample> ArrayT>
+    static ErrorOr<NonnullRefPtr<Buffer>> create_with_samples(ArrayT&& samples)
     {
-        return adopt_ref(*new Buffer(move(samples)));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) Buffer(move(samples)));
     }
-    static NonnullRefPtr<Buffer> create_with_anonymous_buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
+    static ErrorOr<NonnullRefPtr<Buffer>> create_with_anonymous_buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
     {
-        return adopt_ref(*new Buffer(move(buffer), buffer_id, sample_count));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) Buffer(move(buffer), buffer_id, sample_count));
+    }
+    static NonnullRefPtr<Buffer> create_empty()
+    {
+        // If we can't allocate an empty buffer, things are in a very bad state.
+        return MUST(adopt_nonnull_ref_or_enomem(new (nothrow) Buffer));
     }
 
-    const Frame* samples() const { return (const Frame*)data(); }
+    Sample const* samples() const { return (const Sample*)data(); }
+
+    ErrorOr<FixedArray<Sample>> to_sample_array() const
+    {
+        FixedArray<Sample> samples = TRY(FixedArray<Sample>::try_create(m_sample_count));
+        AK::TypedTransfer<Sample>::copy(samples.data(), this->samples(), m_sample_count);
+        return samples;
+    }
+
     int sample_count() const { return m_sample_count; }
-    const void* data() const { return m_buffer.data<void>(); }
-    int size_in_bytes() const { return m_sample_count * (int)sizeof(Frame); }
+    void const* data() const { return m_buffer.data<void>(); }
+    int size_in_bytes() const { return m_sample_count * (int)sizeof(Sample); }
     int id() const { return m_id; }
-    const Core::AnonymousBuffer& anonymous_buffer() const { return m_buffer; }
+    Core::AnonymousBuffer const& anonymous_buffer() const { return m_buffer; }
 
 private:
-    explicit Buffer(const Vector<Frame> samples)
-        : m_buffer(Core::AnonymousBuffer::create_with_size(samples.size() * sizeof(Frame)))
+    template<ArrayLike<Sample> ArrayT>
+    explicit Buffer(ArrayT&& samples)
+        : m_buffer(Core::AnonymousBuffer::create_with_size(samples.size() * sizeof(Sample)).release_value())
         , m_id(allocate_id())
         , m_sample_count(samples.size())
     {
-        memcpy(m_buffer.data<void>(), samples.data(), samples.size() * sizeof(Frame));
+        memcpy(m_buffer.data<void>(), samples.data(), samples.size() * sizeof(Sample));
     }
 
     explicit Buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
@@ -138,11 +79,17 @@ private:
     {
     }
 
+    // Empty Buffer representation, to avoid tiny anonymous buffers in EOF states
+    Buffer() = default;
+
     static i32 allocate_id();
 
     Core::AnonymousBuffer m_buffer;
-    const i32 m_id;
-    const int m_sample_count;
+    const i32 m_id { -1 };
+    const int m_sample_count { 0 };
 };
+
+// This only works for double resamplers, and therefore cannot be part of the class
+ErrorOr<NonnullRefPtr<Buffer>> resample_buffer(ResampleHelper<double>& resampler, Buffer const& to_resample);
 
 }

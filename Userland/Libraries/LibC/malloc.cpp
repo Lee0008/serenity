@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BuiltinWrappers.h>
 #include <AK/Debug.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/Vector.h>
 #include <LibELF/AuxiliaryVector.h>
-#include <LibThreading/Lock.h>
 #include <assert.h>
 #include <errno.h>
 #include <mallocdefs.h>
+#include <pthread.h>
 #include <serenity.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,15 +21,30 @@
 #include <sys/mman.h>
 #include <syscall.h>
 
-// FIXME: Thread safety.
+class PthreadMutexLocker {
+public:
+    ALWAYS_INLINE explicit PthreadMutexLocker(pthread_mutex_t& mutex)
+        : m_mutex(mutex)
+    {
+        lock();
+        __heap_is_stable = false;
+    }
+    ALWAYS_INLINE ~PthreadMutexLocker()
+    {
+        __heap_is_stable = true;
+        unlock();
+    }
+    ALWAYS_INLINE void lock() { pthread_mutex_lock(&m_mutex); }
+    ALWAYS_INLINE void unlock() { pthread_mutex_unlock(&m_mutex); }
+
+private:
+    pthread_mutex_t& m_mutex;
+};
 
 #define RECYCLE_BIG_ALLOCATIONS
 
-static Threading::Lock& malloc_lock()
-{
-    static u32 lock_storage[sizeof(Threading::Lock) / sizeof(u32)];
-    return *reinterpret_cast<Threading::Lock*>(&lock_storage);
-}
+static pthread_mutex_t s_malloc_mutex = PTHREAD_MUTEX_INITIALIZER;
+bool __heap_is_stable = true;
 
 constexpr size_t number_of_hot_chunked_blocks_to_keep_around = 16;
 constexpr size_t number_of_cold_chunked_blocks_to_keep_around = 16;
@@ -63,6 +79,19 @@ ALWAYS_INLINE static void ue_notify_chunk_size_changed(const void* block, size_t
     if (s_in_userspace_emulator)
         syscall(SC_emuctl, 4, chunk_size, (FlatPtr)block);
 }
+
+struct MemoryAuditingSuppressor {
+    ALWAYS_INLINE MemoryAuditingSuppressor()
+    {
+        if (s_in_userspace_emulator)
+            syscall(SC_emuctl, 7);
+    }
+    ALWAYS_INLINE ~MemoryAuditingSuppressor()
+    {
+        if (s_in_userspace_emulator)
+            syscall(SC_emuctl, 8);
+    }
+};
 
 struct MallocStats {
     size_t number_of_malloc_calls;
@@ -111,8 +140,8 @@ struct BigAllocator {
 // are run. Similarly, we can not allow global destructors to destruct
 // them. We could have used AK::NeverDestoyed to prevent the latter,
 // but it would have not helped with the former.
-static u8 g_allocators_storage[sizeof(Allocator) * num_size_classes];
-static u8 g_big_allocators_storage[sizeof(BigAllocator)];
+alignas(Allocator) static u8 g_allocators_storage[sizeof(Allocator) * num_size_classes];
+alignas(BigAllocator) static u8 g_big_allocators_storage[sizeof(BigAllocator)];
 
 static inline Allocator (&allocators())[num_size_classes]
 {
@@ -149,8 +178,16 @@ extern "C" {
 
 static void* os_alloc(size_t size, const char* name)
 {
-    auto* ptr = serenity_mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0, ChunkedBlock::block_size, name);
-    VERIFY(ptr != MAP_FAILED);
+    int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_PURGEABLE;
+#if ARCH(X86_64)
+    flags |= MAP_RANDOMIZED;
+#endif
+    auto* ptr = serenity_mmap(nullptr, size, PROT_READ | PROT_WRITE, flags, 0, 0, ChunkedBlock::block_size, name);
+    VERIFY(ptr != nullptr);
+    if (ptr == MAP_FAILED) {
+        errno = ENOMEM;
+        return nullptr;
+    }
     return ptr;
 }
 
@@ -165,9 +202,17 @@ enum class CallerWillInitializeMemory {
     Yes,
 };
 
+#ifndef NO_TLS
+// HACK: This is a __thread - marked thread-local variable. If we initialize it globally here, VERY weird errors happen.
+// The initialization happens in __malloc_init() and pthread_create_helper().
+__thread bool s_allocation_enabled;
+#endif
+
 static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_initialize_memory)
 {
-    Threading::Locker locker(malloc_lock());
+#ifndef NO_TLS
+    VERIFY(s_allocation_enabled);
+#endif
 
     if (s_log_malloc)
         dbgln("LibC: malloc({})", size);
@@ -183,8 +228,15 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
     size_t good_size;
     auto* allocator = allocator_for_size(size, good_size);
 
+    PthreadMutexLocker locker(s_malloc_mutex);
+
     if (!allocator) {
         size_t real_size = round_up_to_power_of_two(sizeof(BigAllocationBlock) + size, ChunkedBlock::block_size);
+        if (real_size < size) {
+            dbgln_if(MALLOC_DEBUG, "LibC: Detected overflow trying to do big allocation of size {} for {}", real_size, size);
+            errno = ENOMEM;
+            return nullptr;
+        }
 #ifdef RECYCLE_BIG_ALLOCATIONS
         if (auto* allocator = big_allocator_for_size(real_size)) {
             if (!allocator->blocks.is_empty()) {
@@ -210,8 +262,12 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
             }
         }
 #endif
-        g_malloc_stats.number_of_big_allocs++;
         auto* block = (BigAllocationBlock*)os_alloc(real_size, "malloc: BigAllocationBlock");
+        if (block == nullptr) {
+            dbgln_if(MALLOC_DEBUG, "LibC: Failed to do big allocation of size {} for {}", real_size, size);
+            return nullptr;
+        }
+        g_malloc_stats.number_of_big_allocs++;
         new (block) BigAllocationBlock(real_size);
         ue_notify_malloc(&block->m_slot[0], size);
         return &block->m_slot[0];
@@ -266,6 +322,9 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "malloc: ChunkedBlock(%zu)", good_size);
         block = (ChunkedBlock*)os_alloc(ChunkedBlock::block_size, buffer);
+        if (block == nullptr) {
+            return nullptr;
+        }
         new (block) ChunkedBlock(good_size);
         allocator->usable_blocks.append(*block);
         ++allocator->block_count;
@@ -297,6 +356,10 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
 
 static void free_impl(void* ptr)
 {
+#ifndef NO_TLS
+    VERIFY(s_allocation_enabled);
+#endif
+
     ScopedValueRollback rollback(errno);
 
     if (!ptr)
@@ -304,10 +367,10 @@ static void free_impl(void* ptr)
 
     g_malloc_stats.number_of_free_calls++;
 
-    Threading::Locker locker(malloc_lock());
-
     void* block_base = (void*)((FlatPtr)ptr & ChunkedBlock::ChunkedBlock::block_mask);
     size_t magic = *(size_t*)block_base;
+
+    PthreadMutexLocker locker(s_malloc_mutex);
 
     if (magic == MAGIC_BIGALLOC_HEADER) {
         auto* block = (BigAllocationBlock*)block_base;
@@ -384,24 +447,71 @@ static void free_impl(void* ptr)
     }
 }
 
-[[gnu::flatten]] void* malloc(size_t size)
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/malloc.html
+void* malloc(size_t size)
 {
+    MemoryAuditingSuppressor suppressor;
     void* ptr = malloc_impl(size, CallerWillInitializeMemory::No);
     if (s_profiling)
         perf_event(PERF_EVENT_MALLOC, size, reinterpret_cast<FlatPtr>(ptr));
     return ptr;
 }
 
-[[gnu::flatten]] void free(void* ptr)
+// This is a Microsoft extension, and is not found on other Unix-like systems.
+// FIXME: Implement aligned_alloc() instead
+//
+// This is used in libc++ to implement C++17 aligned new/delete.
+//
+// Both Unix-y alternatives to _aligned_malloc(), the C11 aligned_alloc() and
+// posix_memalign() say that the resulting pointer can be deallocated with
+// regular free(), which means that the allocator has to keep track of the
+// requested alignments. By contrast, _aligned_malloc() is paired with
+// _aligned_free(), so it can be easily implemented on top of malloc().
+void* _aligned_malloc(size_t size, size_t alignment)
 {
+    if (popcount(alignment) != 1) {
+        errno = EINVAL;
+        return nullptr;
+    }
+    alignment = max(alignment, sizeof(void*));
+    if (Checked<size_t>::addition_would_overflow(size, alignment)) {
+        errno = ENOMEM;
+        return nullptr;
+    }
+    void* ptr = malloc(size + alignment);
+    if (!ptr) {
+        errno = ENOMEM;
+        return nullptr;
+    }
+    auto aligned_ptr = (void*)(((FlatPtr)ptr + alignment) & ~(alignment - 1));
+    ((void**)aligned_ptr)[-1] = ptr;
+    return aligned_ptr;
+}
+
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/free.html
+void free(void* ptr)
+{
+    MemoryAuditingSuppressor suppressor;
     if (s_profiling)
         perf_event(PERF_EVENT_FREE, reinterpret_cast<FlatPtr>(ptr), 0);
     ue_notify_free(ptr);
     free_impl(ptr);
 }
 
+void _aligned_free(void* ptr)
+{
+    if (ptr)
+        free(((void**)ptr)[-1]);
+}
+
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/calloc.html
 void* calloc(size_t count, size_t size)
 {
+    MemoryAuditingSuppressor suppressor;
+    if (Checked<size_t>::multiplication_would_overflow(count, size)) {
+        errno = ENOMEM;
+        return nullptr;
+    }
     size_t new_size = count * size;
     auto* ptr = malloc_impl(new_size, CallerWillInitializeMemory::Yes);
     if (ptr)
@@ -409,16 +519,16 @@ void* calloc(size_t count, size_t size)
     return ptr;
 }
 
-size_t malloc_size(void* ptr)
+size_t malloc_size(void const* ptr)
 {
+    MemoryAuditingSuppressor suppressor;
     if (!ptr)
         return 0;
-    Threading::Locker locker(malloc_lock());
     void* page_base = (void*)((FlatPtr)ptr & ChunkedBlock::block_mask);
     auto* header = (const CommonHeader*)page_base;
     auto size = header->m_size;
     if (header->m_magic == MAGIC_BIGALLOC_HEADER)
-        size -= sizeof(CommonHeader);
+        size -= sizeof(BigAllocationBlock);
     else
         VERIFY(header->m_magic == MAGIC_PAGE_HEADER);
     return size;
@@ -433,6 +543,7 @@ size_t malloc_good_size(size_t size)
 
 void* realloc(void* ptr, size_t size)
 {
+    MemoryAuditingSuppressor suppressor;
     if (!ptr)
         return malloc(size);
     if (!size) {
@@ -440,7 +551,6 @@ void* realloc(void* ptr, size_t size)
         return nullptr;
     }
 
-    Threading::Locker locker(malloc_lock());
     auto existing_allocation_size = malloc_size(ptr);
 
     if (size <= existing_allocation_size) {
@@ -457,7 +567,11 @@ void* realloc(void* ptr, size_t size)
 
 void __malloc_init()
 {
-    new (&malloc_lock()) Threading::Lock();
+#ifndef NO_TLS
+    // HACK: This is a __thread - marked thread-local variable. If we initialize it globally, VERY weird errors happen.
+    // Therefore, we need to do the initialization here and in pthread_create_helper().
+    s_allocation_enabled = true;
+#endif
 
     s_in_userspace_emulator = (int)syscall(SC_emuctl, 0) != -ENOSYS;
     if (s_in_userspace_emulator) {

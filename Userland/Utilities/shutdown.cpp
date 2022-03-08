@@ -1,28 +1,24 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
+ * Copyright (c) 2022, Alex Major
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibCore/ArgsParser.h>
+#include <LibCore/Stream.h>
+#include <LibMain/Main.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    bool now = false;
+    auto file = TRY(Core::Stream::File::open("/sys/firmware/power_state", Core::Stream::OpenMode::Write));
 
-    Core::ArgsParser args_parser;
-    args_parser.add_option(now, "Shut down now", "now", 'n');
-    args_parser.parse(argc, argv);
+    const String file_contents = "2";
+    TRY(file->write(file_contents.bytes()));
+    file->close();
 
-    if (now) {
-        if (halt() < 0) {
-            perror("shutdown");
-            return 1;
-        }
-    } else {
-        args_parser.print_usage(stderr, argv[0]);
-        return 1;
-    }
+    return 0;
 }

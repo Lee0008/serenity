@@ -1,3 +1,8 @@
+serenity_component(
+    Calendar
+    TARGETS Calendar
+)
+
 compile_gml(CalendarWindow.gml CalendarWindowGML.h calendar_window_gml)
 
 set(SOURCES
@@ -7,4 +12,4 @@ set(SOURCES
 )
 
 serenity_app(Calendar ICON app-calendar)
-target_link_libraries(Calendar LibGUI)
+target_link_libraries(Calendar LibGUI LibMain)

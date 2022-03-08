@@ -33,9 +33,16 @@
 #pragma once
 
 #ifndef KERNEL
+#    include <stdint.h>
 #    include <sys/types.h>
 #else
 #    include <AK/Types.h>
+#endif
+
+#ifdef __x86_64__
+#    define ElfW(type) Elf64_##type
+#else
+#    define ElfW(type) Elf32_##type
 #endif
 
 typedef uint8_t Elf_Byte;
@@ -270,6 +277,7 @@ typedef struct {
 #define SHT_PREINIT_ARRAY 16        /* ptrs to funcs called before init */
 #define SHT_GROUP 17                /* defines a section group */
 #define SHT_SYMTAB_SHNDX 18         /* Section indices (see SHN_XINDEX). */
+#define SHT_RELR 19                 /* relative-only relocation section */
 #define SHT_LOOS 0x60000000         /* reserved range for OS specific */
 #define SHT_SUNW_dof 0x6ffffff4     /* used by dtrace */
 #define SHT_GNU_LIBLIST 0x6ffffff7  /* libraries to be prelinked */
@@ -433,6 +441,9 @@ typedef struct {
 #    define ELF64_R_INFO(s, t) (((uint64_t)swap32(t) << 32) + (uint32_t)(s))
 #endif /* __mips64__ && __MIPSEL__ */
 
+typedef Elf32_Word Elf32_Relr;
+typedef Elf64_Xword Elf64_Relr;
+
 /* Program Header */
 typedef struct {
     Elf32_Word p_type;   /* segment type */
@@ -538,6 +549,9 @@ typedef struct {
 #define DT_ENCODING 31        /* further DT_* follow encoding rules */
 #define DT_PREINIT_ARRAY 32   /* address of array of preinit func */
 #define DT_PREINIT_ARRAYSZ 33 /* size of array of preinit func */
+#define DT_RELRSZ 35          /* size of DT_RELR relocation table */
+#define DT_RELR 36            /* addr of DT_RELR relocation table */
+#define DT_RELRENT 37         /* size of DT_RELR relocation entry */
 #define DT_LOOS 0x6000000d    /* reserved range for OS */
 #define DT_HIOS 0x6ffff000    /*  specific dynamic array tags */
 #define DT_LOPROC 0x70000000  /* reserved range for processor */
@@ -545,9 +559,14 @@ typedef struct {
 
 /* some other useful tags */
 #define DT_GNU_HASH 0x6ffffef5  /* address of GNU hash table */
+#define DT_VERSYM 0x6ffffff0    /* address of table provided by .gnu.version */
 #define DT_RELACOUNT 0x6ffffff9 /* if present, number of RELATIVE */
 #define DT_RELCOUNT 0x6ffffffa  /* relocs, which must come first */
 #define DT_FLAGS_1 0x6ffffffb
+#define DT_VERDEF 0x6ffffffc       /* address of version definition table */
+#define DT_VERDEFNUM 0x6ffffffd    /* number of version definitions */
+#define DT_VERNEEDED 0x6ffffffe    /* address of the dependency table */
+#define DT_VERNEEDEDNUM 0x6fffffff /* number of entries in VERNEEDED */
 
 /* Dynamic Flags - DT_FLAGS .dynamic entry */
 #define DF_ORIGIN 0x00000001
@@ -728,6 +747,7 @@ struct elf_args {
 #    define Elf_Sym Elf32_Sym
 #    define Elf_Rel Elf32_Rel
 #    define Elf_RelA Elf32_Rela
+#    define Elf_Relr Elf32_Relr
 #    define Elf_Dyn Elf32_Dyn
 #    define Elf_Half Elf32_Half
 #    define Elf_Word Elf32_Word
@@ -755,6 +775,7 @@ struct elf_args {
 #    define Elf_Sym Elf64_Sym
 #    define Elf_Rel Elf64_Rel
 #    define Elf_RelA Elf64_Rela
+#    define Elf_Relr Elf64_Relr
 #    define Elf_Dyn Elf64_Dyn
 #    define Elf_Half Elf64_Half
 #    define Elf_Word Elf64_Word
@@ -797,3 +818,4 @@ struct elf_args {
 #define R_X86_64_GLOB_DAT 6
 #define R_X86_64_JUMP_SLOT 7
 #define R_X86_64_RELATIVE 8
+#define R_X86_64_TPOFF64 18

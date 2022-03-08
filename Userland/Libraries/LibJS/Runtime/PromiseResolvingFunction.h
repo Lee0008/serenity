@@ -25,7 +25,7 @@ class PromiseResolvingFunction final : public NativeFunction {
     JS_OBJECT(PromiseResolvingFunction, NativeFunction);
 
 public:
-    using FunctionType = AK::Function<Value(VM&, GlobalObject&, Promise&, AlreadyResolved&)>;
+    using FunctionType = Function<ThrowCompletionOr<Value>(VM&, GlobalObject&, Promise&, AlreadyResolved&)>;
 
     static PromiseResolvingFunction* create(GlobalObject&, Promise&, AlreadyResolved&, FunctionType);
 
@@ -33,7 +33,7 @@ public:
     virtual void initialize(GlobalObject&) override;
     virtual ~PromiseResolvingFunction() override = default;
 
-    virtual Value call() override;
+    virtual ThrowCompletionOr<Value> call() override;
 
 private:
     virtual void visit_edges(Visitor&) override;

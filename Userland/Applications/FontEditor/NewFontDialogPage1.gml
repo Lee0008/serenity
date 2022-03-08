@@ -1,16 +1,14 @@
 @GUI::Widget {
     layout: @GUI::VerticalBoxLayout {
-        margins: [20, 20, 20, 20]
+        margins: [20]
     }
 
     @GUI::Widget {
         fixed_height: 160
-        layout: @GUI::VerticalBoxLayout {
-        }
+        layout: @GUI::VerticalBoxLayout {}
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Label {
                 fixed_width: 100
@@ -24,8 +22,7 @@
         }
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Label {
                 fixed_width: 100
@@ -43,31 +40,7 @@
         }
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
-
-            @GUI::Label {
-                fixed_width: 100
-                text_alignment: "CenterLeft"
-                text: "Type:"
-            }
-
-            @GUI::ComboBox {
-                name: "type_combobox"
-                fixed_width: 180
-                model_only: true
-            }
-
-            @GUI::Label {
-                name: "type_info_label"
-                text_alignment: "CenterLeft"
-                autosize: true
-            }
-        }
-
-        @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Label {
                 text: "Weight:"
@@ -83,8 +56,23 @@
         }
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
+            layout: @GUI::HorizontalBoxLayout {}
+
+            @GUI::Label {
+                fixed_width: 100
+                text_alignment: "CenterLeft"
+                text: "Slope:"
             }
+
+            @GUI::ComboBox {
+                name: "slope_combobox"
+                fixed_width: 180
+                model_only: true
+            }
+        }
+
+        @GUI::Widget {
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Label {
                 fixed_width: 100

@@ -5,30 +5,30 @@
  */
 
 #include <AK/NonnullRefPtrVector.h>
+#include <Kernel/Memory/AnonymousVMObject.h>
+#include <Kernel/Memory/InodeVMObject.h>
+#include <Kernel/Memory/MemoryManager.h>
 #include <Kernel/Process.h>
-#include <Kernel/VM/AnonymousVMObject.h>
-#include <Kernel/VM/InodeVMObject.h>
-#include <Kernel/VM/MemoryManager.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$purge(int mode)
+ErrorOr<FlatPtr> Process::sys$purge(int mode)
 {
-    REQUIRE_NO_PROMISES;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_no_promises());
     if (!is_superuser())
         return EPERM;
-    int purged_page_count = 0;
+    size_t purged_page_count = 0;
     if (mode & PURGE_ALL_VOLATILE) {
-        NonnullRefPtrVector<AnonymousVMObject> vmobjects;
+        NonnullRefPtrVector<Memory::AnonymousVMObject> vmobjects;
         {
-            KResult result(KSuccess);
-            InterruptDisabler disabler;
-            MM.for_each_vmobject([&](auto& vmobject) {
+            ErrorOr<void> result;
+            Memory::MemoryManager::for_each_vmobject([&](auto& vmobject) {
                 if (vmobject.is_anonymous()) {
                     // In the event that the append fails, only attempt to continue
                     // the purge if we have already appended something successfully.
-                    if (!vmobjects.try_append(vmobject) && vmobjects.is_empty()) {
-                        result = ENOMEM;
+                    if (auto append_result = vmobjects.try_append(static_cast<Memory::AnonymousVMObject&>(vmobject)); append_result.is_error() && vmobjects.is_empty()) {
+                        result = append_result.release_error();
                         return IterationDecision::Break;
                     }
                 }
@@ -36,23 +36,22 @@ KResultOr<int> Process::sys$purge(int mode)
             });
 
             if (result.is_error())
-                return result.error();
+                return result.release_error();
         }
         for (auto& vmobject : vmobjects) {
             purged_page_count += vmobject.purge();
         }
     }
     if (mode & PURGE_ALL_CLEAN_INODE) {
-        NonnullRefPtrVector<InodeVMObject> vmobjects;
+        NonnullRefPtrVector<Memory::InodeVMObject> vmobjects;
         {
-            KResult result(KSuccess);
-            InterruptDisabler disabler;
-            MM.for_each_vmobject([&](auto& vmobject) {
+            ErrorOr<void> result;
+            Memory::MemoryManager::for_each_vmobject([&](auto& vmobject) {
                 if (vmobject.is_inode()) {
                     // In the event that the append fails, only attempt to continue
                     // the purge if we have already appended something successfully.
-                    if (!vmobjects.try_append(static_cast<InodeVMObject&>(vmobject)) && vmobjects.is_empty()) {
-                        result = ENOMEM;
+                    if (auto append_result = vmobjects.try_append(static_cast<Memory::InodeVMObject&>(vmobject)); append_result.is_error() && vmobjects.is_empty()) {
+                        result = append_result.release_error();
                         return IterationDecision::Break;
                     }
                 }
@@ -60,7 +59,7 @@ KResultOr<int> Process::sys$purge(int mode)
             });
 
             if (result.is_error())
-                return result.error();
+                return result.release_error();
         }
         for (auto& vmobject : vmobjects) {
             purged_page_count += vmobject.release_all_clean_pages();

@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <Kernel/Lock.h>
+#include <Kernel/Locking/Mutex.h>
 #include <Kernel/Storage/StorageDevice.h>
 
 namespace Kernel {
@@ -15,24 +15,27 @@ class RamdiskController;
 
 class RamdiskDevice final : public StorageDevice {
     friend class RamdiskController;
-    AK_MAKE_ETERNAL
+    friend class DeviceManagement;
+
 public:
-    static NonnullRefPtr<RamdiskDevice> create(const RamdiskController&, NonnullOwnPtr<Region>&& region, int major, int minor);
-    RamdiskDevice(const RamdiskController&, NonnullOwnPtr<Region>&&, int major, int minor);
+    static NonnullRefPtr<RamdiskDevice> create(const RamdiskController&, NonnullOwnPtr<Memory::Region>&& region, int major, int minor);
     virtual ~RamdiskDevice() override;
+
+    // ^DiskDevice
+    virtual StringView class_name() const override;
+
+private:
+    RamdiskDevice(const RamdiskController&, NonnullOwnPtr<Memory::Region>&&, int major, int minor, NonnullOwnPtr<KString> device_name);
 
     // ^BlockDevice
     virtual void start_request(AsyncBlockDeviceRequest&) override;
 
-    // ^DiskDevice
-    virtual const char* class_name() const override;
-    virtual String device_name() const override;
+    // ^StorageDevice
+    virtual CommandSet command_set() const override { return CommandSet::PlainMemory; }
 
-    bool is_slave() const;
+    Mutex m_lock { "RamdiskDevice" };
 
-    Lock m_lock { "RamdiskDevice" };
-
-    NonnullOwnPtr<Region> m_region;
+    NonnullOwnPtr<Memory::Region> m_region;
 };
 
 }

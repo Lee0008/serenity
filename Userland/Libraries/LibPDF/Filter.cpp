@@ -11,7 +11,7 @@
 
 namespace PDF {
 
-Optional<ByteBuffer> Filter::decode(ReadonlyBytes const& bytes, FlyString const& encoding_type)
+ErrorOr<ByteBuffer> Filter::decode(ReadonlyBytes bytes, FlyString const& encoding_type)
 {
     if (encoding_type == CommonNames::ASCIIHexDecode)
         return decode_ascii_hex(bytes);
@@ -34,26 +34,26 @@ Optional<ByteBuffer> Filter::decode(ReadonlyBytes const& bytes, FlyString const&
     if (encoding_type == CommonNames::Crypt)
         return decode_crypt(bytes);
 
-    return {};
+    return Error::from_string_literal("Unrecognized filter encoding");
 }
 
-Optional<ByteBuffer> Filter::decode_ascii_hex(ReadonlyBytes const& bytes)
+ErrorOr<ByteBuffer> Filter::decode_ascii_hex(ReadonlyBytes bytes)
 {
     if (bytes.size() % 2 == 0)
         return decode_hex(bytes);
 
     // FIXME: Integrate this padding into AK/Hex?
 
-    auto output = ByteBuffer::create_zeroed(bytes.size() / 2 + 1);
+    auto output = TRY(ByteBuffer::create_zeroed(bytes.size() / 2 + 1));
 
     for (size_t i = 0; i < bytes.size() / 2; ++i) {
         const auto c1 = decode_hex_digit(static_cast<char>(bytes[i * 2]));
         if (c1 >= 16)
-            return {};
+            return Error::from_string_literal("Hex string contains invalid digit");
 
         const auto c2 = decode_hex_digit(static_cast<char>(bytes[i * 2 + 1]));
         if (c2 >= 16)
-            return {};
+            return Error::from_string_literal("Hex string contains invalid digit");
 
         output[i] = (c1 << 4) + c2;
     }
@@ -61,10 +61,10 @@ Optional<ByteBuffer> Filter::decode_ascii_hex(ReadonlyBytes const& bytes)
     // Process last byte with a padded zero
     output[output.size() - 1] = decode_hex_digit(static_cast<char>(bytes[bytes.size() - 1])) * 16;
 
-    return output;
+    return { move(output) };
 };
 
-Optional<ByteBuffer> Filter::decode_ascii85(ReadonlyBytes const& bytes)
+ErrorOr<ByteBuffer> Filter::decode_ascii85(ReadonlyBytes bytes)
 {
     Vector<u8> buff;
     buff.ensure_capacity(bytes.size());
@@ -119,13 +119,13 @@ Optional<ByteBuffer> Filter::decode_ascii85(ReadonlyBytes const& bytes)
     return ByteBuffer::copy(buff.span());
 };
 
-Optional<ByteBuffer> Filter::decode_lzw(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_lzw(ReadonlyBytes)
 {
     dbgln("LZW decoding is not supported");
     VERIFY_NOT_REACHED();
 };
 
-Optional<ByteBuffer> Filter::decode_flate(ReadonlyBytes const& bytes)
+ErrorOr<ByteBuffer> Filter::decode_flate(ReadonlyBytes bytes)
 {
     // FIXME: The spec says Flate decoding is "based on" zlib, does that mean they
     // aren't exactly the same?
@@ -135,37 +135,37 @@ Optional<ByteBuffer> Filter::decode_flate(ReadonlyBytes const& bytes)
     return buff.value();
 };
 
-Optional<ByteBuffer> Filter::decode_run_length(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_run_length(ReadonlyBytes)
 {
     // FIXME: Support RunLength decoding
     TODO();
 };
 
-Optional<ByteBuffer> Filter::decode_ccitt(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_ccitt(ReadonlyBytes)
 {
     // FIXME: Support CCITT decoding
     TODO();
 };
 
-Optional<ByteBuffer> Filter::decode_jbig2(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_jbig2(ReadonlyBytes)
 {
     // FIXME: Support JBIG2 decoding
     TODO();
 };
 
-Optional<ByteBuffer> Filter::decode_dct(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_dct(ReadonlyBytes)
 {
     // FIXME: Support dct decoding
     TODO();
 };
 
-Optional<ByteBuffer> Filter::decode_jpx(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_jpx(ReadonlyBytes)
 {
     // FIXME: Support JPX decoding
     TODO();
 };
 
-Optional<ByteBuffer> Filter::decode_crypt(ReadonlyBytes const&)
+ErrorOr<ByteBuffer> Filter::decode_crypt(ReadonlyBytes)
 {
     // FIXME: Support Crypt decoding
     TODO();

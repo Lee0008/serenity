@@ -1,7 +1,9 @@
-#include <stdio.h>
+#include <AK/Format.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    printf("Hello friends!\n");
+    outln("Hello friends!");
     return 0;
 }

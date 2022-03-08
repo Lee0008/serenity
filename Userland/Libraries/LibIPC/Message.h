@@ -6,10 +6,9 @@
 
 #pragma once
 
-#include <AK/Function.h>
+#include <AK/NonnullRefPtrVector.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
-#include <AK/Vector.h>
 #include <unistd.h>
 
 namespace IPC {
@@ -35,7 +34,7 @@ private:
 
 struct MessageBuffer {
     Vector<u8, 1024> data;
-    Vector<RefPtr<AutoCloseFileDescriptor>> fds;
+    NonnullRefPtrVector<AutoCloseFileDescriptor, 1> fds;
 };
 
 enum class ErrorCode : u32 {

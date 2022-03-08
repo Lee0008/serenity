@@ -1,12 +1,17 @@
 /*
  * Copyright (c) 2020, Ali Mohammad Pur <mpfard@serenityos.org>
+ * Copyright (c) 2022, Michiel Visser <opensource@webmichiel.nl>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
+#include <AK/Hex.h>
 #include <AK/Random.h>
 #include <LibCrypto/ASN1/DER.h>
+#include <LibCrypto/BigInt/UnsignedBigInteger.h>
+#include <LibCrypto/Curves/X25519.h>
+#include <LibCrypto/NumberTheory/ModularFunctions.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
 #include <LibTLS/TLSv12.h>
 
@@ -117,7 +122,10 @@ bool TLSv12::compute_master_secret_from_pre_master_secret(size_t length)
         return false;
     }
 
-    m_context.master_key.resize(length);
+    if (m_context.master_key.try_resize(length).is_error()) {
+        dbgln("Couldn't allocate enough space for the master key :(");
+        return false;
+    }
 
     pseudorandom_function(
         m_context.master_key,
@@ -131,11 +139,21 @@ bool TLSv12::compute_master_secret_from_pre_master_secret(size_t length)
         dbgln("master key:");
         print_buffer(m_context.master_key);
     }
+
+    if constexpr (TLS_SSL_KEYLOG_DEBUG) {
+        auto file = MUST(Core::Stream::File::open("/home/anon/ssl_keylog", Core::Stream::OpenMode::Append | Core::Stream::OpenMode::Write));
+        VERIFY(file->write_or_error("CLIENT_RANDOM "sv.bytes()));
+        VERIFY(file->write_or_error(encode_hex({ m_context.local_random, 32 }).bytes()));
+        VERIFY(file->write_or_error(" "sv.bytes()));
+        VERIFY(file->write_or_error(encode_hex(m_context.master_key).bytes()));
+        VERIFY(file->write_or_error("\n"sv.bytes()));
+    }
+
     expand_key();
     return true;
 }
 
-static bool wildcard_matches(const StringView& host, const StringView& subject)
+static bool wildcard_matches(StringView host, StringView subject)
 {
     if (host.matches(subject))
         return true;
@@ -146,7 +164,7 @@ static bool wildcard_matches(const StringView& host, const StringView& subject)
     return false;
 }
 
-Optional<size_t> TLSv12::verify_chain_and_get_matching_certificate(const StringView& host) const
+Optional<size_t> TLSv12::verify_chain_and_get_matching_certificate(StringView host) const
 {
     if (m_context.certificates.is_empty() || !m_context.verify_chain())
         return {};
@@ -187,7 +205,12 @@ void TLSv12::build_rsa_pre_master_secret(PacketBuilder& builder)
         *(u16*)random_bytes = AK::convert_between_host_and_network_endian((u16)Version::V12);
     }
 
-    m_context.premaster_key = ByteBuffer::copy(random_bytes, bytes);
+    auto premaster_key_result = ByteBuffer::copy(random_bytes, bytes);
+    if (premaster_key_result.is_error()) {
+        dbgln("RSA premaster key generation failed, not enough memory");
+        return;
+    }
+    m_context.premaster_key = premaster_key_result.release_value();
 
     const auto& certificate_option = verify_chain_and_get_matching_certificate(m_context.extensions.SNI); // if the SNI is empty, we'll make a special case and match *a* leaf certificate.
     if (!certificate_option.has_value()) {
@@ -222,6 +245,98 @@ void TLSv12::build_rsa_pre_master_secret(PacketBuilder& builder)
     builder.append_u24(outbuf.size() + 2);
     builder.append((u16)outbuf.size());
     builder.append(outbuf);
+}
+
+void TLSv12::build_dhe_rsa_pre_master_secret(PacketBuilder& builder)
+{
+    auto& dh = m_context.server_diffie_hellman_params;
+    auto dh_p = Crypto::UnsignedBigInteger::import_data(dh.p.data(), dh.p.size());
+    auto dh_g = Crypto::UnsignedBigInteger::import_data(dh.g.data(), dh.g.size());
+    auto dh_Ys = Crypto::UnsignedBigInteger::import_data(dh.Ys.data(), dh.Ys.size());
+    auto dh_key_size = dh.p.size();
+
+    auto dh_random = Crypto::NumberTheory::random_number(0, dh_p);
+    auto dh_Yc = Crypto::NumberTheory::ModularPower(dh_g, dh_random, dh_p);
+    auto dh_Yc_bytes_result = ByteBuffer::create_uninitialized(dh_key_size);
+    if (dh_Yc_bytes_result.is_error()) {
+        dbgln("Failed to build DHE_RSA premaster secret: not enough memory");
+        return;
+    }
+    auto dh_Yc_bytes = dh_Yc_bytes_result.release_value();
+    dh_Yc.export_data(dh_Yc_bytes);
+
+    auto premaster_key = Crypto::NumberTheory::ModularPower(dh_Ys, dh_random, dh_p);
+    auto premaster_key_result = ByteBuffer::create_uninitialized(dh_key_size);
+    if (premaster_key_result.is_error()) {
+        dbgln("Failed to build DHE_RSA premaster secret: not enough memory");
+        return;
+    }
+    m_context.premaster_key = premaster_key_result.release_value();
+    premaster_key.export_data(m_context.premaster_key, true);
+
+    dh.p.clear();
+    dh.g.clear();
+    dh.Ys.clear();
+
+    if constexpr (TLS_DEBUG) {
+        dbgln("dh_random: {}", dh_random.to_base(16));
+        dbgln("dh_Yc: {:hex-dump}", (ReadonlyBytes)dh_Yc_bytes);
+        dbgln("premaster key: {:hex-dump}", (ReadonlyBytes)m_context.premaster_key);
+    }
+
+    if (!compute_master_secret_from_pre_master_secret(48)) {
+        dbgln("oh noes we could not derive a master key :(");
+        return;
+    }
+
+    builder.append_u24(dh_key_size + 2);
+    builder.append((u16)dh_key_size);
+    builder.append(dh_Yc_bytes);
+}
+
+void TLSv12::build_ecdhe_rsa_pre_master_secret(PacketBuilder& builder)
+{
+    size_t const key_size = named_curve_key_size(NamedCurve::x25519) / 8;
+    u8 generator_point[key_size] { 9 };
+    ReadonlyBytes generator_point_bytes { generator_point, key_size };
+
+    // Create a random private key
+    u8 private_key[key_size];
+    fill_with_random(private_key, key_size);
+    ReadonlyBytes private_key_bytes { private_key, key_size };
+
+    // Calculate the public key by multiplying the private key with 9
+    auto public_key_result = Crypto::Curves::X25519::compute_coordinate(private_key_bytes, generator_point_bytes);
+    if (public_key_result.is_error()) {
+        dbgln("Failed to build ECDHE_RSA premaster secret: not enough memory");
+        return;
+    }
+    auto public_key = public_key_result.release_value();
+
+    // Calculate the pre master secret by multiplying the client private key and the server public key
+    ReadonlyBytes server_public_key_bytes = m_context.server_diffie_hellman_params.p;
+    auto pre_master_secret_result = Crypto::Curves::X25519::compute_coordinate(private_key_bytes, server_public_key_bytes);
+    if (pre_master_secret_result.is_error()) {
+        dbgln("Failed to build ECDHE_RSA premaster secret: not enough memory");
+        return;
+    }
+    m_context.premaster_key = pre_master_secret_result.release_value();
+
+    if constexpr (TLS_DEBUG) {
+        dbgln("Build ECDHE_RSA pre master secret");
+        dbgln("client private key: {:hex-dump}", private_key_bytes);
+        dbgln("client public key:  {:hex-dump}", (ReadonlyBytes)public_key);
+        dbgln("premaster key:      {:hex-dump}", (ReadonlyBytes)m_context.premaster_key);
+    }
+
+    if (!compute_master_secret_from_pre_master_secret(48)) {
+        dbgln("oh noes we could not derive a master key :(");
+        return;
+    }
+
+    builder.append_u24(key_size + 1);
+    builder.append((u8)key_size);
+    builder.append(public_key);
 }
 
 ByteBuffer TLSv12::build_certificate()
@@ -296,14 +411,15 @@ ByteBuffer TLSv12::build_client_key_exchange()
         TODO();
         break;
     case KeyExchangeAlgorithm::DHE_RSA:
-        dbgln("Client key exchange for DHE_RSA is not implemented");
-        TODO();
+        build_dhe_rsa_pre_master_secret(builder);
         break;
     case KeyExchangeAlgorithm::DH_anon:
         dbgln("Client key exchange for DH_anon is not implemented");
         TODO();
         break;
     case KeyExchangeAlgorithm::ECDHE_RSA:
+        build_ecdhe_rsa_pre_master_secret(builder);
+        break;
     case KeyExchangeAlgorithm::ECDH_ECDSA:
     case KeyExchangeAlgorithm::ECDH_RSA:
     case KeyExchangeAlgorithm::ECDHE_ECDSA:
@@ -312,7 +428,7 @@ ByteBuffer TLSv12::build_client_key_exchange()
         TODO();
         break;
     default:
-        dbgln("Unknonwn client key exchange algorithm");
+        dbgln("Unknown client key exchange algorithm");
         VERIFY_NOT_REACHED();
         break;
     }

@@ -9,10 +9,11 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$sync()
+ErrorOr<FlatPtr> Process::sys$sync()
 {
-    REQUIRE_PROMISE(stdio);
-    VFS::the().sync();
+    VERIFY_NO_PROCESS_BIG_LOCK(this)
+    TRY(require_promise(Pledge::stdio));
+    VirtualFileSystem::sync();
     return 0;
 }
 

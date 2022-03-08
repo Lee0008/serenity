@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/AggregateError.h>
 #include <LibJS/Runtime/AggregateErrorConstructor.h>
 #include <LibJS/Runtime/Array.h>
@@ -24,42 +25,35 @@ void AggregateErrorConstructor::initialize(GlobalObject& global_object)
     NativeFunction::initialize(global_object);
 
     // 20.5.7.2.1 AggregateError.prototype, https://tc39.es/ecma262/#sec-aggregate-error.prototype
-    define_property(vm.names.prototype, global_object.aggregate_error_prototype(), 0);
+    define_direct_property(vm.names.prototype, global_object.aggregate_error_prototype(), 0);
 
-    define_property(vm.names.length, Value(2), Attribute::Configurable);
+    define_direct_property(vm.names.length, Value(2), Attribute::Configurable);
 }
 
 // 20.5.7.1.1 AggregateError ( errors, message ), https://tc39.es/ecma262/#sec-aggregate-error
-Value AggregateErrorConstructor::call()
+ThrowCompletionOr<Value> AggregateErrorConstructor::call()
 {
-    return construct(*this);
+    return TRY(construct(*this));
 }
 
 // 20.5.7.1.1 AggregateError ( errors, message ), https://tc39.es/ecma262/#sec-aggregate-error
-Value AggregateErrorConstructor::construct(Function&)
+ThrowCompletionOr<Object*> AggregateErrorConstructor::construct(FunctionObject& new_target)
 {
     auto& vm = this->vm();
-    // FIXME: Use OrdinaryCreateFromConstructor(newTarget, "%AggregateError.prototype%")
-    auto* aggregate_error = AggregateError::create(global_object());
+    auto& global_object = this->global_object();
 
-    u8 attr = Attribute::Writable | Attribute::Configurable;
+    auto* aggregate_error = TRY(ordinary_create_from_constructor<AggregateError>(global_object, new_target, &GlobalObject::aggregate_error_prototype));
 
     if (!vm.argument(1).is_undefined()) {
-        auto message = vm.argument(1).to_string(global_object());
-        if (vm.exception())
-            return {};
-        aggregate_error->define_property(vm.names.message, js_string(vm, message), attr);
+        auto message = TRY(vm.argument(1).to_string(global_object));
+        MUST(aggregate_error->create_non_enumerable_data_property_or_throw(vm.names.message, js_string(vm, message)));
     }
 
-    aggregate_error->install_error_cause(vm.argument(2));
-    if (vm.exception())
-        return {};
+    TRY(aggregate_error->install_error_cause(vm.argument(2)));
 
-    auto errors_list = iterable_to_list(global_object(), vm.argument(0));
-    if (vm.exception())
-        return {};
+    auto errors_list = TRY(iterable_to_list(global_object, vm.argument(0)));
 
-    aggregate_error->define_property(vm.names.errors, Array::create_from(global_object(), errors_list), attr);
+    MUST(aggregate_error->define_property_or_throw(vm.names.errors, { .value = Array::create_from(global_object, errors_list), .writable = true, .enumerable = false, .configurable = true }));
 
     return aggregate_error;
 }

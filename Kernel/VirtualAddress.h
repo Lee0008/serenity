@@ -12,7 +12,7 @@
 class VirtualAddress {
 public:
     VirtualAddress() = default;
-    explicit VirtualAddress(FlatPtr address)
+    constexpr explicit VirtualAddress(FlatPtr address)
         : m_address(address)
     {
     }
@@ -22,11 +22,11 @@ public:
     {
     }
 
-    [[nodiscard]] bool is_null() const { return m_address == 0; }
-    [[nodiscard]] bool is_page_aligned() const { return (m_address & 0xfff) == 0; }
+    [[nodiscard]] constexpr bool is_null() const { return m_address == 0; }
+    [[nodiscard]] constexpr bool is_page_aligned() const { return (m_address & 0xfff) == 0; }
 
-    [[nodiscard]] VirtualAddress offset(FlatPtr o) const { return VirtualAddress(m_address + o); }
-    [[nodiscard]] FlatPtr get() const { return m_address; }
+    [[nodiscard]] constexpr VirtualAddress offset(FlatPtr o) const { return VirtualAddress(m_address + o); }
+    [[nodiscard]] constexpr FlatPtr get() const { return m_address; }
     void set(FlatPtr address) { m_address = address; }
     void mask(FlatPtr m) { m_address &= m; }
 
@@ -37,10 +37,11 @@ public:
     bool operator==(const VirtualAddress& other) const { return m_address == other.m_address; }
     bool operator!=(const VirtualAddress& other) const { return m_address != other.m_address; }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const) const VirtualAddress shouldn't be allowed to modify the underlying memory
     [[nodiscard]] u8* as_ptr() { return reinterpret_cast<u8*>(m_address); }
     [[nodiscard]] const u8* as_ptr() const { return reinterpret_cast<const u8*>(m_address); }
 
-    [[nodiscard]] VirtualAddress page_base() const { return VirtualAddress(m_address & 0xfffff000); }
+    [[nodiscard]] VirtualAddress page_base() const { return VirtualAddress(m_address & ~(FlatPtr)0xfffu); }
 
 private:
     FlatPtr m_address { 0 };
@@ -53,7 +54,7 @@ inline VirtualAddress operator-(const VirtualAddress& a, const VirtualAddress& b
 
 template<>
 struct AK::Formatter<VirtualAddress> : AK::Formatter<FormatString> {
-    void format(FormatBuilder& builder, const VirtualAddress& value)
+    ErrorOr<void> format(FormatBuilder& builder, const VirtualAddress& value)
     {
         return AK::Formatter<FormatString>::format(builder, "V{}", value.as_ptr());
     }

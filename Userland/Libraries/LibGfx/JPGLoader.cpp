@@ -4,18 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Bitmap.h>
-#include <AK/ByteBuffer.h>
 #include <AK/Debug.h>
 #include <AK/HashMap.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
+#include <AK/Math.h>
 #include <AK/MemoryStream.h>
-#include <AK/String.h>
 #include <AK/Vector.h>
-#include <LibGfx/Bitmap.h>
 #include <LibGfx/JPGLoader.h>
-#include <math.h>
 
 #define JPG_INVALID 0X0000
 
@@ -748,6 +742,12 @@ static bool read_start_of_frame(InputMemoryStream& stream, JPGLoadingContext& co
         component.vsample_factor = subsample_factors & 0x0F;
 
         if (i == 0) {
+            // If there is only a single component, i.e. grayscale, the macroblocks will not be interleaved, even if
+            // the horizontal or vertical sample factor is larger than 1.
+            if (context.component_count == 1) {
+                component.hsample_factor = 1;
+                component.vsample_factor = 1;
+            }
             // By convention, downsampling is applied only on chroma components. So we should
             //  hope to see the maximum sampling factor in the luma component.
             if (!validate_luma_and_modify_context(component, context)) {
@@ -864,20 +864,20 @@ static void dequantize(JPGLoadingContext& context, Vector<Macroblock>& macrobloc
 
 static void inverse_dct(const JPGLoadingContext& context, Vector<Macroblock>& macroblocks)
 {
-    static const float m0 = 2.0 * cos(1.0 / 16.0 * 2.0 * M_PI);
-    static const float m1 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
-    static const float m3 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
-    static const float m5 = 2.0 * cos(3.0 / 16.0 * 2.0 * M_PI);
+    static const float m0 = 2.0 * AK::cos(1.0 / 16.0 * 2.0 * AK::Pi<double>);
+    static const float m1 = 2.0 * AK::cos(2.0 / 16.0 * 2.0 * AK::Pi<double>);
+    static const float m3 = 2.0 * AK::cos(2.0 / 16.0 * 2.0 * AK::Pi<double>);
+    static const float m5 = 2.0 * AK::cos(3.0 / 16.0 * 2.0 * AK::Pi<double>);
     static const float m2 = m0 - m5;
     static const float m4 = m0 + m5;
-    static const float s0 = cos(0.0 / 16.0 * M_PI) / sqrt(8);
-    static const float s1 = cos(1.0 / 16.0 * M_PI) / 2.0;
-    static const float s2 = cos(2.0 / 16.0 * M_PI) / 2.0;
-    static const float s3 = cos(3.0 / 16.0 * M_PI) / 2.0;
-    static const float s4 = cos(4.0 / 16.0 * M_PI) / 2.0;
-    static const float s5 = cos(5.0 / 16.0 * M_PI) / 2.0;
-    static const float s6 = cos(6.0 / 16.0 * M_PI) / 2.0;
-    static const float s7 = cos(7.0 / 16.0 * M_PI) / 2.0;
+    static const float s0 = AK::cos(0.0 / 16.0 * AK::Pi<double>) / sqrt(8);
+    static const float s1 = AK::cos(1.0 / 16.0 * AK::Pi<double>) / 2.0;
+    static const float s2 = AK::cos(2.0 / 16.0 * AK::Pi<double>) / 2.0;
+    static const float s3 = AK::cos(3.0 / 16.0 * AK::Pi<double>) / 2.0;
+    static const float s4 = AK::cos(4.0 / 16.0 * AK::Pi<double>) / 2.0;
+    static const float s5 = AK::cos(5.0 / 16.0 * AK::Pi<double>) / 2.0;
+    static const float s6 = AK::cos(6.0 / 16.0 * AK::Pi<double>) / 2.0;
+    static const float s7 = AK::cos(7.0 / 16.0 * AK::Pi<double>) / 2.0;
 
     for (u32 vcursor = 0; vcursor < context.mblock_meta.vcount; vcursor += context.vsample_factor) {
         for (u32 hcursor = 0; hcursor < context.mblock_meta.hcount; hcursor += context.hsample_factor) {
@@ -1064,8 +1064,11 @@ static void ycbcr_to_rgb(const JPGLoadingContext& context, Vector<Macroblock>& m
 
 static bool compose_bitmap(JPGLoadingContext& context, const Vector<Macroblock>& macroblocks)
 {
-    context.bitmap = Bitmap::create_purgeable(BitmapFormat::BGRx8888, { context.frame.width, context.frame.height });
-    if (!context.bitmap)
+    auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRx8888, { context.frame.width, context.frame.height });
+    if (bitmap_or_error.is_error())
+        return false;
+    context.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+    if (bitmap_or_error.is_error())
         return false;
 
     for (u32 y = context.frame.height - 1; y < context.frame.height; y--) {
@@ -1221,37 +1224,6 @@ static bool decode_jpg(JPGLoadingContext& context)
     return true;
 }
 
-static RefPtr<Gfx::Bitmap> load_jpg_impl(const u8* data, size_t data_size)
-{
-    JPGLoadingContext context;
-    context.data = data;
-    context.data_size = data_size;
-
-    if (!decode_jpg(context))
-        return nullptr;
-
-    return context.bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_jpg(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    auto bitmap = load_jpg_impl((const u8*)file_or_error.value()->data(), file_or_error.value()->size());
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded JPG: {}", bitmap->size(), LexicalPath::canonicalized_path(path)));
-    return bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_jpg_from_memory(const u8* data, size_t length)
-{
-    auto bitmap = load_jpg_impl(data, length);
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded jpg: <memory>", bitmap->size()));
-    return bitmap;
-}
-
 JPGImageDecoderPlugin::JPGImageDecoderPlugin(const u8* data, size_t size)
 {
     m_context = make<JPGLoadingContext>();
@@ -1274,32 +1246,17 @@ IntSize JPGImageDecoderPlugin::size()
     return {};
 }
 
-RefPtr<Gfx::Bitmap> JPGImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == JPGLoadingContext::State::Error)
-        return nullptr;
-    if (m_context->state < JPGLoadingContext::State::BitmapDecoded) {
-        if (!decode_jpg(*m_context)) {
-            m_context->state = JPGLoadingContext::State::Error;
-            return nullptr;
-        }
-        m_context->state = JPGLoadingContext::State::BitmapDecoded;
-    }
-
-    return m_context->bitmap;
-}
-
 void JPGImageDecoderPlugin::set_volatile()
 {
     if (m_context->bitmap)
         m_context->bitmap->set_volatile();
 }
 
-bool JPGImageDecoderPlugin::set_nonvolatile()
+bool JPGImageDecoderPlugin::set_nonvolatile(bool& was_purged)
 {
     if (!m_context->bitmap)
         return false;
-    return m_context->bitmap->set_nonvolatile();
+    return m_context->bitmap->set_nonvolatile(was_purged);
 }
 
 bool JPGImageDecoderPlugin::sniff()
@@ -1325,11 +1282,23 @@ size_t JPGImageDecoderPlugin::frame_count()
     return 1;
 }
 
-ImageFrameDescriptor JPGImageDecoderPlugin::frame(size_t i)
+ErrorOr<ImageFrameDescriptor> JPGImageDecoderPlugin::frame(size_t index)
 {
-    if (i > 0) {
-        return { bitmap(), 0 };
+    if (index > 0)
+        return Error::from_string_literal("JPGImageDecoderPlugin: Invalid frame index"sv);
+
+    if (m_context->state == JPGLoadingContext::State::Error)
+        return Error::from_string_literal("JPGImageDecoderPlugin: Decoding failed"sv);
+
+    if (m_context->state < JPGLoadingContext::State::BitmapDecoded) {
+        if (!decode_jpg(*m_context)) {
+            m_context->state = JPGLoadingContext::State::Error;
+            return Error::from_string_literal("JPGImageDecoderPlugin: Decoding failed"sv);
+        }
+        m_context->state = JPGLoadingContext::State::BitmapDecoded;
     }
-    return {};
+
+    return ImageFrameDescriptor { m_context->bitmap, 0 };
 }
+
 }

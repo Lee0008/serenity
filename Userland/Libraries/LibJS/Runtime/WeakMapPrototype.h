@@ -6,12 +6,13 @@
 
 #pragma once
 
+#include <LibJS/Runtime/PrototypeObject.h>
 #include <LibJS/Runtime/WeakMap.h>
 
 namespace JS {
 
-class WeakMapPrototype final : public Object {
-    JS_OBJECT(WeakMapPrototype, Object);
+class WeakMapPrototype final : public PrototypeObject<WeakMapPrototype, WeakMap> {
+    JS_PROTOTYPE_OBJECT(WeakMapPrototype, WeakMap, WeakMap);
 
 public:
     WeakMapPrototype(GlobalObject&);
@@ -19,8 +20,6 @@ public:
     virtual ~WeakMapPrototype() override;
 
 private:
-    static WeakMap* typed_this(VM&, GlobalObject&);
-
     JS_DECLARE_NATIVE_FUNCTION(delete_);
     JS_DECLARE_NATIVE_FUNCTION(get);
     JS_DECLARE_NATIVE_FUNCTION(has);

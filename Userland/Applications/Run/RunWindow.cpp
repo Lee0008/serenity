@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Nick Vella <nick@nxk.io>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,6 +21,7 @@
 #include <LibGUI/Widget.h>
 #include <spawn.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -33,7 +35,7 @@ RunWindow::RunWindow()
 
     set_title("Run");
     set_icon(app_icon.bitmap_for_size(16));
-    resize(345, 140);
+    resize(345, 100);
     set_resizable(false);
     set_minimizable(false);
 
@@ -62,14 +64,10 @@ RunWindow::RunWindow()
 
     m_browse_button = *find_descendant_of_type_named<GUI::Button>("browse_button");
     m_browse_button->on_click = [this](auto) {
-        Optional<String> path = GUI::FilePicker::get_open_filepath(this);
+        Optional<String> path = GUI::FilePicker::get_open_filepath(this, {}, Core::StandardPaths::home_directory(), false, GUI::Dialog::ScreenPosition::Center);
         if (path.has_value())
             m_path_combo_box->set_text(path.value().view());
     };
-}
-
-RunWindow::~RunWindow()
-{
 }
 
 void RunWindow::event(Core::Event& event)

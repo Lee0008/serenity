@@ -4,121 +4,99 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "Browser.h"
-#include "BrowserWindow.h"
-#include "CookieJar.h"
-#include "Tab.h"
-#include "WindowActions.h"
+#include "AK/IterationDecision.h"
+#include "LibCore/FileWatcher.h"
 #include <AK/StringBuilder.h>
+#include <Applications/Browser/Browser.h>
+#include <Applications/Browser/BrowserWindow.h>
+#include <Applications/Browser/CookieJar.h>
+#include <Applications/Browser/Tab.h>
+#include <Applications/Browser/WindowActions.h>
+#include <LibConfig/Client.h>
 #include <LibCore/ArgsParser.h>
-#include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
+#include <LibCore/System.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Icon.h>
 #include <LibGUI/TabWidget.h>
-#include <LibWeb/HTML/WebSocket.h>
-#include <LibWeb/Loader/ContentFilter.h>
-#include <LibWeb/Loader/ResourceLoader.h>
-#include <stdio.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
 namespace Browser {
 
 String g_search_engine;
 String g_home_url;
-bool g_single_process = false;
+Vector<String> g_content_filters;
+bool g_content_filters_enabled { true };
+IconBag g_icon_bag;
 
 }
 
-int main(int argc, char** argv)
+static ErrorOr<void> load_content_filters()
+{
+    auto file = TRY(Core::Stream::File::open(String::formatted("{}/BrowserContentFilters.txt", Core::StandardPaths::config_directory()), Core::Stream::OpenMode::Read));
+    auto ad_filter_list = TRY(Core::Stream::BufferedFile::create(move(file)));
+    auto buffer = TRY(ByteBuffer::create_uninitialized(4096));
+    while (TRY(ad_filter_list->can_read_line())) {
+        auto length = TRY(ad_filter_list->read_line(buffer));
+        StringView line { buffer.data(), length };
+        if (!line.is_empty())
+            Browser::g_content_filters.append(line);
+    }
+
+    return {};
+}
+
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     if (getuid() == 0) {
         warnln("Refusing to run as root");
         return 1;
     }
 
-    if (pledge("stdio recvfd sendfd unix cpath rpath wpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd unix cpath rpath wpath proc exec"));
 
     const char* specified_url = nullptr;
 
     Core::ArgsParser args_parser;
-    args_parser.add_option(Browser::g_single_process, "Single-process mode", "single-process", 's');
     args_parser.add_positional_argument(specified_url, "URL to open", "url", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = GUI::Application::construct(arguments);
 
-    if (Browser::g_single_process) {
-        // Connect to the RequestServer and the WebSocket service immediately so we don't need to unveil their portals.
-        Web::ResourceLoader::the();
-        Web::HTML::WebSocketClientManager::the();
-    }
+    Config::pledge_domain("Browser");
+    Config::monitor_domain("Browser");
 
     // Connect to LaunchServer immediately and let it know that we won't ask for anything other than opening
     // the user's downloads directory.
     // FIXME: This should go away with a standalone download manager at some point.
-    if (!Desktop::Launcher::add_allowed_url(URL::create_with_file_protocol(Core::StandardPaths::downloads_directory()))
-        || !Desktop::Launcher::seal_allowlist()) {
-        warnln("Failed to set up allowed launch URLs");
-        return 1;
-    }
+    TRY(Desktop::Launcher::add_allowed_url(URL::create_with_file_protocol(Core::StandardPaths::downloads_directory())));
+    TRY(Desktop::Launcher::seal_allowlist());
 
-    if (unveil("/home", "rwc") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/etc/passwd", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/tmp/portal/image", "rw") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/tmp/portal/webcontent", "rw") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/tmp/portal/request", "rw") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    unveil(nullptr, nullptr);
+    TRY(Core::System::unveil("/home", "rwc"));
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/etc/passwd", "r"));
+    TRY(Core::System::unveil("/etc/timezone", "r"));
+    TRY(Core::System::unveil("/tmp/portal/image", "rw"));
+    TRY(Core::System::unveil("/tmp/portal/webcontent", "rw"));
+    TRY(Core::System::unveil("/tmp/portal/request", "rw"));
+    TRY(Core::System::unveil("/bin/BrowserSettings", "x"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     auto app_icon = GUI::Icon::default_icon("app-browser");
 
-    auto m_config = Core::ConfigFile::get_for_app("Browser");
-    Browser::g_home_url = m_config->read_entry("Preferences", "Home", "about:blank");
-    Browser::g_search_engine = m_config->read_entry("Preferences", "SearchEngine", {});
+    Browser::g_home_url = Config::read_string("Browser", "Preferences", "Home", "file:///res/html/misc/welcome.html");
+    Browser::g_search_engine = Config::read_string("Browser", "Preferences", "SearchEngine", {});
+    Browser::g_content_filters_enabled = Config::read_bool("Browser", "Preferences", "EnableContentFilters");
 
-    auto ad_filter_list_or_error = Core::File::open(String::formatted("{}/BrowserContentFilters.txt", Core::StandardPaths::config_directory()), Core::OpenMode::ReadOnly);
-    if (!ad_filter_list_or_error.is_error()) {
-        auto& ad_filter_list = *ad_filter_list_or_error.value();
-        while (!ad_filter_list.eof()) {
-            auto line = ad_filter_list.read_line();
-            if (line.is_empty())
-                continue;
-            Web::ContentFilter::the().add_pattern(line);
-        }
-    }
+    Browser::g_icon_bag = TRY(Browser::IconBag::try_create());
 
-    URL first_url = Browser::g_home_url;
+    TRY(load_content_filters());
+
+    URL first_url = Browser::url_from_user_input(Browser::g_home_url);
     if (specified_url) {
         if (Core::File::exists(specified_url)) {
             first_url = URL::create_with_file_protocol(Core::File::real_path_for(specified_url));
@@ -129,6 +107,18 @@ int main(int argc, char** argv)
 
     Browser::CookieJar cookie_jar;
     auto window = Browser::BrowserWindow::construct(cookie_jar, first_url);
+
+    auto content_filters_watcher = TRY(Core::FileWatcher::create());
+    content_filters_watcher->on_change = [&](Core::FileWatcherEvent const&) {
+        dbgln("Reloading content filters because config file changed");
+        auto error = load_content_filters();
+        if (error.is_error()) {
+            dbgln("Reloading content filters failed: {}", error.release_error());
+            return;
+        }
+        window->content_filters_changed();
+    };
+    TRY(content_filters_watcher->add_watch(String::formatted("{}/BrowserContentFilters.txt", Core::StandardPaths::config_directory()), Core::FileWatcherEvent::Type::ContentModified));
 
     app->on_action_enter = [&](GUI::Action& action) {
         if (auto* browser_window = dynamic_cast<Browser::BrowserWindow*>(app->active_window())) {

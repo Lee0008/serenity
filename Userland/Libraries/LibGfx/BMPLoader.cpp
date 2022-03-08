@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BuiltinWrappers.h>
 #include <AK/Debug.h>
 #include <AK/Function.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
+#include <AK/String.h>
+#include <AK/Vector.h>
 #include <LibGfx/BMPLoader.h>
 
 namespace Gfx {
@@ -75,9 +76,9 @@ namespace AK {
 
 template<typename T>
 struct Formatter<Gfx::Endpoint<T>> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const Gfx::Endpoint<T>& value)
+    ErrorOr<void> format(FormatBuilder& builder, Gfx::Endpoint<T> const& value)
     {
-        Formatter<StringView>::format(builder, String::formatted("({}, {}, {})", value.x, value.y, value.z));
+        return Formatter<StringView>::format(builder, String::formatted("({}, {}, {})", value.x, value.y, value.z));
     }
 };
 
@@ -163,27 +164,6 @@ struct BMPLoadingContext {
         VERIFY_NOT_REACHED();
     }
 };
-
-static RefPtr<Bitmap> load_bmp_impl(const u8*, size_t);
-
-RefPtr<Gfx::Bitmap> load_bmp(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    auto bitmap = load_bmp_impl((const u8*)file_or_error.value()->data(), file_or_error.value()->size());
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded BMP: {}", bitmap->size(), LexicalPath::canonicalized_path(path)));
-    return bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_bmp_from_memory(const u8* data, size_t length)
-{
-    auto bitmap = load_bmp_impl(data, length);
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded BMP: <memory>", bitmap->size()));
-    return bitmap;
-}
 
 class InputStreamer {
 public:
@@ -347,9 +327,9 @@ static void populate_dib_mask_info_if_needed(BMPLoadingContext& context)
             mask_sizes.append(0);
             continue;
         }
-        int trailing_zeros = count_trailing_zeroes_32(mask);
+        int trailing_zeros = count_trailing_zeroes(mask);
         // If mask is exactly `0xFFFFFFFF`, then we might try to count the trailing zeros of 0x00000000 here, so we need the safe version:
-        int size = count_trailing_zeroes_32_safe(~(mask >> trailing_zeros));
+        int size = count_trailing_zeroes_safe(~(mask >> trailing_zeros));
         if (size > 8) {
             // Drop lowest bits if mask is longer than 8 bits.
             trailing_zeros += size - 8;
@@ -946,7 +926,12 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
         dbgln("Suspiciously large amount of RLE data");
         return false;
     }
-    buffer = ByteBuffer::create_zeroed(buffer_size);
+    auto buffer_result = ByteBuffer::create_zeroed(buffer_size);
+    if (buffer_result.is_error()) {
+        dbgln("Not enough memory for buffer allocation");
+        return false;
+    }
+    buffer = buffer_result.release_value();
 
     // Avoid as many if statements as possible by pulling out
     // compression-dependent actions into separate lambdas
@@ -1185,11 +1170,14 @@ static bool decode_bmp_pixel_data(BMPLoadingContext& context)
 
     const u32 width = abs(context.dib.core.width);
     const u32 height = abs(context.dib.core.height);
-    context.bitmap = Bitmap::create_purgeable(format, { static_cast<int>(width), static_cast<int>(height) });
-    if (!context.bitmap) {
-        dbgln("BMP appears to have overly large dimensions");
+
+    auto bitmap_or_error = Bitmap::try_create(format, { static_cast<int>(width), static_cast<int>(height) });
+    if (bitmap_or_error.is_error()) {
+        // FIXME: Propagate the *real* error.
         return false;
     }
+
+    context.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
 
     ByteBuffer rle_buffer;
     ReadonlyBytes bytes { context.file_bytes + context.data_offset, context.file_size - context.data_offset };
@@ -1312,21 +1300,6 @@ static bool decode_bmp_pixel_data(BMPLoadingContext& context)
     return true;
 }
 
-static RefPtr<Bitmap> load_bmp_impl(const u8* data, size_t data_size)
-{
-    BMPLoadingContext context;
-    context.file_bytes = data;
-    context.file_size = data_size;
-
-    // Forces a decode of the header, dib, and color table as well
-    if (!decode_bmp_pixel_data(context)) {
-        context.state = BMPLoadingContext::State::Error;
-        return nullptr;
-    }
-
-    return context.bitmap;
-}
-
 BMPImageDecoderPlugin::BMPImageDecoderPlugin(const u8* data, size_t data_size)
 {
     m_context = make<BMPLoadingContext>();
@@ -1349,29 +1322,17 @@ IntSize BMPImageDecoderPlugin::size()
     return { m_context->dib.core.width, abs(m_context->dib.core.height) };
 }
 
-RefPtr<Gfx::Bitmap> BMPImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == BMPLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < BMPLoadingContext::State::PixelDataDecoded && !decode_bmp_pixel_data(*m_context))
-        return nullptr;
-
-    VERIFY(m_context->bitmap);
-    return m_context->bitmap;
-}
-
 void BMPImageDecoderPlugin::set_volatile()
 {
     if (m_context->bitmap)
         m_context->bitmap->set_volatile();
 }
 
-bool BMPImageDecoderPlugin::set_nonvolatile()
+bool BMPImageDecoderPlugin::set_nonvolatile(bool& was_purged)
 {
     if (!m_context->bitmap)
         return false;
-    return m_context->bitmap->set_nonvolatile();
+    return m_context->bitmap->set_nonvolatile(was_purged);
 }
 
 bool BMPImageDecoderPlugin::sniff()
@@ -1394,10 +1355,19 @@ size_t BMPImageDecoderPlugin::frame_count()
     return 1;
 }
 
-ImageFrameDescriptor BMPImageDecoderPlugin::frame(size_t i)
+ErrorOr<ImageFrameDescriptor> BMPImageDecoderPlugin::frame(size_t index)
 {
-    if (i > 0)
-        return { bitmap(), 0 };
-    return {};
+    if (index > 0)
+        return Error::from_string_literal("BMPImageDecoderPlugin: Invalid frame index"sv);
+
+    if (m_context->state == BMPLoadingContext::State::Error)
+        return Error::from_string_literal("BMPImageDecoderPlugin: Decoding failed"sv);
+
+    if (m_context->state < BMPLoadingContext::State::PixelDataDecoded && !decode_bmp_pixel_data(*m_context))
+        return Error::from_string_literal("BMPImageDecoderPlugin: Decoding failed"sv);
+
+    VERIFY(m_context->bitmap);
+    return ImageFrameDescriptor { m_context->bitmap, 0 };
 }
+
 }

@@ -8,36 +8,33 @@
 
 namespace Kernel {
 
-extern String* g_hostname;
-extern Lock* g_hostname_lock;
-
-KResultOr<int> Process::sys$gethostname(Userspace<char*> buffer, ssize_t size)
+ErrorOr<FlatPtr> Process::sys$gethostname(Userspace<char*> buffer, size_t size)
 {
-    REQUIRE_PROMISE(stdio);
-    if (size < 0)
+    VERIFY_NO_PROCESS_BIG_LOCK(this)
+    TRY(require_promise(Pledge::stdio));
+    if (size > NumericLimits<ssize_t>::max())
         return EINVAL;
-    Locker locker(*g_hostname_lock, Lock::Mode::Shared);
-    if ((size_t)size < (g_hostname->length() + 1))
-        return ENAMETOOLONG;
-    if (!copy_to_user(buffer, g_hostname->characters(), g_hostname->length() + 1))
-        return EFAULT;
-    return 0;
+    return hostname().with_shared([&](const auto& name) -> ErrorOr<FlatPtr> {
+        if (size < (name->length() + 1))
+            return ENAMETOOLONG;
+        TRY(copy_to_user(buffer, name->characters(), name->length() + 1));
+        return 0;
+    });
 }
 
-KResultOr<int> Process::sys$sethostname(Userspace<const char*> hostname, ssize_t length)
+ErrorOr<FlatPtr> Process::sys$sethostname(Userspace<const char*> buffer, size_t length)
 {
-    REQUIRE_NO_PROMISES;
+    VERIFY_NO_PROCESS_BIG_LOCK(this)
+    TRY(require_no_promises());
+
     if (!is_superuser())
         return EPERM;
-    if (length < 0)
-        return EINVAL;
-    Locker locker(*g_hostname_lock, Lock::Mode::Exclusive);
     if (length > 64)
         return ENAMETOOLONG;
-    auto copied_hostname = copy_string_from_user(hostname, length);
-    if (copied_hostname.is_null())
-        return EFAULT;
-    *g_hostname = move(copied_hostname);
+    auto new_name = TRY(try_copy_kstring_from_user(buffer, length));
+    hostname().with_exclusive([&](auto& name) {
+        name = move(new_name);
+    });
     return 0;
 }
 

@@ -7,6 +7,8 @@
 #include <LibGUI/TextBox.h>
 
 REGISTER_WIDGET(GUI, TextBox)
+REGISTER_WIDGET(GUI, PasswordBox)
+REGISTER_WIDGET(GUI, UrlBox)
 
 namespace GUI {
 
@@ -70,6 +72,47 @@ void TextBox::add_input_to_history(String input)
 {
     m_history.append(move(input));
     m_history_index++;
+}
+
+PasswordBox::PasswordBox()
+    : TextBox()
+{
+    set_substitution_code_point('*');
+    set_text_is_secret(true);
+}
+
+UrlBox::UrlBox()
+    : TextBox()
+{
+    set_auto_focusable(false);
+}
+
+UrlBox::~UrlBox()
+{
+}
+
+void UrlBox::focusout_event(GUI::FocusEvent& event)
+{
+    set_focus_transition(true);
+
+    TextBox::focusout_event(event);
+}
+
+void UrlBox::mousedown_event(GUI::MouseEvent& event)
+{
+    if (is_displayonly())
+        return;
+
+    if (event.button() != MouseButton::Primary)
+        return;
+
+    if (is_focus_transition()) {
+        TextBox::select_current_line();
+
+        set_focus_transition(false);
+    } else {
+        TextBox::mousedown_event(event);
+    }
 }
 
 }

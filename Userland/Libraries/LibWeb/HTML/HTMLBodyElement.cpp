@@ -7,12 +7,12 @@
 #include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/CSS/StyleValue.h>
 #include <LibWeb/DOM/Document.h>
-#include <LibWeb/DOM/Window.h>
 #include <LibWeb/HTML/HTMLBodyElement.h>
+#include <LibWeb/HTML/Window.h>
 
 namespace Web::HTML {
 
-HTMLBodyElement::HTMLBodyElement(DOM::Document& document, QualifiedName qualified_name)
+HTMLBodyElement::HTMLBodyElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
 {
 }
@@ -55,7 +55,7 @@ void HTMLBodyElement::parse_attribute(const FlyString& name, const String& value
         if (color.has_value())
             document().set_visited_link_color(color.value());
     } else if (name.equals_ignoring_case("background")) {
-        m_background_style_value = CSS::ImageStyleValue::create(document().complete_url(value), const_cast<DOM::Document&>(document()));
+        m_background_style_value = CSS::ImageStyleValue::create(document().parse_url(value));
     }
 }
 

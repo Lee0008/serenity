@@ -11,8 +11,8 @@
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/URL.h>
-#include <LibHTTP/HttpJob.h>
-#include <RequestServer/ClientConnection.h>
+#include <LibHTTP/Job.h>
+#include <RequestServer/ConnectionFromClient.h>
 #include <RequestServer/HttpRequest.h>
 #include <RequestServer/Protocol.h>
 #include <RequestServer/Request.h>
@@ -21,13 +21,13 @@ namespace RequestServer {
 
 class HttpProtocol final : public Protocol {
 public:
-    using JobType = HTTP::HttpJob;
+    using JobType = HTTP::Job;
     using RequestType = HttpRequest;
 
     HttpProtocol();
     ~HttpProtocol() override = default;
 
-    virtual OwnPtr<Request> start_request(ClientConnection&, const String& method, const URL&, const HashMap<String, String>& headers, ReadonlyBytes body) override;
+    virtual OwnPtr<Request> start_request(ConnectionFromClient&, const String& method, const URL&, const HashMap<String, String>& headers, ReadonlyBytes body) override;
 };
 
 }

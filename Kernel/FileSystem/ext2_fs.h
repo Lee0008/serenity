@@ -138,7 +138,7 @@ struct ext2_group_desc {
     __u16 bg_flags;
     __u32 bg_reserved[2];
     __u16 bg_itable_unused; /* Unused inodes count */
-    __u16 bg_checksum;      /* crc16(s_uuid+grouo_num+group_desc)*/
+    __u16 bg_checksum;      /* crc16(s_uuid+group_num+group_desc)*/
 };
 
 struct ext4_group_desc {
@@ -151,7 +151,7 @@ struct ext4_group_desc {
     __u16 bg_flags;
     __u32 bg_reserved[2];
     __u16 bg_itable_unused;        /* Unused inodes count */
-    __u16 bg_checksum;             /* crc16(s_uuid+grouo_num+group_desc)*/
+    __u16 bg_checksum;             /* crc16(s_uuid+group_num+group_desc)*/
     __u32 bg_block_bitmap_hi;      /* Blocks bitmap block MSB */
     __u32 bg_inode_bitmap_hi;      /* Inodes bitmap block MSB */
     __u32 bg_inode_table_hi;       /* Inodes table block MSB */
@@ -473,7 +473,7 @@ struct ext2_inode_large {
 #define EXT2_DFL_CHECKINTERVAL 0  /* Don't use interval check */
 
 /*
- * Behaviour when detecting errors
+ * Behavior when detecting errors
  */
 #define EXT2_ERRORS_CONTINUE 1 /* Continue execution */
 #define EXT2_ERRORS_RO 2       /* Remount fs read-only */
@@ -501,7 +501,7 @@ struct ext2_super_block {
     __s16 s_max_mnt_count;     /* Maximal mount count */
     __u16 s_magic;             /* Magic signature */
     __u16 s_state;             /* File system state */
-    __u16 s_errors;            /* Behaviour when detecting errors */
+    __u16 s_errors;            /* Behavior when detecting errors */
     __u16 s_minor_rev_level;   /* minor revision level */
     __u32 s_lastcheck;         /* time of last check */
     __u32 s_checkinterval;     /* max. time between checks */

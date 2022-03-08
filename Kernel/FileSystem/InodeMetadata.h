@@ -6,19 +6,23 @@
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/Span.h>
+#include <Kernel/FileSystem/DeviceFileTypes.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
-#include <Kernel/KResult.h>
+#include <Kernel/Forward.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
 
 class Process;
 
-constexpr u32 encoded_device(unsigned major, unsigned minor)
+constexpr u64 encoded_device(MajorNumber major, MinorNumber minor)
 {
-    return (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12);
+    return (minor.value() & 0xff) | (major.value() << 8) | ((minor.value() & ~0xff) << 12);
 }
+static inline MajorNumber major_from_encoded_device(dev_t dev) { return (dev & 0xfff00u) >> 8u; }
+static inline MinorNumber minor_from_encoded_device(dev_t dev) { return (dev & 0xffu) | ((dev >> 12u) & 0xfff00u); }
 
 inline bool is_directory(mode_t mode) { return (mode & S_IFMT) == S_IFDIR; }
 inline bool is_character_device(mode_t mode) { return (mode & S_IFMT) == S_IFCHR; }
@@ -27,9 +31,9 @@ inline bool is_regular_file(mode_t mode) { return (mode & S_IFMT) == S_IFREG; }
 inline bool is_fifo(mode_t mode) { return (mode & S_IFMT) == S_IFIFO; }
 inline bool is_symlink(mode_t mode) { return (mode & S_IFMT) == S_IFLNK; }
 inline bool is_socket(mode_t mode) { return (mode & S_IFMT) == S_IFSOCK; }
-inline bool is_sticky(mode_t mode) { return mode & S_ISVTX; }
-inline bool is_setuid(mode_t mode) { return mode & S_ISUID; }
-inline bool is_setgid(mode_t mode) { return mode & S_ISGID; }
+inline bool is_sticky(mode_t mode) { return (mode & S_ISVTX) == S_ISVTX; }
+inline bool is_setuid(mode_t mode) { return (mode & S_ISUID) == S_ISUID; }
+inline bool is_setgid(mode_t mode) { return (mode & S_ISGID) == S_ISGID; }
 
 struct InodeMetadata {
     bool is_valid() const { return inode.is_valid(); }
@@ -38,37 +42,37 @@ struct InodeMetadata {
     bool may_write(const Process&) const;
     bool may_execute(const Process&) const;
 
-    bool may_read(uid_t u, gid_t g, Span<const gid_t> eg) const
+    bool may_read(UserID u, GroupID g, Span<GroupID const> eg) const
     {
         if (u == 0)
             return true;
         if (uid == u)
-            return mode & S_IRUSR;
+            return (mode & S_IRUSR) == S_IRUSR;
         if (gid == g || eg.contains_slow(gid))
-            return mode & S_IRGRP;
-        return mode & S_IROTH;
+            return (mode & S_IRGRP) == S_IRGRP;
+        return (mode & S_IROTH) == S_IROTH;
     }
 
-    bool may_write(uid_t u, gid_t g, Span<const gid_t> eg) const
+    bool may_write(UserID u, GroupID g, Span<GroupID const> eg) const
     {
         if (u == 0)
             return true;
         if (uid == u)
-            return mode & S_IWUSR;
+            return (mode & S_IWUSR) == S_IWUSR;
         if (gid == g || eg.contains_slow(gid))
-            return mode & S_IWGRP;
-        return mode & S_IWOTH;
+            return (mode & S_IWGRP) == S_IWGRP;
+        return (mode & S_IWOTH) == S_IWOTH;
     }
 
-    bool may_execute(uid_t u, gid_t g, Span<const gid_t> eg) const
+    bool may_execute(UserID u, GroupID g, Span<GroupID const> eg) const
     {
         if (u == 0)
             return true;
         if (uid == u)
-            return mode & S_IXUSR;
+            return (mode & S_IXUSR) == S_IXUSR;
         if (gid == g || eg.contains_slow(gid))
-            return mode & S_IXGRP;
-        return mode & S_IXOTH;
+            return (mode & S_IXGRP) == S_IXGRP;
+        return (mode & S_IXOTH) == S_IXOTH;
     }
 
     bool is_directory() const { return Kernel::is_directory(mode); }
@@ -83,16 +87,17 @@ struct InodeMetadata {
     bool is_setuid() const { return Kernel::is_setuid(mode); }
     bool is_setgid() const { return Kernel::is_setgid(mode); }
 
-    KResult stat(stat& buffer) const
+    ErrorOr<struct stat> stat() const
     {
         if (!is_valid())
             return EIO;
+        struct stat buffer = {};
         buffer.st_rdev = encoded_device(major_device, minor_device);
         buffer.st_ino = inode.index().value();
         buffer.st_mode = mode;
         buffer.st_nlink = link_count;
-        buffer.st_uid = uid;
-        buffer.st_gid = gid;
+        buffer.st_uid = uid.value();
+        buffer.st_gid = gid.value();
         buffer.st_dev = 0; // FIXME
         buffer.st_size = size;
         buffer.st_blksize = block_size;
@@ -103,14 +108,14 @@ struct InodeMetadata {
         buffer.st_mtim.tv_nsec = 0;
         buffer.st_ctim.tv_sec = ctime;
         buffer.st_ctim.tv_nsec = 0;
-        return KSuccess;
+        return buffer;
     }
 
     InodeIdentifier inode;
     off_t size { 0 };
     mode_t mode { 0 };
-    uid_t uid { 0 };
-    gid_t gid { 0 };
+    UserID uid { 0 };
+    GroupID gid { 0 };
     nlink_t link_count { 0 };
     time_t atime { 0 };
     time_t ctime { 0 };
@@ -118,8 +123,8 @@ struct InodeMetadata {
     time_t dtime { 0 };
     blkcnt_t block_count { 0 };
     blksize_t block_size { 0 };
-    unsigned major_device { 0 };
-    unsigned minor_device { 0 };
+    MajorNumber major_device { 0 };
+    MinorNumber minor_device { 0 };
 };
 
 }

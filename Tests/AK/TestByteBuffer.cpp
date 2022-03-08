@@ -10,10 +10,10 @@
 
 TEST_CASE(equality_operator)
 {
-    ByteBuffer a = ByteBuffer::copy("Hello, world", 7);
-    ByteBuffer b = ByteBuffer::copy("Hello, friend", 7);
+    ByteBuffer a = ByteBuffer::copy("Hello, world", 7).release_value();
+    ByteBuffer b = ByteBuffer::copy("Hello, friend", 7).release_value();
     // `a` and `b` are both "Hello, ".
-    ByteBuffer c = ByteBuffer::copy("asdf", 4);
+    ByteBuffer c = ByteBuffer::copy("asdf", 4).release_value();
     ByteBuffer d;
     EXPECT_EQ(a == a, true);
     EXPECT_EQ(a == b, true);
@@ -43,8 +43,8 @@ TEST_CASE(equality_operator)
 #if COMPILE_NEGATIVE_TESTS
 TEST_CASE(negative_operator_lt)
 {
-    ByteBuffer a = ByteBuffer::copy("Hello, world", 10);
-    ByteBuffer b = ByteBuffer::copy("Hello, friend", 10);
+    ByteBuffer a = ByteBuffer::copy("Hello, world", 10).release_value();
+    ByteBuffer b = ByteBuffer::copy("Hello, friend", 10).release_value();
     [[maybe_unused]] auto res = a < b;
     // error: error: use of deleted function ‘bool AK::ByteBuffer::operator<(const AK::ByteBuffer&) const’
 }

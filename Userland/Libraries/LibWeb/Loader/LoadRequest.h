@@ -8,7 +8,9 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/HashMap.h>
+#include <AK/Time.h>
 #include <AK/URL.h>
+#include <LibCore/ElapsedTimer.h>
 #include <LibWeb/Forward.h>
 
 namespace Web {
@@ -19,12 +21,12 @@ public:
     {
     }
 
-    static LoadRequest create_for_url_on_page(const URL& url, Page* page);
+    static LoadRequest create_for_url_on_page(const AK::URL& url, Page* page);
 
     bool is_valid() const { return m_url.is_valid(); }
 
-    const URL& url() const { return m_url; }
-    void set_url(const URL& url) { m_url = url; }
+    const AK::URL& url() const { return m_url; }
+    void set_url(const AK::URL& url) { m_url = url; }
 
     const String& method() const { return m_method; }
     void set_method(const String& method) { m_method = method; }
@@ -32,10 +34,15 @@ public:
     const ByteBuffer& body() const { return m_body; }
     void set_body(const ByteBuffer& body) { m_body = body; }
 
+    void start_timer() { m_load_timer.start(); };
+    Time load_time() const { return m_load_timer.elapsed_time(); }
+
     unsigned hash() const
     {
-        // FIXME: Include headers in the hash as well
-        return pair_int_hash(pair_int_hash(m_url.to_string().hash(), m_method.hash()), string_hash((const char*)m_body.data(), m_body.size()));
+        auto body_hash = string_hash((const char*)m_body.data(), m_body.size());
+        auto body_and_headers_hash = pair_int_hash(body_hash, m_headers.hash());
+        auto url_and_method_hash = pair_int_hash(m_url.to_string().hash(), m_method.hash());
+        return pair_int_hash(body_and_headers_hash, url_and_method_hash);
     }
 
     bool operator==(const LoadRequest& other) const
@@ -58,10 +65,11 @@ public:
     const HashMap<String, String>& headers() const { return m_headers; }
 
 private:
-    URL m_url;
+    AK::URL m_url;
     String m_method { "GET" };
     HashMap<String, String> m_headers;
     ByteBuffer m_body;
+    Core::ElapsedTimer m_load_timer;
 };
 
 }

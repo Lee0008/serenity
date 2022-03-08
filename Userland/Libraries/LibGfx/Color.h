@@ -17,12 +17,7 @@
 namespace Gfx {
 
 enum class ColorRole;
-typedef u32 RGBA32;
-
-constexpr u32 make_rgb(u8 r, u8 g, u8 b)
-{
-    return ((r << 16) | (g << 8) | b);
-}
+typedef u32 ARGB32;
 
 struct HSV {
     double hue { 0 };
@@ -57,7 +52,7 @@ public:
         MidMagenta,
     };
 
-    constexpr Color() { }
+    constexpr Color() = default;
     constexpr Color(NamedColor);
     constexpr Color(u8 r, u8 g, u8 b)
         : m_value(0xff000000 | (r << 16) | (g << 8) | b)
@@ -69,7 +64,7 @@ public:
     }
 
     static constexpr Color from_rgb(unsigned rgb) { return Color(rgb | 0xff000000); }
-    static constexpr Color from_rgba(unsigned rgba) { return Color(rgba); }
+    static constexpr Color from_argb(unsigned argb) { return Color(argb); }
 
     static constexpr Color from_cmyk(float c, float m, float y, float k)
     {
@@ -78,6 +73,60 @@ public:
         auto b = static_cast<u8>(255.0f * (1.0f - y) * (1.0f - k));
 
         return Color(r, g, b);
+    }
+
+    static constexpr Color from_hsl(double h_degrees, double s, double l) { return from_hsla(h_degrees, s, l, 1.0); }
+    static constexpr Color from_hsla(double h_degrees, double s, double l, double a)
+    {
+        // Algorithm from https://www.w3.org/TR/css-color-3/#hsl-color
+        double h = clamp(h_degrees / 360.0, 0.0, 1.0);
+        s = clamp(s, 0.0, 1.0);
+        l = clamp(l, 0.0, 1.0);
+        a = clamp(a, 0.0, 1.0);
+
+        // HOW TO RETURN hue.to.rgb(m1, m2, h):
+        auto hue_to_rgb = [](double m1, double m2, double h) -> double {
+            // IF h<0: PUT h+1 IN h
+            if (h < 0.0)
+                h = h + 1.0;
+            // IF h>1: PUT h-1 IN h
+            if (h > 1.0)
+                h = h - 1.0;
+            // IF h*6<1: RETURN m1+(m2-m1)*h*6
+            if (h * 6.0 < 1.0)
+                return m1 + (m2 - m1) * h * 6.0;
+            // IF h*2<1: RETURN m2
+            if (h * 2.0 < 1.0)
+                return m2;
+            // IF h*3<2: RETURN m1+(m2-m1)*(2/3-h)*6
+            if (h * 3.0 < 2.0)
+                return m1 + (m2 - m1) * (2.0 / 3.0 - h) * 6.0;
+            // RETURN m1
+            return m1;
+        };
+
+        // SELECT:
+        // l<=0.5: PUT l*(s+1) IN m2
+        double m2;
+        if (l <= 0.5)
+            m2 = l * (s + 1.0);
+        // ELSE: PUT l+s-l*s IN m2
+        else
+            m2 = l + s - l * s;
+        // PUT l*2-m2 IN m1
+        double m1 = l * 2.0 - m2;
+        // PUT hue.to.rgb(m1, m2, h+1/3) IN r
+        double r = hue_to_rgb(m1, m2, h + 1.0 / 3.0);
+        // PUT hue.to.rgb(m1, m2, h    ) IN g
+        double g = hue_to_rgb(m1, m2, h);
+        // PUT hue.to.rgb(m1, m2, h-1/3) IN b
+        double b = hue_to_rgb(m1, m2, h - 1.0 / 3.0);
+        // RETURN (r, g, b)
+        u8 r_u8 = clamp(lroundf(r * 255.0), 0, 255);
+        u8 g_u8 = clamp(lroundf(g * 255.0), 0, 255);
+        u8 b_u8 = clamp(lroundf(b * 255.0), 0, 255);
+        u8 a_u8 = clamp(lroundf(a * 255.0), 0, 255);
+        return Color(r_u8, g_u8, b_u8, a_u8);
     }
 
     constexpr u8 red() const { return (m_value >> 16) & 0xff; }
@@ -149,7 +198,7 @@ public:
 #endif
     }
 
-    Color interpolate(const Color& other, float weight) const noexcept
+    Color interpolate(Color const& other, float weight) const noexcept
     {
         u8 r = red() + roundf(static_cast<float>(other.red() - red()) * weight);
         u8 g = green() + roundf(static_cast<float>(other.green() - green()) * weight);
@@ -158,7 +207,7 @@ public:
         return Color(r, g, b, a);
     }
 
-    constexpr Color multiply(const Color& other) const
+    constexpr Color multiply(Color const& other) const
     {
         return Color(
             red() * other.red() / 255,
@@ -167,10 +216,42 @@ public:
             alpha() * other.alpha() / 255);
     }
 
+    constexpr u8 luminosity() const
+    {
+        return (red() * 0.2126f + green() * 0.7152f + blue() * 0.0722f);
+    }
+
     constexpr Color to_grayscale() const
     {
-        int gray = (red() + green() + blue()) / 3;
+        auto gray = luminosity();
         return Color(gray, gray, gray, alpha());
+    }
+
+    constexpr Color sepia(float amount = 1.0f) const
+    {
+        auto blend_factor = 1.0f - amount;
+
+        auto r1 = 0.393f + 0.607f * blend_factor;
+        auto r2 = 0.769f - 0.769f * blend_factor;
+        auto r3 = 0.189f - 0.189f * blend_factor;
+
+        auto g1 = 0.349f - 0.349f * blend_factor;
+        auto g2 = 0.686f + 0.314f * blend_factor;
+        auto g3 = 0.168f - 0.168f * blend_factor;
+
+        auto b1 = 0.272f - 0.272f * blend_factor;
+        auto b2 = 0.534f - 0.534f * blend_factor;
+        auto b3 = 0.131f + 0.869f * blend_factor;
+
+        auto r = red();
+        auto g = green();
+        auto b = blue();
+
+        return Color(
+            clamp(lroundf(r * r1 + g * r2 + b * r3), 0, 255),
+            clamp(lroundf(r * g1 + g * g2 + b * g3), 0, 255),
+            clamp(lroundf(r * b1 + g * b2 + b * b3), 0, 255),
+            alpha());
     }
 
     constexpr Color darkened(float amount = 0.5f) const
@@ -183,31 +264,34 @@ public:
         return Color(min(255, (int)((float)red() * amount)), min(255, (int)((float)green() * amount)), min(255, (int)((float)blue() * amount)), alpha());
     }
 
+    Vector<Color> shades(u32 steps, float max = 1.f) const;
+    Vector<Color> tints(u32 steps, float max = 1.f) const;
+
     constexpr Color inverted() const
     {
         return Color(~red(), ~green(), ~blue(), alpha());
     }
 
-    constexpr Color xored(const Color& other) const
+    constexpr Color xored(Color const& other) const
     {
         return Color(((other.m_value ^ m_value) & 0x00ffffff) | (m_value & 0xff000000));
     }
 
-    constexpr RGBA32 value() const { return m_value; }
+    constexpr ARGB32 value() const { return m_value; }
 
-    constexpr bool operator==(const Color& other) const
+    constexpr bool operator==(Color const& other) const
     {
         return m_value == other.m_value;
     }
 
-    constexpr bool operator!=(const Color& other) const
+    constexpr bool operator!=(Color const& other) const
     {
         return m_value != other.m_value;
     }
 
     String to_string() const;
     String to_string_without_alpha() const;
-    static Optional<Color> from_string(const StringView&);
+    static Optional<Color> from_string(StringView);
 
     constexpr HSV to_hsv() const
     {
@@ -250,7 +334,7 @@ public:
         return from_hsv({ hue, saturation, value });
     }
 
-    static constexpr Color from_hsv(const HSV& hsv)
+    static constexpr Color from_hsv(HSV const& hsv)
     {
         VERIFY(hsv.hue >= 0.0 && hsv.hue < 360.0);
         VERIFY(hsv.saturation >= 0.0 && hsv.saturation <= 1.0);
@@ -309,13 +393,18 @@ public:
         return Color(out_r, out_g, out_b);
     }
 
+    constexpr Color suggested_foreground_color() const
+    {
+        return luminosity() < 128 ? Color::White : Color::Black;
+    }
+
 private:
-    constexpr explicit Color(RGBA32 rgba)
+    constexpr explicit Color(ARGB32 rgba)
         : m_value(rgba)
     {
     }
 
-    RGBA32 m_value { 0 };
+    ARGB32 m_value { 0 };
 };
 
 constexpr Color::Color(NamedColor named)
@@ -411,14 +500,14 @@ namespace AK {
 
 template<>
 struct Formatter<Gfx::Color> : public Formatter<StringView> {
-    void format(FormatBuilder& builder, const Gfx::Color& value);
+    ErrorOr<void> format(FormatBuilder&, Gfx::Color const&);
 };
 
 }
 
 namespace IPC {
 
-bool encode(Encoder&, const Gfx::Color&);
-bool decode(Decoder&, Gfx::Color&);
+bool encode(Encoder&, Gfx::Color const&);
+ErrorOr<void> decode(Decoder&, Gfx::Color&);
 
 }

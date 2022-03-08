@@ -1,17 +1,18 @@
 @GUI::Widget {
     name: "basics_tab"
     layout: @GUI::VerticalBoxLayout {
-        margins: [4, 4, 4, 4]
+        margins: [4]
     }
 
     @GUI::GroupBox {
         fixed_height: 95
         layout: @GUI::VerticalBoxLayout {
-            margins: [8, 8, 8, 8]
+            margins: [8]
         }
 
         @GUI::HorizontalSplitter {
             layout: @GUI::HorizontalBoxLayout {
+                spacing: 4
             }
 
             @GUI::Frame {
@@ -20,7 +21,7 @@
                 shadow: "Sunken"
                 thickness: 1
                 layout: @GUI::VerticalBoxLayout {
-                    margins: [4, 3, 4, 3]
+                    margins: [3, 4]
                 }
 
                 @GUI::Label {
@@ -37,7 +38,7 @@
 
             @GUI::Widget {
                 layout: @GUI::VerticalBoxLayout {
-                    margins: [4, 0, 4, 0]
+                    margins: [0, 4]
                 }
 
                 @GUI::Label {
@@ -49,13 +50,11 @@
             }
         }
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
         @GUI::Widget {
             fixed_height: 22
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::ComboBox {
                 name: "frame_shape_combobox"
@@ -67,8 +66,7 @@
                 enabled: false
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::SpinBox {
                 name: "thickness_spinbox"
@@ -85,19 +83,16 @@
     @GUI::Widget {
         fixed_height: 125
         layout: @GUI::VerticalBoxLayout {
-            margins: [8, 3, 8, 3]
+            margins: [3, 8]
         }
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Widget {
-                layout: @GUI::VerticalBoxLayout {
-                }
+                layout: @GUI::VerticalBoxLayout {}
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
 
                 @GUI::Button {
                     name: "normal_button"
@@ -110,19 +105,15 @@
                     enabled: "false"
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::Widget {
-                layout: @GUI::VerticalBoxLayout {
-                }
+                layout: @GUI::VerticalBoxLayout {}
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
 
                 @GUI::Button {
                     name: "enabled_coolbar_button"
@@ -137,29 +128,23 @@
                     button_style: "Coolbar"
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
             }
         }
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Widget {
                     fixed_width: 60
-                    layout: @GUI::VerticalBoxLayout {
-                    }
+                    layout: @GUI::VerticalBoxLayout {}
 
-                    @GUI::Widget {
-                    }
+                    @GUI::Widget {}
 
                     @GUI::RadioButton {
                         name: "top_radiobutton"
@@ -172,20 +157,16 @@
                         text: "Radio 2"
                     }
 
-                    @GUI::Widget {
-                    }
+                    @GUI::Widget {}
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
 
                 @GUI::Widget {
                     fixed_width: 70
-                    layout: @GUI::VerticalBoxLayout {
-                    }
+                    layout: @GUI::VerticalBoxLayout {}
 
-                    @GUI::Widget {
-                    }
+                    @GUI::Widget {}
 
                     @GUI::CheckBox {
                         name: "top_checkbox"
@@ -198,56 +179,46 @@
                         enabled: false
                     }
 
-                    @GUI::Widget {
-                    }
+                    @GUI::Widget {}
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::Widget {
-                layout: @GUI::VerticalBoxLayout {
-                }
+                layout: @GUI::VerticalBoxLayout {}
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
 
                 @GUI::Button {
                     name: "icon_button"
                     text: "Icon button"
-
                 }
 
                 @GUI::Button {
                     name: "disabled_icon_button"
                     text: "Disabled"
                     enabled: "false"
-
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
             }
         }
     }
 
     @GUI::GroupBox {
         layout: @GUI::VerticalBoxLayout {
-            margins: [8, 8, 8, 8]
+            margins: [6]
         }
 
         @GUI::Widget {
             fixed_height: 47
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Widget {
-                layout: @GUI::VerticalBoxLayout {
-                }
+                layout: @GUI::VerticalBoxLayout {}
 
                 @GUI::TextBox {
                     placeholder: "Text box"
@@ -260,12 +231,10 @@
                 }
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::Widget {
-                layout: @GUI::VerticalBoxLayout {
-                }
+                layout: @GUI::VerticalBoxLayout {}
 
                 @GUI::TextBox {
                     text: "Read only"
@@ -279,29 +248,24 @@
             }
         }
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::TextEditor {
                 name: "text_editor"
                 placeholder: "Text editor"
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::Widget {
-                layout: @GUI::VerticalBoxLayout {
-                }
+                layout: @GUI::VerticalBoxLayout {}
 
                 @GUI::Widget {
                     fixed_height: 22
-                    layout: @GUI::HorizontalBoxLayout {
-                    }
+                    layout: @GUI::HorizontalBoxLayout {}
 
                     @GUI::ColorInput {
                         name: "font_colorinput"
@@ -314,8 +278,7 @@
                     }
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
 
                 @GUI::Button {
                     name: "font_button"
@@ -332,22 +295,18 @@
                     text: "Input dialog..."
                 }
 
-                @GUI::Widget {
-                }
+                @GUI::Widget {}
             }
         }
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
         @GUI::Widget {
             fixed_height: 22
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::ComboBox {
                     name: "msgbox_icon_combobox"
@@ -360,12 +319,10 @@
                 }
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Button {
                     name: "msgbox_button"

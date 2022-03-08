@@ -1,7 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2019-2020, William McPherson <willmcpherson2@gmail.com>
- * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -10,14 +11,16 @@
 
 #include "KeysWidget.h"
 #include "Music.h"
+#include <LibDSP/Music.h>
 #include <LibGUI/AbstractScrollableWidget.h>
 
 class TrackManager;
+using LibDSP::RollNote;
 
 class RollWidget final : public GUI::AbstractScrollableWidget {
     C_OBJECT(RollWidget)
 public:
-    virtual ~RollWidget() override;
+    virtual ~RollWidget() override = default;
 
     const KeysWidget* keys_widget() const { return m_keys_widget; }
     void set_keys_widget(const KeysWidget* widget) { m_keys_widget = widget; }

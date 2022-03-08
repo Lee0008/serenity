@@ -9,7 +9,6 @@
 #include <AK/Assertions.h>
 #include <AK/Endian.h>
 #include <AK/IPv4Address.h>
-#include <AK/String.h>
 #include <AK/Types.h>
 
 namespace Kernel {
@@ -31,6 +30,9 @@ class [[gnu::packed]] IPv4Packet {
 public:
     u8 version() const { return (m_version_and_ihl >> 4) & 0xf; }
     void set_version(u8 version) { m_version_and_ihl = (m_version_and_ihl & 0x0f) | (version << 4); }
+
+    u8 dscp_and_ecn() const { return m_dscp_and_ecn; }
+    void set_dscp_and_ecn(u8 dscp_and_ecn) { m_dscp_and_ecn = dscp_and_ecn; }
 
     u8 internet_header_length() const { return m_version_and_ihl & 0xf; }
     void set_internet_header_length(u8 ihl) { m_version_and_ihl = (m_version_and_ihl & 0xf0) | (ihl & 0x0f); }
@@ -102,7 +104,7 @@ private:
     IPv4Address m_destination;
 };
 
-static_assert(sizeof(IPv4Packet) == 20);
+static_assert(AssertSize<IPv4Packet, 20>());
 
 inline NetworkOrdered<u16> internet_checksum(const void* ptr, size_t count)
 {

@@ -9,13 +9,14 @@
 
 #include <AK/Noncopyable.h>
 #include <AK/NonnullOwnPtrVector.h>
-#include <AK/String.h>
 #include <AK/Vector.h>
 #include <Kernel/API/KeyCode.h>
+#include <LibVT/CharacterSet.h>
 #include <LibVT/EscapeSequenceParser.h>
 #include <LibVT/Position.h>
 
 #ifndef KERNEL
+#    include <AK/String.h>
 #    include <LibVT/Attribute.h>
 #    include <LibVT/Line.h>
 #else
@@ -37,12 +38,17 @@ enum CursorStyle {
     SteadyBar
 };
 
+enum CursorKeysMode {
+    Application,
+    Cursor,
+};
+
 class TerminalClient {
 public:
     virtual ~TerminalClient() { }
 
     virtual void beep() = 0;
-    virtual void set_window_title(const StringView&) = 0;
+    virtual void set_window_title(StringView) = 0;
     virtual void set_window_progress(int value, int max) = 0;
     virtual void terminal_did_resize(u16 columns, u16 rows) = 0;
     virtual void terminal_history_changed(int delta) = 0;
@@ -166,7 +172,7 @@ public:
     size_t history_size() const { return m_use_alternate_screen_buffer ? 0 : m_history.size(); }
 #endif
 
-    void inject_string(const StringView&);
+    void inject_string(StringView);
     void handle_key_press(KeyCode, u32, u8 flags);
 
 #ifndef KERNEL
@@ -193,17 +199,6 @@ protected:
     virtual void dcs_hook(Parameters parameters, Intermediates intermediates, bool ignore, u8 last_byte) override;
     virtual void receive_dcs_char(u8 byte) override;
     virtual void execute_dcs_sequence() override;
-
-    struct CursorPosition {
-        u16 row { 0 };
-        u16 column { 0 };
-
-        void clamp(u16 max_row, u16 max_column)
-        {
-            row = min(row, max_row);
-            column = min(column, max_column);
-        }
-    };
 
     struct BufferState {
         Attribute attribute;
@@ -235,9 +230,10 @@ protected:
     void unimplemented_csi_sequence(Parameters, Intermediates, u8 last_byte);
     void unimplemented_osc_sequence(OscParameters, u8 last_byte);
 
-    void emit_string(const StringView&);
+    void emit_string(StringView);
 
-    void alter_mode(bool should_set, Parameters, Intermediates);
+    void alter_ansi_mode(bool should_set, Parameters);
+    void alter_private_mode(bool should_set, Parameters);
 
     // CUU – Cursor Up
     void CUU(Parameters);
@@ -285,10 +281,16 @@ protected:
     void DECSTBM(Parameters);
 
     // RM – Reset Mode
-    void RM(Parameters, Intermediates);
+    void RM(Parameters);
+
+    // DECRST - DEC Private Mode Reset
+    void DECRST(Parameters);
 
     // SM – Set Mode
-    void SM(Parameters, Intermediates);
+    void SM(Parameters);
+
+    // DECSET - Dec Private Mode Set
+    void DECSET(Parameters);
 
     // DA - Device Attributes
     void DA(Parameters);
@@ -365,6 +367,12 @@ protected:
     // DECDC - Delete Column
     void DECDC(Parameters);
 
+    // DECPNM - Set numeric keypad mode
+    void DECPNM();
+
+    // DECPAM - Set application keypad mode
+    void DECPAM();
+
 #ifndef KERNEL
     TerminalClient& m_client;
 #else
@@ -380,9 +388,14 @@ protected:
         if (max_history_size() == 0)
             return;
 
+        // If m_history can expand, add the new line to the end of the list.
+        // If there is an overflow wrap, the end is at the index before the start.
         if (m_history.size() < max_history_size()) {
-            VERIFY(m_history_start == 0);
-            m_history.append(move(line));
+            if (m_history_start == 0)
+                m_history.append(move(line));
+            else
+                m_history.insert(m_history_start - 1, move(line));
+
             return;
         }
         m_history.ptr_at(m_history_start) = move(line);
@@ -422,8 +435,13 @@ protected:
     Attribute m_current_attribute;
     Attribute m_saved_attribute;
 
+#ifdef KERNEL
+    OwnPtr<Kernel::KString> m_current_window_title;
+    NonnullOwnPtrVector<Kernel::KString> m_title_stack;
+#else
     String m_current_window_title;
     Vector<String> m_title_stack;
+#endif
 
 #ifndef KERNEL
     u32 m_next_href_id { 0 };
@@ -432,6 +450,14 @@ protected:
     Vector<bool> m_horizontal_tabs;
     u32 m_last_code_point { 0 };
     size_t m_max_history_lines { 1024 };
+
+    Optional<u16> m_column_before_carriage_return;
+    bool m_controls_are_logically_generated { false };
+    CursorKeysMode m_cursor_keys_mode { Cursor };
+
+    CharacterSetTranslator m_character_set_translator {};
+    size_t m_active_working_set_index { 0 };
+    CharacterSet m_working_sets[4] { Iso_8859_1 };
 };
 
 }

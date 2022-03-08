@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2019-2020, Jesse Buhagiar <jooster669@gmail.com>
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,18 +10,24 @@
 #include <AK/StringBuilder.h>
 #include <Applications/DisplaySettings/BackgroundSettingsGML.h>
 #include <LibCore/ConfigFile.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/Clipboard.h>
 #include <LibGUI/ComboBox.h>
+#include <LibGUI/ConnectionToWindowServer.h>
 #include <LibGUI/Desktop.h>
 #include <LibGUI/FilePicker.h>
 #include <LibGUI/FileSystemModel.h>
 #include <LibGUI/IconView.h>
 #include <LibGUI/ItemListModel.h>
-#include <LibGUI/WindowServerConnection.h>
+#include <LibGUI/MessageBox.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/SystemTheme.h>
+
+// Including this after to avoid LibIPC errors
+#include <LibConfig/Client.h>
 
 namespace DisplaySettings {
 
@@ -32,10 +39,6 @@ BackgroundSettingsWidget::BackgroundSettingsWidget()
 
     create_frame();
     load_current_settings();
-}
-
-BackgroundSettingsWidget::~BackgroundSettingsWidget()
-{
 }
 
 void BackgroundSettingsWidget::create_frame()
@@ -59,9 +62,26 @@ void BackgroundSettingsWidget::create_frame()
         m_monitor_widget->set_wallpaper(path);
     };
 
+    m_context_menu = GUI::Menu::construct();
+    m_show_in_file_manager_action = GUI::Action::create("Show in File Manager", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-file-manager.png").release_value_but_fixme_should_propagate_errors(), [this](GUI::Action const&) {
+        LexicalPath path { m_monitor_widget->wallpaper() };
+        Desktop::Launcher::open(URL::create_with_file_protocol(path.dirname(), path.basename()));
+    });
+    m_context_menu->add_action(*m_show_in_file_manager_action);
+
+    m_context_menu->add_separator();
+    m_copy_action = GUI::CommonActions::make_copy_action([this](auto&) { GUI::Clipboard::the().set_plain_text(m_monitor_widget->wallpaper()); }, this);
+    m_context_menu->add_action(*m_copy_action);
+
+    m_wallpaper_view->on_context_menu_request = [&](const GUI::ModelIndex& index, const GUI::ContextMenuEvent& event) {
+        if (index.is_valid()) {
+            m_context_menu->popup(event.screen_position(), m_show_in_file_manager_action);
+        }
+    };
+
     auto& button = *find_descendant_of_type_named<GUI::Button>("wallpaper_open_button");
     button.on_click = [this](auto) {
-        auto path = GUI::FilePicker::get_open_filepath(nullptr, "Select wallpaper from file system.");
+        auto path = GUI::FilePicker::get_open_filepath(window(), "Select wallpaper from file system", "/res/wallpapers");
         if (!path.has_value())
             return;
         m_wallpaper_view->selection().clear();
@@ -85,10 +105,9 @@ void BackgroundSettingsWidget::create_frame()
 
 void BackgroundSettingsWidget::load_current_settings()
 {
-    auto ws_config = Core::ConfigFile::open("/etc/WindowServer.ini");
-    auto wm_config = Core::ConfigFile::get_for_app("WindowManager");
+    auto ws_config = Core::ConfigFile::open("/etc/WindowServer.ini").release_value_but_fixme_should_propagate_errors();
 
-    auto selected_wallpaper = wm_config->read_entry("Background", "Wallpaper", "");
+    auto selected_wallpaper = Config::read_string("WindowManager", "Background", "Wallpaper", "");
     if (!selected_wallpaper.is_empty()) {
         auto index = static_cast<GUI::FileSystemModel*>(m_wallpaper_view->model())->index(selected_wallpaper, m_wallpaper_view->model_column());
         m_wallpaper_view->set_cursor(index, GUI::AbstractView::SelectionUpdate::Set);
@@ -118,16 +137,10 @@ void BackgroundSettingsWidget::load_current_settings()
 
 void BackgroundSettingsWidget::apply_settings()
 {
-    auto wm_config = Core::ConfigFile::get_for_app("WindowManager");
-    wm_config->write_entry("Background", "Wallpaper", m_monitor_widget->wallpaper());
+    if (!GUI::Desktop::the().set_wallpaper(m_monitor_widget->wallpaper_bitmap(), m_monitor_widget->wallpaper()))
+        GUI::MessageBox::show_error(window(), String::formatted("Unable to load file {} as wallpaper", m_monitor_widget->wallpaper()));
 
-    if (!m_monitor_widget->wallpaper().is_empty()) {
-        GUI::Desktop::the().set_wallpaper(m_monitor_widget->wallpaper());
-    } else {
-        GUI::Desktop::the().set_wallpaper("");
-        GUI::Desktop::the().set_background_color(m_color_input->text());
-    }
-
+    GUI::Desktop::the().set_background_color(m_color_input->text());
     GUI::Desktop::the().set_wallpaper_mode(m_monitor_widget->wallpaper_mode());
 }
 

@@ -6,9 +6,9 @@
 
 #include "MatroskaReader.h"
 #include <AK/Function.h>
-#include <AK/MappedFile.h>
 #include <AK/Optional.h>
 #include <AK/Utf8View.h>
+#include <LibCore/MappedFile.h>
 
 namespace Video {
 
@@ -41,9 +41,9 @@ constexpr u32 BIT_DEPTH_ID = 0x6264;
 constexpr u32 SIMPLE_BLOCK_ID = 0xA3;
 constexpr u32 TIMESTAMP_ID = 0xE7;
 
-OwnPtr<MatroskaDocument> MatroskaReader::parse_matroska_from_file(const StringView& path)
+OwnPtr<MatroskaDocument> MatroskaReader::parse_matroska_from_file(StringView path)
 {
-    auto mapped_file_result = MappedFile::map(path);
+    auto mapped_file_result = Core::MappedFile::map(path);
     if (mapped_file_result.is_error())
         return {};
 
@@ -51,7 +51,7 @@ OwnPtr<MatroskaDocument> MatroskaReader::parse_matroska_from_file(const StringVi
     return parse_matroska_from_data((u8*)mapped_file->data(), mapped_file->size());
 }
 
-OwnPtr<MatroskaDocument> MatroskaReader::parse_matroska_from_data(const u8* data, size_t size)
+OwnPtr<MatroskaDocument> MatroskaReader::parse_matroska_from_data(u8 const* data, size_t size)
 {
     MatroskaReader reader(data, size);
     return reader.parse();
@@ -83,7 +83,7 @@ OwnPtr<MatroskaDocument> MatroskaReader::parse()
     return matroska_document;
 }
 
-bool MatroskaReader::parse_master_element([[maybe_unused]] const StringView& element_name, Function<bool(u64)> element_consumer)
+bool MatroskaReader::parse_master_element([[maybe_unused]] StringView element_name, Function<bool(u64)> element_consumer)
 {
     auto element_data_size = m_streamer.read_variable_size_integer();
     CHECK_HAS_VALUE(element_data_size);
@@ -404,18 +404,27 @@ OwnPtr<Block> MatroskaReader::parse_simple_block()
 
         for (int i = 0; i < frame_count; i++) {
             auto current_frame_size = frame_sizes.at(i);
-            block->add_frame(ByteBuffer::copy(m_streamer.data(), current_frame_size));
+            auto frame_result = ByteBuffer::copy(m_streamer.data(), current_frame_size);
+            if (frame_result.is_error())
+                return {};
+            block->add_frame(frame_result.release_value());
             m_streamer.drop_octets(current_frame_size);
         }
     } else if (block->lacing() == Block::Lacing::FixedSize) {
         auto frame_count = m_streamer.read_octet() + 1;
         auto individual_frame_size = total_frame_content_size / frame_count;
         for (int i = 0; i < frame_count; i++) {
-            block->add_frame(ByteBuffer::copy(m_streamer.data(), individual_frame_size));
+            auto frame_result = ByteBuffer::copy(m_streamer.data(), individual_frame_size);
+            if (frame_result.is_error())
+                return {};
+            block->add_frame(frame_result.release_value());
             m_streamer.drop_octets(individual_frame_size);
         }
     } else {
-        block->add_frame(ByteBuffer::copy(m_streamer.data(), total_frame_content_size));
+        auto frame_result = ByteBuffer::copy(m_streamer.data(), total_frame_content_size);
+        if (frame_result.is_error())
+            return {};
+        block->add_frame(frame_result.release_value());
         m_streamer.drop_octets(total_frame_content_size);
     }
     return block;

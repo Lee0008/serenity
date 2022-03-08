@@ -8,29 +8,27 @@
 #include "ManualNode.h"
 #include "ManualPageNode.h"
 #include "ManualSectionNode.h"
-#include <AK/ByteBuffer.h>
-#include <LibCore/File.h>
-#include <LibGUI/FilteringProxyModel.h>
+#include <AK/Try.h>
 
 static ManualSectionNode s_sections[] = {
-    { "1", "User programs" },
-    { "2", "System calls" },
-    { "3", "Libraries" },
-    { "4", "Special files" },
-    { "5", "File formats" },
+    { "1", "User Programs" },
+    { "2", "System Calls" },
+    { "3", "Library Functions" },
+    { "4", "Special Files" },
+    { "5", "File Formats" },
     { "6", "Games" },
     { "7", "Miscellanea" },
-    { "8", "Sysadmin tools" }
+    { "8", "Sysadmin Tools" }
 };
 
 ManualModel::ManualModel()
 {
-    m_section_open_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/book-open.png"));
-    m_section_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/book.png"));
-    m_page_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-unknown.png"));
+    m_section_open_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/book-open.png").release_value_but_fixme_should_propagate_errors());
+    m_section_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/book.png").release_value_but_fixme_should_propagate_errors());
+    m_page_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/filetype-unknown.png").release_value_but_fixme_should_propagate_errors());
 }
 
-Optional<GUI::ModelIndex> ManualModel::index_from_path(const StringView& path) const
+Optional<GUI::ModelIndex> ManualModel::index_from_path(StringView path) const
 {
     for (int section = 0; section < row_count(); ++section) {
         auto parent_index = index(section, 0);
@@ -48,6 +46,17 @@ Optional<GUI::ModelIndex> ManualModel::index_from_path(const StringView& path) c
     return {};
 }
 
+String ManualModel::page_name(const GUI::ModelIndex& index) const
+{
+    if (!index.is_valid())
+        return {};
+    auto* node = static_cast<const ManualNode*>(index.internal_data());
+    if (!node->is_page())
+        return {};
+    auto* page = static_cast<const ManualPageNode*>(node);
+    return page->name();
+}
+
 String ManualModel::page_path(const GUI::ModelIndex& index) const
 {
     if (!index.is_valid())
@@ -59,7 +68,7 @@ String ManualModel::page_path(const GUI::ModelIndex& index) const
     return page->path();
 }
 
-Result<StringView, OSError> ManualModel::page_view(const String& path) const
+ErrorOr<StringView> ManualModel::page_view(String const& path) const
 {
     if (path.is_empty())
         return StringView {};
@@ -71,12 +80,10 @@ Result<StringView, OSError> ManualModel::page_view(const String& path) const
             return StringView { mapped_file.value()->bytes() };
     }
 
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return file_or_error.error();
+    auto file = TRY(Core::MappedFile::map(path));
 
-    StringView view { file_or_error.value()->bytes() };
-    m_mapped_files.set(path, file_or_error.release_value());
+    StringView view { file->bytes() };
+    m_mapped_files.set(path, move(file));
     return view;
 }
 
@@ -166,14 +173,13 @@ void ManualModel::update_section_node_on_toggle(const GUI::ModelIndex& index, co
 
 TriState ManualModel::data_matches(const GUI::ModelIndex& index, const GUI::Variant& term) const
 {
+    auto name = page_name(index);
+    if (name.contains(term.as_string(), CaseSensitivity::CaseInsensitive))
+        return TriState::True;
+
     auto view_result = page_view(page_path(index));
     if (view_result.is_error() || view_result.value().is_empty())
         return TriState::False;
 
-    return view_result.value().contains(term.as_string()) ? TriState::True : TriState::False;
-}
-
-void ManualModel::update()
-{
-    did_update();
+    return view_result.value().contains(term.as_string(), CaseSensitivity::CaseInsensitive) ? TriState::True : TriState::False;
 }

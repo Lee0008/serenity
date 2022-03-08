@@ -8,15 +8,16 @@
 
 #include "EventSerialNumber.h"
 #include <AK/HashMap.h>
-#include <AK/MappedFile.h>
 #include <AK/OwnPtr.h>
 #include <AK/Vector.h>
+#include <LibCore/MappedFile.h>
+#include <LibDebug/DebugInfo.h>
 #include <LibELF/Image.h>
 
 namespace Profiler {
 
 struct MappedObject {
-    NonnullRefPtr<MappedFile> file;
+    NonnullRefPtr<Core::MappedFile> file;
     ELF::Image elf;
 };
 
@@ -28,14 +29,16 @@ public:
         FlatPtr base;
         size_t size;
         String name;
-        FlatPtr text_base;
         MappedObject* object { nullptr };
+        // This is loaded lazily because we only need it in disassembly view
+        mutable OwnPtr<Debug::DebugInfo> debug_info;
 
         String symbolicate(FlatPtr, u32* offset) const;
+        Debug::DebugInfo const& load_debug_info(FlatPtr base_address) const;
     };
 
-    void handle_mmap(FlatPtr base, size_t size, const String& name);
-    const Library* library_containing(FlatPtr) const;
+    void handle_mmap(FlatPtr base, size_t size, String const& name);
+    Library const* library_containing(FlatPtr) const;
 
 private:
     mutable HashMap<String, NonnullOwnPtr<Library>> m_libraries;

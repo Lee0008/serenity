@@ -17,6 +17,11 @@ enum CursorWidth {
     WIDE
 };
 
+enum EngineType {
+    Regular,
+    Vim,
+};
+
 class EditingEngine {
     AK_MAKE_NONCOPYABLE(EditingEngine);
     AK_MAKE_NONMOVABLE(EditingEngine);
@@ -37,6 +42,9 @@ public:
 
     virtual bool on_key(const KeyEvent& event);
 
+    bool is_regular() const { return engine_type() == EngineType::Regular; }
+    bool is_vim() const { return engine_type() == EngineType::Vim; }
+
 protected:
     EditingEngine() { }
 
@@ -47,7 +55,9 @@ protected:
     void move_one_up(const KeyEvent& event);
     void move_one_down(const KeyEvent& event);
     void move_to_previous_span();
-    void move_to_next_span(const KeyEvent& event);
+    void move_to_next_span();
+    void move_to_logical_line_beginning();
+    void move_to_logical_line_end();
     void move_to_line_beginning();
     void move_to_line_end();
     void move_page_up();
@@ -70,6 +80,8 @@ protected:
 
     void delete_line();
     void delete_char();
+
+    virtual EngineType engine_type() const = 0;
 
 private:
     void move_selected_lines_up();

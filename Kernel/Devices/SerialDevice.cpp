@@ -5,10 +5,45 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/SerialDevice.h>
-#include <Kernel/IO.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
+
+#define SERIAL_COM1_ADDR 0x3F8
+#define SERIAL_COM2_ADDR 0x2F8
+#define SERIAL_COM3_ADDR 0x3E8
+#define SERIAL_COM4_ADDR 0x2E8
+
+UNMAP_AFTER_INIT NonnullRefPtr<SerialDevice> SerialDevice::must_create(size_t com_number)
+{
+    // FIXME: This way of blindly doing release_value is really not a good thing, find
+    // a way to propagate errors back.
+    RefPtr<SerialDevice> serial_device;
+    switch (com_number) {
+    case 0: {
+        serial_device = DeviceManagement::try_create_device<SerialDevice>(IOAddress(SERIAL_COM1_ADDR), 64).release_value();
+        break;
+    }
+    case 1: {
+        serial_device = DeviceManagement::try_create_device<SerialDevice>(IOAddress(SERIAL_COM2_ADDR), 65).release_value();
+        break;
+    }
+    case 2: {
+        serial_device = DeviceManagement::try_create_device<SerialDevice>(IOAddress(SERIAL_COM3_ADDR), 66).release_value();
+        break;
+    }
+    case 3: {
+        serial_device = DeviceManagement::try_create_device<SerialDevice>(IOAddress(SERIAL_COM4_ADDR), 67).release_value();
+        break;
+    }
+    default:
+        break;
+    }
+    return serial_device.release_nonnull();
+}
 
 UNMAP_AFTER_INIT SerialDevice::SerialDevice(IOAddress base_addr, unsigned minor)
     : CharacterDevice(4, minor)
@@ -21,45 +56,45 @@ UNMAP_AFTER_INIT SerialDevice::~SerialDevice()
 {
 }
 
-bool SerialDevice::can_read(const FileDescription&, size_t) const
+bool SerialDevice::can_read(const OpenFileDescription&, u64) const
 {
     return (get_line_status() & DataReady) != 0;
 }
 
-KResultOr<size_t> SerialDevice::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
+ErrorOr<size_t> SerialDevice::read(OpenFileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
 {
     if (!size)
         return 0;
 
-    ScopedSpinLock lock(m_serial_lock);
+    SpinlockLocker lock(m_serial_lock);
     if (!(get_line_status() & DataReady))
         return 0;
 
-    return buffer.write_buffered<128>(size, [&](u8* data, size_t data_size) {
-        for (size_t i = 0; i < data_size; i++)
-            data[i] = m_base_addr.in<u8>();
-        return data_size;
+    return buffer.write_buffered<128>(size, [&](Bytes bytes) {
+        for (auto& byte : bytes)
+            byte = m_base_addr.in<u8>();
+        return bytes.size();
     });
 }
 
-bool SerialDevice::can_write(const FileDescription&, size_t) const
+bool SerialDevice::can_write(const OpenFileDescription&, u64) const
 {
     return (get_line_status() & EmptyTransmitterHoldingRegister) != 0;
 }
 
-KResultOr<size_t> SerialDevice::write(FileDescription& description, u64, const UserOrKernelBuffer& buffer, size_t size)
+ErrorOr<size_t> SerialDevice::write(OpenFileDescription& description, u64, const UserOrKernelBuffer& buffer, size_t size)
 {
     if (!size)
         return 0;
 
-    ScopedSpinLock lock(m_serial_lock);
+    SpinlockLocker lock(m_serial_lock);
     if (!can_write(description, size))
         return EAGAIN;
 
-    return buffer.read_buffered<128>(size, [&](u8 const* data, size_t data_size) {
-        for (size_t i = 0; i < data_size; i++)
-            put_char(data[i]);
-        return data_size;
+    return buffer.read_buffered<128>(size, [&](ReadonlyBytes bytes) {
+        for (const auto& byte : bytes)
+            put_char(byte);
+        return bytes.size();
     });
 }
 
@@ -74,11 +109,6 @@ void SerialDevice::put_char(char ch)
     m_base_addr.out<u8>(ch);
 
     m_last_put_char_was_carriage_return = (ch == '\r');
-}
-
-String SerialDevice::device_name() const
-{
-    return String::formatted("ttyS{}", minor() - 64);
 }
 
 UNMAP_AFTER_INIT void SerialDevice::initialize()

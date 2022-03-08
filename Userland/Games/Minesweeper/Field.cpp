@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,26 +8,26 @@
 #include "Field.h"
 #include <AK/HashTable.h>
 #include <AK/Queue.h>
-#include <LibCore/ConfigFile.h>
+#include <AK/Random.h>
+#include <LibConfig/Client.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Palette.h>
-#include <time.h>
 
 class SquareButton final : public GUI::Button {
     C_OBJECT(SquareButton);
 
 public:
-    Function<void()> on_right_click;
+    Function<void()> on_secondary_click;
     Function<void()> on_middle_click;
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() == GUI::MouseButton::Right) {
-            if (on_right_click)
-                on_right_click();
+        if (event.button() == GUI::MouseButton::Secondary) {
+            if (on_secondary_click)
+                on_secondary_click();
         }
         if (event.button() == GUI::MouseButton::Middle) {
             if (on_middle_click)
@@ -50,8 +51,8 @@ public:
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() == GUI::MouseButton::Right || event.button() == GUI::MouseButton::Left) {
-            if (event.buttons() == (GUI::MouseButton::Right | GUI::MouseButton::Left) || m_square.field->is_single_chording()) {
+        if (event.button() == GUI::MouseButton::Secondary || event.button() == GUI::MouseButton::Primary) {
+            if (event.buttons() == (GUI::MouseButton::Secondary | GUI::MouseButton::Primary) || m_square.field->is_single_chording()) {
                 m_chord = true;
                 m_square.field->set_chord_preview(m_square, true);
             }
@@ -82,7 +83,7 @@ public:
     virtual void mouseup_event(GUI::MouseEvent& event) override
     {
         if (m_chord) {
-            if (event.button() == GUI::MouseButton::Left || event.button() == GUI::MouseButton::Right) {
+            if (event.button() == GUI::MouseButton::Primary || event.button() == GUI::MouseButton::Secondary) {
                 if (rect().contains(event.position())) {
                     if (on_chord_click)
                         on_chord_click();
@@ -111,22 +112,21 @@ Field::Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_b
     , m_time_label(time_label)
     , m_on_size_changed(move(on_size_changed))
 {
-    srand(time(nullptr));
     m_timer = add<Core::Timer>();
     m_timer->on_timeout = [this] {
         ++m_time_elapsed;
         m_time_label.set_text(String::formatted("{}.{}", m_time_elapsed / 10, m_time_elapsed % 10));
     };
     m_timer->set_interval(100);
-    m_mine_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/mine.png");
-    m_flag_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/flag.png");
-    m_badflag_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/badflag.png");
-    m_consider_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/consider.png");
-    m_default_face_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/face-default.png");
-    m_good_face_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/face-good.png");
-    m_bad_face_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/face-bad.png");
+    m_mine_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/mine.png").release_value_but_fixme_should_propagate_errors();
+    m_flag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png").release_value_but_fixme_should_propagate_errors();
+    m_badflag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/badflag.png").release_value_but_fixme_should_propagate_errors();
+    m_consider_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/consider.png").release_value_but_fixme_should_propagate_errors();
+    m_default_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-default.png").release_value_but_fixme_should_propagate_errors();
+    m_good_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-good.png").release_value_but_fixme_should_propagate_errors();
+    m_bad_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-bad.png").release_value_but_fixme_should_propagate_errors();
     for (int i = 0; i < 8; ++i)
-        m_number_bitmap[i] = Gfx::Bitmap::load_from_file(String::formatted("/res/icons/minesweeper/{}.png", i + 1));
+        m_number_bitmap[i] = Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/minesweeper/{}.png", i + 1)).release_value_but_fixme_should_propagate_errors();
     // Square with mine will be filled with background color later, i.e. red
     m_mine_palette.set_color(Gfx::ColorRole::Base, Color::from_rgb(0xff4040));
 
@@ -137,24 +137,23 @@ Field::Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_b
     set_face(Face::Default);
 
     {
-        auto config = Core::ConfigFile::get_for_app("Minesweeper");
-        bool single_chording = config->read_num_entry("Minesweeper", "SingleChording", false);
-        int mine_count = config->read_num_entry("Game", "MineCount", 10);
-        int rows = config->read_num_entry("Game", "Rows", 9);
-        int columns = config->read_num_entry("Game", "Columns", 9);
+        bool single_chording = Config::read_bool("Minesweeper", "Game", "SingleChording", false);
+        int mine_count = Config::read_i32("Minesweeper", "Game", "MineCount", 10);
+        int rows = Config::read_i32("Minesweeper", "Game", "Rows", 9);
+        int columns = Config::read_i32("Minesweeper", "Game", "Columns", 9);
+        auto difficulty_string = Config::read_string("Minesweeper", "Game", "Difficulty", "beginner");
+        auto difficulty = difficulty_from_string(difficulty_string);
 
         // Do a quick sanity check to make sure the user hasn't tried anything crazy
-        if (mine_count > rows * columns || rows <= 0 || columns <= 0 || mine_count <= 0)
-            set_field_size(9, 9, 10);
+        if (!difficulty.has_value() || mine_count > rows * columns || rows <= 0 || columns <= 0 || mine_count <= 0)
+            set_field_difficulty(Difficulty::Beginner);
+        else if (difficulty.value() == Difficulty::Custom)
+            set_field_size(Difficulty::Custom, rows, columns, mine_count);
         else
-            set_field_size(rows, columns, mine_count);
+            set_field_difficulty(difficulty.value());
 
         set_single_chording(single_chording);
     }
-}
-
-Field::~Field()
-{
 }
 
 void Field::set_face(Face face)
@@ -217,7 +216,7 @@ void Field::reset()
 
     HashTable<int> mines;
     while (mines.size() != m_mine_count) {
-        int location = rand() % (rows() * columns());
+        int location = get_random_uniform(rows() * columns());
         if (!mines.contains(location))
             mines.set(location);
     }
@@ -250,8 +249,8 @@ void Field::reset()
                 square.button->on_click = [this, &square](auto) {
                     on_square_clicked(square);
                 };
-                square.button->on_right_click = [this, &square] {
-                    on_square_right_clicked(square);
+                square.button->on_secondary_click = [this, &square] {
+                    on_square_secondary_clicked(square);
                 };
                 square.button->on_middle_click = [this, &square] {
                     on_square_middle_clicked(square);
@@ -387,7 +386,7 @@ void Field::on_square_chorded(Square& square)
     });
 }
 
-void Field::on_square_right_clicked(Square& square)
+void Field::on_square_secondary_clicked(Square& square)
 {
     if (square.is_swept)
         return;
@@ -483,16 +482,37 @@ void Field::set_chord_preview(Square& square, bool chord_preview)
     });
 }
 
-void Field::set_field_size(size_t rows, size_t columns, size_t mine_count)
+void Field::set_field_difficulty(Difficulty difficulty)
+{
+    switch (difficulty) {
+    case Difficulty::Beginner:
+        set_field_size(difficulty, 9, 9, 10);
+        break;
+    case Difficulty::Intermediate:
+        set_field_size(difficulty, 16, 16, 40);
+        break;
+    case Difficulty::Expert:
+        set_field_size(difficulty, 16, 30, 99);
+        break;
+    case Difficulty::Madwoman:
+        set_field_size(difficulty, 32, 60, 350);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+void Field::set_field_size(Difficulty difficulty, size_t rows, size_t columns, size_t mine_count)
 {
     if (m_rows == rows && m_columns == columns && m_mine_count == mine_count)
         return;
     {
-        auto config = Core::ConfigFile::get_for_app("Minesweeper");
-        config->write_num_entry("Game", "MineCount", mine_count);
-        config->write_num_entry("Game", "Rows", rows);
-        config->write_num_entry("Game", "Columns", columns);
+        Config::write_i32("Minesweeper", "Game", "MineCount", mine_count);
+        Config::write_i32("Minesweeper", "Game", "Rows", rows);
+        Config::write_i32("Minesweeper", "Game", "Columns", columns);
+        Config::write_string("Minesweeper", "Game", "Difficulty", difficulty_to_string(difficulty));
     }
+    m_difficulty = difficulty;
     m_rows = rows;
     m_columns = columns;
     m_mine_count = mine_count;
@@ -503,17 +523,8 @@ void Field::set_field_size(size_t rows, size_t columns, size_t mine_count)
 
 void Field::set_single_chording(bool enabled)
 {
-    auto config = Core::ConfigFile::get_for_app("Minesweeper");
     m_single_chording = enabled;
-    config->write_bool_entry("Minesweeper", "SingleChording", m_single_chording);
-}
-
-Square::Square()
-{
-}
-
-Square::~Square()
-{
+    Config::write_bool("Minesweeper", "Game", "SingleChording", m_single_chording);
 }
 
 template<typename Callback>

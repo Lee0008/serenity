@@ -1,21 +1,25 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "ToolboxWidget.h"
-#include "BrushTool.h"
-#include "BucketTool.h"
-#include "EllipseTool.h"
-#include "EraseTool.h"
-#include "LineTool.h"
-#include "MoveTool.h"
-#include "PenTool.h"
-#include "PickerTool.h"
-#include "RectangleTool.h"
-#include "SprayTool.h"
-#include "ZoomTool.h"
+#include "Tools/BrushTool.h"
+#include "Tools/BucketTool.h"
+#include "Tools/CloneTool.h"
+#include "Tools/EllipseTool.h"
+#include "Tools/EraseTool.h"
+#include "Tools/GuideTool.h"
+#include "Tools/LineTool.h"
+#include "Tools/MoveTool.h"
+#include "Tools/PenTool.h"
+#include "Tools/PickerTool.h"
+#include "Tools/RectangleSelectTool.h"
+#include "Tools/RectangleTool.h"
+#include "Tools/SprayTool.h"
+#include "Tools/ZoomTool.h"
 #include <LibGUI/Action.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
@@ -33,7 +37,7 @@ ToolboxWidget::ToolboxWidget()
 
     set_layout<GUI::VerticalBoxLayout>();
     layout()->set_spacing(0);
-    layout()->set_margins({ 2, 2, 2, 2 });
+    layout()->set_margins(2);
 
     m_action_group.set_exclusive(true);
     m_action_group.set_unchecking_allowed(false);
@@ -42,19 +46,17 @@ ToolboxWidget::ToolboxWidget()
     setup_tools();
 }
 
-ToolboxWidget::~ToolboxWidget()
-{
-}
-
 void ToolboxWidget::setup_tools()
 {
-    auto add_tool = [&](String name, StringView const& icon_name, GUI::Shortcut const& shortcut, NonnullOwnPtr<Tool> tool) {
-        auto action = GUI::Action::create_checkable(move(name), shortcut, Gfx::Bitmap::load_from_file(String::formatted("/res/icons/pixelpaint/{}.png", icon_name)),
+    auto add_tool = [&](String name, StringView icon_name, GUI::Shortcut const& shortcut, NonnullOwnPtr<Tool> tool) {
+        auto action = GUI::Action::create_checkable(move(name), shortcut, Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/pixelpaint/{}.png", icon_name)).release_value_but_fixme_should_propagate_errors(),
             [this, tool = tool.ptr()](auto& action) {
-                if (action.is_checked())
+                if (action.is_checked()) {
                     on_tool_selection(tool);
-                else
+                    m_active_tool = tool;
+                } else {
                     on_tool_selection(nullptr);
+                }
             });
         m_action_group.add_action(action);
         auto& button = m_toolbar->add_action(action);
@@ -77,6 +79,9 @@ void ToolboxWidget::setup_tools()
     add_tool("Rectangle", "rectangle", { Mod_Ctrl | Mod_Shift, Key_R }, make<RectangleTool>());
     add_tool("Ellipse", "circle", { Mod_Ctrl | Mod_Shift, Key_E }, make<EllipseTool>());
     add_tool("Zoom", "zoom", { 0, Key_Z }, make<ZoomTool>());
+    add_tool("Rectangle Select", "rectangle-select", { 0, Key_R }, make<RectangleSelectTool>());
+    add_tool("Guides", "guides", { 0, Key_G }, make<GuideTool>());
+    add_tool("Clone Tool", "clone", { 0, Key_C }, make<CloneTool>());
 }
 
 }

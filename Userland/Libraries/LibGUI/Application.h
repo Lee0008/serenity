@@ -10,11 +10,13 @@
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/WeakPtr.h>
+#include <LibCore/EventLoop.h>
 #include <LibCore/Object.h>
 #include <LibGUI/Forward.h>
 #include <LibGUI/Shortcut.h>
 #include <LibGUI/Widget.h>
 #include <LibGfx/Point.h>
+#include <LibMain/Main.h>
 
 namespace GUI {
 
@@ -26,6 +28,8 @@ public:
 
     ~Application();
 
+    static bool in_teardown();
+
     int exec();
     void quit(int = 0);
 
@@ -35,6 +39,7 @@ public:
     void unregister_global_shortcut_action(Badge<Action>, Action&);
 
     void show_tooltip(String, const Widget* tooltip_source_widget);
+    void show_tooltip_immediately(String, const Widget* tooltip_source_widget);
     void hide_tooltip();
     Widget* tooltip_source_widget() { return m_tooltip_source_widget; };
 
@@ -53,6 +58,7 @@ public:
     void set_system_palette(Core::AnonymousBuffer&);
 
     bool focus_debugging_enabled() const { return m_focus_debugging_enabled; }
+    bool hover_debugging_enabled() const { return m_hover_debugging_enabled; }
     bool dnd_debugging_enabled() const { return m_dnd_debugging_enabled; }
 
     Core::EventLoop& event_loop() { return *m_event_loop; }
@@ -73,17 +79,23 @@ public:
     {
         set_drag_hovered_widget_impl(widget, position, move(mime_types));
     }
-    void notify_drag_cancelled(Badge<WindowServerConnection>);
+    void notify_drag_cancelled(Badge<ConnectionToWindowServer>);
 
     Function<void(Action&)> on_action_enter;
     Function<void(Action&)> on_action_leave;
 
+    auto const& global_shortcut_actions(Badge<GUI::CommandPalette>) const { return m_global_shortcut_actions; }
+
 private:
-    Application(int argc, char** argv);
+    Application(int argc, char** argv, Core::EventLoop::MakeInspectable = Core::EventLoop::MakeInspectable::No);
+    Application(Main::Arguments const& arguments, Core::EventLoop::MakeInspectable inspectable = Core::EventLoop::MakeInspectable::No)
+        : Application(arguments.argc, arguments.argv, inspectable)
+    {
+    }
 
     virtual void event(Core::Event&) override;
 
-    void tooltip_show_timer_did_fire();
+    void request_tooltip_show();
     void tooltip_hide_timer_did_fire();
 
     void set_drag_hovered_widget_impl(Widget*, const Gfx::IntPoint& = {}, Vector<String> = {});
@@ -101,6 +113,7 @@ private:
     WeakPtr<Window> m_active_window;
     bool m_quit_when_last_window_deleted { true };
     bool m_focus_debugging_enabled { false };
+    bool m_hover_debugging_enabled { false };
     bool m_dnd_debugging_enabled { false };
     String m_invoked_as;
     Vector<String> m_args;

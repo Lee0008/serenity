@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +9,8 @@
 
 #include <AK/IntrusiveList.h>
 #include <Kernel/Forward.h>
+#include <Kernel/Locking/SpinlockProtected.h>
+#include <Kernel/WaitQueue.h>
 
 namespace Kernel {
 
@@ -19,8 +22,6 @@ class WorkQueue {
 
 public:
     static void initialize();
-
-    WorkQueue(const char*);
 
     void queue(void (*function)(void*), void* data = nullptr, void (*free_data)(void*) = nullptr)
     {
@@ -42,7 +43,10 @@ public:
     }
 
 private:
+    explicit WorkQueue(StringView);
+
     struct WorkItem {
+    public:
         IntrusiveListNode<WorkItem> m_node;
         Function<void()> function;
     };
@@ -51,8 +55,7 @@ private:
 
     RefPtr<Thread> m_thread;
     WaitQueue m_wait_queue;
-    IntrusiveList<WorkItem, RawPtr<WorkItem>, &WorkItem::m_node> m_items;
-    SpinLock<u8> m_lock;
+    SpinlockProtected<IntrusiveList<&WorkItem::m_node>> m_items;
 };
 
 }

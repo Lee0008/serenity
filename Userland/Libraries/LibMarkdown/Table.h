@@ -9,6 +9,7 @@
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/OwnPtr.h>
 #include <LibMarkdown/Block.h>
+#include <LibMarkdown/LineIterator.h>
 #include <LibMarkdown/Text.h>
 
 namespace Markdown {
@@ -26,14 +27,17 @@ public:
         Vector<Text> rows;
         Alignment alignment { Alignment::Left };
         size_t relative_width { 0 };
+
+        RecursionDecision walk(Visitor&) const;
     };
 
     Table() { }
     virtual ~Table() override { }
 
-    virtual String render_to_html() const override;
+    virtual String render_to_html(bool tight = false) const override;
     virtual String render_for_terminal(size_t view_width = 0) const override;
-    static OwnPtr<Table> parse(Vector<StringView>::ConstIterator& lines);
+    virtual RecursionDecision walk(Visitor&) const override;
+    static OwnPtr<Table> parse(LineIterator& lines);
 
 private:
     Vector<Column> m_columns;

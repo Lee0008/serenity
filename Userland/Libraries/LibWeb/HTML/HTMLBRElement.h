@@ -14,10 +14,10 @@ class HTMLBRElement final : public HTMLElement {
 public:
     using WrapperType = Bindings::HTMLBRElementWrapper;
 
-    HTMLBRElement(DOM::Document&, QualifiedName);
+    HTMLBRElement(DOM::Document&, DOM::QualifiedName);
     virtual ~HTMLBRElement() override;
 
-    virtual RefPtr<Layout::Node> create_layout_node() override;
+    virtual RefPtr<Layout::Node> create_layout_node(NonnullRefPtr<CSS::StyleProperties>) override;
 };
 
 }

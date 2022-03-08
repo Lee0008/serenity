@@ -34,9 +34,9 @@ private:
         u8 mean_line;
         u8 presentation_size;
         u16 weight;
+        u8 slope;
         String name;
         String family;
-        Gfx::FontTypes type;
         bool is_fixed_width;
     } m_new_font_metadata;
 
@@ -47,9 +47,8 @@ private:
     RefPtr<GUI::WizardPage> m_font_properties_page;
     RefPtr<GUI::TextBox> m_name_textbox;
     RefPtr<GUI::TextBox> m_family_textbox;
-    RefPtr<GUI::ComboBox> m_type_combobox;
-    RefPtr<GUI::Label> m_type_info_label;
     RefPtr<GUI::ComboBox> m_weight_combobox;
+    RefPtr<GUI::ComboBox> m_slope_combobox;
     RefPtr<GUI::SpinBox> m_presentation_spinbox;
 
     RefPtr<GUI::WizardPage> m_glyph_properties_page;
@@ -61,7 +60,6 @@ private:
     RefPtr<GUI::SpinBox> m_spacing_spinbox;
     RefPtr<GUI::CheckBox> m_fixed_width_checkbox;
 
-    Vector<String> m_font_list;
-    Vector<String> m_font_type_list;
     Vector<String> m_font_weight_list;
+    Vector<String> m_font_slope_list;
 };

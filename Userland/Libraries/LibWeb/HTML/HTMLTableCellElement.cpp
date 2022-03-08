@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/CSS/Parser/DeprecatedCSSParser.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/HTML/HTMLTableCellElement.h>
 
 namespace Web::HTML {
 
-HTMLTableCellElement::HTMLTableCellElement(DOM::Document& document, QualifiedName qualified_name)
+HTMLTableCellElement::HTMLTableCellElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
 {
 }
@@ -28,10 +28,13 @@ void HTMLTableCellElement::apply_presentational_hints(CSS::StyleProperties& styl
             return;
         }
         if (name == HTML::AttributeNames::align) {
-            if (value.equals_ignoring_case("center") || value.equals_ignoring_case("middle"))
-                style.set_property(CSS::PropertyID::TextAlign, StringView("-libweb-center"));
-            else
-                style.set_property(CSS::PropertyID::TextAlign, value.view());
+            if (value.equals_ignoring_case("center"sv) || value.equals_ignoring_case("middle"sv)) {
+                style.set_property(CSS::PropertyID::TextAlign, CSS::IdentifierStyleValue::create(CSS::ValueID::LibwebCenter));
+            } else {
+                CSS::Parser parser(CSS::ParsingContext(document()), value.view());
+                if (auto parsed_value = parser.parse_as_css_value(CSS::PropertyID::TextAlign))
+                    style.set_property(CSS::PropertyID::TextAlign, parsed_value.release_nonnull());
+            }
             return;
         }
         if (name == HTML::AttributeNames::width) {

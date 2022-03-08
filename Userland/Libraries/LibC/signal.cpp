@@ -10,29 +10,34 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/select.h>
 #include <syscall.h>
 #include <unistd.h>
 
 extern "C" {
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/kill.html
 int kill(pid_t pid, int sig)
 {
     int rc = syscall(SC_kill, pid, sig);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/killpg.html
 int killpg(int pgrp, int sig)
 {
     int rc = syscall(SC_killpg, pgrp, sig);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/raise.html
 int raise(int sig)
 {
     // FIXME: Support multi-threaded programs.
     return kill(getpid(), sig);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/signal.html
 sighandler_t signal(int signum, sighandler_t handler)
 {
     struct sigaction new_act;
@@ -46,24 +51,28 @@ sighandler_t signal(int signum, sighandler_t handler)
     return old_act.sa_handler;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigaction.html
 int sigaction(int signum, const struct sigaction* act, struct sigaction* old_act)
 {
     int rc = syscall(SC_sigaction, signum, act, old_act);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigemptyset.html
 int sigemptyset(sigset_t* set)
 {
     *set = 0;
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigfillset.html
 int sigfillset(sigset_t* set)
 {
     *set = 0xffffffff;
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigaddset.html
 int sigaddset(sigset_t* set, int sig)
 {
     if (sig < 1 || sig > 32) {
@@ -74,6 +83,14 @@ int sigaddset(sigset_t* set, int sig)
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigaltstack.html
+int sigaltstack(const stack_t* ss, stack_t* old_ss)
+{
+    int rc = syscall(SC_sigaltstack, ss, old_ss);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigdelset.html
 int sigdelset(sigset_t* set, int sig)
 {
     if (sig < 1 || sig > 32) {
@@ -84,6 +101,7 @@ int sigdelset(sigset_t* set, int sig)
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigismember.html
 int sigismember(const sigset_t* set, int sig)
 {
     if (sig < 1 || sig > 32) {
@@ -95,12 +113,14 @@ int sigismember(const sigset_t* set, int sig)
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigprocmask.html
 int sigprocmask(int how, const sigset_t* set, sigset_t* old_set)
 {
     int rc = syscall(SC_sigprocmask, how, set, old_set);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigpending.html
 int sigpending(sigset_t* set)
 {
     int rc = syscall(SC_sigpending, set);
@@ -142,17 +162,7 @@ const char* sys_siglist[NSIG] = {
     "Bad system call",
 };
 
-int sigsetjmp(jmp_buf env, int savesigs)
-{
-    if (savesigs) {
-        int rc = sigprocmask(0, nullptr, &env->saved_signal_mask);
-        assert(rc == 0);
-        env->did_save_signal_mask = true;
-    } else {
-        env->did_save_signal_mask = false;
-    }
-    return setjmp(env);
-}
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/siglongjmp.html
 void siglongjmp(jmp_buf env, int val)
 {
     if (env->did_save_signal_mask) {
@@ -162,13 +172,37 @@ void siglongjmp(jmp_buf env, int val)
     longjmp(env, val);
 }
 
-int sigsuspend(const sigset_t*)
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigsuspend.html
+int sigsuspend(const sigset_t* set)
 {
-    dbgln("FIXME: Implement sigsuspend()");
-    return -1;
+    return pselect(0, nullptr, nullptr, nullptr, nullptr, set);
 }
 
-static const char* signal_names[] = {
+// https://pubs.opengroup.org/onlinepubs/009604499/functions/sigwait.html
+int sigwait(sigset_t const* set, int* sig)
+{
+    int rc = syscall(Syscall::SC_sigtimedwait, set, nullptr, nullptr);
+    VERIFY(rc != 0);
+    if (rc < 0)
+        return -rc;
+    *sig = rc;
+    return 0;
+}
+
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigwaitinfo.html
+int sigwaitinfo(sigset_t const* set, siginfo_t* info)
+{
+    return sigtimedwait(set, info, nullptr);
+}
+
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigtimedwait.html
+int sigtimedwait(sigset_t const* set, siginfo_t* info, struct timespec const* timeout)
+{
+    int rc = syscall(Syscall::SC_sigtimedwait, set, info, timeout);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+const char* sys_signame[] = {
     "INVAL",
     "HUP",
     "INT",
@@ -203,14 +237,15 @@ static const char* signal_names[] = {
     "SYS",
 };
 
-static_assert(sizeof(signal_names) == sizeof(const char*) * NSIG);
+static_assert(sizeof(sys_signame) == sizeof(const char*) * NSIG);
 
 int getsignalbyname(const char* name)
 {
     VERIFY(name);
+    StringView name_sv(name);
     for (size_t i = 0; i < NSIG; ++i) {
-        auto* signal_name = signal_names[i];
-        if (!strcmp(signal_name, name))
+        auto signal_name = StringView(sys_signame[i]);
+        if (signal_name == name_sv || (name_sv.starts_with("SIG") && signal_name == name_sv.substring_view(3)))
             return i;
     }
     errno = EINVAL;
@@ -223,6 +258,6 @@ const char* getsignalname(int signal)
         errno = EINVAL;
         return nullptr;
     }
-    return signal_names[signal];
+    return sys_signame[signal];
 }
 }

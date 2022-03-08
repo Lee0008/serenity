@@ -13,9 +13,14 @@ namespace GUI {
 
 class Shortcut {
 public:
-    Shortcut() { }
+    Shortcut() = default;
     Shortcut(u8 modifiers, KeyCode key)
         : m_modifiers(modifiers)
+        , m_key(key)
+    {
+    }
+    Shortcut(KeyCode key)
+        : m_modifiers(0)
         , m_key(key)
     {
     }

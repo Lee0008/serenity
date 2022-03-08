@@ -1,13 +1,12 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/OSError.h>
-#include <AK/Result.h>
+#include <AK/Error.h>
 #include <AK/String.h>
 #include <LibCore/IODevice.h>
 #include <sys/stat.h>
@@ -19,19 +18,28 @@ class File final : public IODevice {
 public:
     virtual ~File() override;
 
-    static Result<NonnullRefPtr<File>, String> open(String filename, OpenMode, mode_t = 0644);
+    static ErrorOr<NonnullRefPtr<File>> open(String filename, OpenMode, mode_t = 0644);
 
     String filename() const { return m_filename; }
     void set_filename(const String filename) { m_filename = move(filename); }
 
     bool is_directory() const;
-    static bool is_directory(const String& filename);
+    static bool is_directory(String const& filename);
 
     bool is_device() const;
-    static bool is_device(const String& filename);
+    static bool is_device(String const& filename);
 
-    static bool exists(const String& filename);
-    static bool ensure_parent_directories(const String& path);
+    bool is_link() const;
+    static bool is_link(String const& filename);
+
+    bool looks_like_shared_library() const;
+    static bool looks_like_shared_library(String const& filename);
+
+    static bool exists(String const& filename);
+    static ErrorOr<size_t> size(String const& filename);
+    static bool ensure_parent_directories(String const& path);
+    static String current_working_directory();
+    static String absolute_path(String const& path);
 
     enum class RecursionMode {
         Allowed,
@@ -48,24 +56,37 @@ public:
         No,
     };
 
-    struct CopyError {
-        OSError error_code;
+    enum class PreserveMode {
+        Nothing,
+        PermissionsOwnershipTimestamps,
+    };
+
+    struct CopyError : public Error {
+        CopyError(int error_code, bool t)
+            : Error(error_code)
+            , tried_recursing(t)
+        {
+        }
         bool tried_recursing;
     };
 
-    static Result<void, CopyError> copy_file(const String& dst_path, const struct stat& src_stat, File& source);
-    static Result<void, CopyError> copy_directory(const String& dst_path, const String& src_path, const struct stat& src_stat, LinkMode = LinkMode::Disallowed);
-    static Result<void, CopyError> copy_file_or_directory(const String& dst_path, const String& src_path, RecursionMode = RecursionMode::Allowed, LinkMode = LinkMode::Disallowed, AddDuplicateFileMarker = AddDuplicateFileMarker::Yes);
+    static ErrorOr<void, CopyError> copy_file(String const& dst_path, struct stat const& src_stat, File& source, PreserveMode = PreserveMode::Nothing);
+    static ErrorOr<void, CopyError> copy_directory(String const& dst_path, String const& src_path, struct stat const& src_stat, LinkMode = LinkMode::Disallowed, PreserveMode = PreserveMode::Nothing);
+    static ErrorOr<void, CopyError> copy_file_or_directory(String const& dst_path, String const& src_path, RecursionMode = RecursionMode::Allowed, LinkMode = LinkMode::Disallowed, AddDuplicateFileMarker = AddDuplicateFileMarker::Yes, PreserveMode = PreserveMode::Nothing);
 
-    static String real_path_for(const String& filename);
+    static String real_path_for(String const& filename);
     static String read_link(String const& link_path);
-    static Result<void, OSError> link_file(const String& dst_path, const String& src_path);
+    static ErrorOr<void> link_file(String const& dst_path, String const& src_path);
 
-    struct RemoveError {
+    struct RemoveError : public Error {
+        RemoveError(String f, int error_code)
+            : Error(error_code)
+            , file(move(f))
+        {
+        }
         String file;
-        OSError error_code;
     };
-    static Result<void, RemoveError> remove(const String& path, RecursionMode, bool force);
+    static ErrorOr<void, RemoveError> remove(String const& path, RecursionMode, bool force);
 
     virtual bool open(OpenMode) override;
 
@@ -74,6 +95,7 @@ public:
         Yes
     };
     bool open(int fd, OpenMode, ShouldCloseFileDescriptor);
+    [[nodiscard]] int leak_fd();
 
     static NonnullRefPtr<File> standard_input();
     static NonnullRefPtr<File> standard_output();

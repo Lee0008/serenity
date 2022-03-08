@@ -10,7 +10,7 @@
 
 namespace Core {
 
-NetworkJob::NetworkJob(OutputStream& output_stream)
+NetworkJob::NetworkJob(Core::Stream::Stream& output_stream)
     : m_output_stream(output_stream)
 {
 }
@@ -19,42 +19,51 @@ NetworkJob::~NetworkJob()
 {
 }
 
-void NetworkJob::start()
+void NetworkJob::start(Core::Stream::Socket&)
 {
 }
 
-void NetworkJob::shutdown()
+void NetworkJob::shutdown(ShutdownMode)
 {
 }
 
 void NetworkJob::did_finish(NonnullRefPtr<NetworkResponse>&& response)
 {
+    if (is_cancelled())
+        return;
+
     // NOTE: We protect ourselves here, since the on_finish callback may otherwise
     //       trigger destruction of this job somehow.
     NonnullRefPtr<NetworkJob> protector(*this);
 
     m_response = move(response);
-    dbgln_if(CNETWORKJOB_DEBUG, "{} job did_finish", *this);
+    dbgln_if(NETWORKJOB_DEBUG, "{} job did_finish", *this);
     VERIFY(on_finish);
     on_finish(true);
-    shutdown();
+    shutdown(ShutdownMode::DetachFromSocket);
 }
 
 void NetworkJob::did_fail(Error error)
 {
+    if (is_cancelled())
+        return;
+
     // NOTE: We protect ourselves here, since the on_finish callback may otherwise
     //       trigger destruction of this job somehow.
     NonnullRefPtr<NetworkJob> protector(*this);
 
     m_error = error;
-    dbgln_if(CNETWORKJOB_DEBUG, "{}{{{:p}}} job did_fail! error: {} ({})", class_name(), this, (unsigned)error, to_string(error));
+    dbgln_if(NETWORKJOB_DEBUG, "{}{{{:p}}} job did_fail! error: {} ({})", class_name(), this, (unsigned)error, to_string(error));
     VERIFY(on_finish);
     on_finish(false);
-    shutdown();
+    shutdown(ShutdownMode::DetachFromSocket);
 }
 
 void NetworkJob::did_progress(Optional<u32> total_size, u32 downloaded)
 {
+    if (is_cancelled())
+        return;
+
     // NOTE: We protect ourselves here, since the callback may otherwise
     //       trigger destruction of this job somehow.
     NonnullRefPtr<NetworkJob> protector(*this);

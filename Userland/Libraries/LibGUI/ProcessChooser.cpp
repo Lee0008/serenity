@@ -14,7 +14,7 @@
 
 namespace GUI {
 
-ProcessChooser::ProcessChooser(const StringView& window_title, const StringView& button_label, const Gfx::Bitmap* window_icon, GUI::Window* parent_window)
+ProcessChooser::ProcessChooser(StringView window_title, StringView button_label, const Gfx::Bitmap* window_icon, GUI::Window* parent_window)
     : Dialog(parent_window)
     , m_window_title(window_title)
     , m_button_label(button_label)
@@ -33,24 +33,26 @@ ProcessChooser::ProcessChooser(const StringView& window_title, const StringView&
     auto& widget = set_main_widget<GUI::Widget>();
     widget.set_fill_with_background_color(true);
     widget.set_layout<GUI::VerticalBoxLayout>();
-    widget.layout()->set_margins({ 0, 0, 0, 2 });
 
     m_table_view = widget.add<GUI::TableView>();
-    auto sorting_model = GUI::SortingProxyModel::create(RunningProcessesModel::create());
+    auto process_model = RunningProcessesModel::create();
+    auto sorting_model = MUST(GUI::SortingProxyModel::create(process_model));
     sorting_model->set_sort_role(GUI::ModelRole::Display);
     m_table_view->set_model(sorting_model);
     m_table_view->set_key_column_and_sort_order(RunningProcessesModel::Column::PID, GUI::SortOrder::Descending);
+
+    m_process_model = process_model;
 
     m_table_view->on_activation = [this](const ModelIndex& index) { set_pid_from_index_and_close(index); };
 
     auto& button_container = widget.add<GUI::Widget>();
     button_container.set_fixed_height(30);
     button_container.set_layout<GUI::HorizontalBoxLayout>();
-    button_container.layout()->set_margins({ 0, 0, 4, 0 });
+    button_container.layout()->set_margins({ 0, 4, 0 });
     button_container.layout()->add_spacer();
 
     auto& select_button = button_container.add<GUI::Button>(m_button_label);
-    select_button.set_fixed_size(80, 24);
+    select_button.set_fixed_width(80);
     select_button.on_click = [this](auto) {
         if (m_table_view->selection().is_empty()) {
             GUI::MessageBox::show(this, "No process selected!", m_window_title, GUI::MessageBox::Type::Error);
@@ -60,12 +62,12 @@ ProcessChooser::ProcessChooser(const StringView& window_title, const StringView&
         set_pid_from_index_and_close(index);
     };
     auto& cancel_button = button_container.add<GUI::Button>("Cancel");
-    cancel_button.set_fixed_size(80, 24);
+    cancel_button.set_fixed_width(80);
     cancel_button.on_click = [this](auto) {
         done(ExecCancel);
     };
 
-    m_table_view->model()->update();
+    m_process_model->update();
 
     m_refresh_timer = add<Core::Timer>();
 
@@ -77,7 +79,7 @@ ProcessChooser::ProcessChooser(const StringView& window_title, const StringView&
             previous_selected_pid = pid_as_variant.as_i32();
         }
 
-        m_table_view->model()->update();
+        m_process_model->update();
 
         if (previous_selected_pid == -1) {
             return;

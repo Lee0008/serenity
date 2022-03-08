@@ -1,156 +1,137 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "NoVisualizationWidget.h"
+#include "AlbumCoverVisualizationWidget.h"
+#include "BarsVisualizationWidget.h"
 #include "Player.h"
 #include "SampleWidget.h"
 #include "SoundPlayerWidgetAdvancedView.h"
-#include <LibAudio/ClientConnection.h>
+#include <LibAudio/ConnectionFromClient.h>
+#include <LibCore/System.h>
 #include <LibGUI/Action.h>
+#include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/FilePicker.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Menubar.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/CharacterBitmap.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd rpath thread unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath thread unix"));
 
-    auto app = GUI::Application::construct(argc, argv);
-    auto audio_client = Audio::ClientConnection::construct();
+    auto app = TRY(GUI::Application::try_create(arguments));
+    auto audio_client = TRY(Audio::ConnectionFromClient::try_create());
 
-    if (pledge("stdio recvfd sendfd rpath thread", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    PlaybackManager playback_manager(audio_client);
-    PlayerState initial_player_state { true,
-        true,
-        false,
-        false,
-        false,
-        44100,
-        1.0,
-        audio_client,
-        playback_manager,
-        "" };
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath thread"));
 
     auto app_icon = GUI::Icon::default_icon("app-sound-player");
 
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_title("Sound Player");
     window->set_icon(app_icon.bitmap_for_size(16));
 
-    auto menubar = GUI::Menubar::construct();
-
-    auto& file_menu = menubar->add_menu("&File");
-
-    auto& playlist_menu = menubar->add_menu("Play&list");
-
-    String path = argv[1];
     // start in advanced view by default
-    Player* player = &window->set_main_widget<SoundPlayerWidgetAdvancedView>(window, initial_player_state);
-    if (argc > 1) {
-        player->open_file(path);
+    Player* player = TRY(window->try_set_main_widget<SoundPlayerWidgetAdvancedView>(window, audio_client));
+    if (arguments.argc > 1) {
+        StringView path = arguments.strings[1];
+        player->play_file_path(path);
+        if (player->is_playlist(path))
+            player->set_loop_mode(Player::LoopMode::Playlist);
     }
 
-    file_menu.add_action(GUI::CommonActions::make_open_action([&](auto&) {
+    auto file_menu = TRY(window->try_add_menu("&File"));
+    TRY(file_menu->try_add_action(GUI::CommonActions::make_open_action([&](auto&) {
         Optional<String> path = GUI::FilePicker::get_open_filepath(window, "Open sound file...");
         if (path.has_value()) {
-            player->open_file(path.value());
+            player->play_file_path(path.value());
         }
-    }));
+    })));
+
+    TRY(file_menu->try_add_separator());
+    TRY(file_menu->try_add_action(GUI::CommonActions::make_quit_action([&](auto&) {
+        app->quit();
+    })));
+
+    auto playback_menu = TRY(window->try_add_menu("&Playback"));
+    GUI::ActionGroup loop_actions;
+    loop_actions.set_exclusive(true);
+    auto loop_none = GUI::Action::create_checkable("&No Loop", { Mod_Ctrl, Key_N }, [&](auto&) {
+        player->set_loop_mode(Player::LoopMode::None);
+    });
+    loop_actions.add_action(loop_none);
+    TRY(playback_menu->try_add_action(loop_none));
+
+    auto loop_file = GUI::Action::create_checkable("Loop &File", { Mod_Ctrl, Key_F }, [&](auto&) {
+        player->set_loop_mode(Player::LoopMode::File);
+    });
+    loop_actions.add_action(loop_file);
+    TRY(playback_menu->try_add_action(loop_file));
+
+    auto loop_playlist = GUI::Action::create_checkable("Loop &Playlist", { Mod_Ctrl, Key_P }, [&](auto&) {
+        player->set_loop_mode(Player::LoopMode::Playlist);
+    });
+    loop_actions.add_action(loop_playlist);
+    playback_menu->add_action(loop_playlist);
 
     auto linear_volume_slider = GUI::Action::create_checkable("&Nonlinear Volume Slider", [&](auto& action) {
         static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_nonlinear_volume_slider(action.is_checked());
     });
-    file_menu.add_action(linear_volume_slider);
+    TRY(playback_menu->try_add_separator());
+    TRY(playback_menu->try_add_action(linear_volume_slider));
+    TRY(playback_menu->try_add_separator());
 
     auto playlist_toggle = GUI::Action::create_checkable("&Show Playlist", [&](auto& action) {
         static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_playlist_visible(action.is_checked());
     });
-    playlist_menu.add_action(playlist_toggle);
-    if (path.ends_with(".m3u") || path.ends_with(".m3u8"))
+    if (player->loop_mode() == Player::LoopMode::Playlist) {
         playlist_toggle->set_checked(true);
-    playlist_menu.add_separator();
+        loop_playlist->set_checked(true);
+    } else {
+        loop_none->set_checked(true);
+    }
+    TRY(playback_menu->try_add_action(playlist_toggle));
 
-    auto playlist_loop_toggle = GUI::Action::create_checkable("&Loop Playlist", [&](auto& action) {
-        static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_looping_playlist(action.is_checked());
+    auto shuffle_mode = GUI::Action::create_checkable("S&huffle Playlist", [&](auto& action) {
+        if (action.is_checked())
+            player->set_shuffle_mode(Player::ShuffleMode::Shuffling);
+        else
+            player->set_shuffle_mode(Player::ShuffleMode::None);
     });
-    playlist_menu.add_action(playlist_loop_toggle);
+    TRY(playback_menu->try_add_action(shuffle_mode));
 
-    file_menu.add_separator();
-    file_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) {
-        app->quit();
-    }));
+    auto visualization_menu = TRY(window->try_add_menu("&Visualization"));
+    GUI::ActionGroup visualization_actions;
+    visualization_actions.set_exclusive(true);
 
-    auto& playback_menu = menubar->add_menu("&Playback");
-
-    auto loop = GUI::Action::create_checkable("&Loop", { Mod_Ctrl, Key_R }, [&](auto& action) {
-        player->set_looping_file(action.is_checked());
-    });
-
-    playback_menu.add_action(move(loop));
-
-    auto& visualization_menu = menubar->add_menu("&Visualization");
-    Vector<NonnullRefPtr<GUI::Action>> visualization_checkmarks;
-    GUI::Action* checked_vis = nullptr;
-    auto uncheck_all_but = [&](GUI::Action& one) {for (auto& a : visualization_checkmarks) if (a != &one) a->set_checked(false); };
-
-    auto bars = GUI::Action::create_checkable("&Bars", [&](auto& action) {
-        uncheck_all_but(action);
-        if (checked_vis == &action) {
-            action.set_checked(true);
-            return;
-        }
-        checked_vis = &action;
+    auto bars = GUI::Action::create_checkable("&Bars", [&](auto&) {
         static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_visualization<BarsVisualizationWidget>();
     });
     bars->set_checked(true);
+    TRY(visualization_menu->try_add_action(bars));
+    visualization_actions.add_action(bars);
 
-    visualization_menu.add_action(bars);
-    visualization_checkmarks.append(bars);
-
-    auto samples = GUI::Action::create_checkable("&Samples", [&](auto& action) {
-        uncheck_all_but(action);
-        if (checked_vis == &action) {
-            action.set_checked(true);
-            return;
-        }
-        checked_vis = &action;
+    auto samples = GUI::Action::create_checkable("&Samples", [&](auto&) {
         static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_visualization<SampleWidget>();
     });
+    TRY(visualization_menu->try_add_action(samples));
+    visualization_actions.add_action(samples);
 
-    visualization_menu.add_action(samples);
-    visualization_checkmarks.append(samples);
-
-    auto none = GUI::Action::create_checkable("&None", [&](auto& action) {
-        uncheck_all_but(action);
-        if (checked_vis == &action) {
-            action.set_checked(true);
-            return;
-        }
-        checked_vis = &action;
-        static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_visualization<NoVisualizationWidget>();
+    auto album_cover_visualization = GUI::Action::create_checkable("&Album Cover", [&](auto&) {
+        static_cast<SoundPlayerWidgetAdvancedView*>(player)->set_visualization<AlbumCoverVisualizationWidget>();
     });
+    TRY(visualization_menu->try_add_action(album_cover_visualization));
+    visualization_actions.add_action(album_cover_visualization);
 
-    visualization_menu.add_action(none);
-    visualization_checkmarks.append(none);
-
-    auto& help_menu = menubar->add_menu("&Help");
-    help_menu.add_action(GUI::CommonActions::make_about_action("Sound Player", app_icon, window));
-
-    window->set_menubar(move(menubar));
+    auto help_menu = TRY(window->try_add_menu("&Help"));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_about_action("Sound Player", app_icon, window)));
 
     window->show();
     return app->exec();

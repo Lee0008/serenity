@@ -4,74 +4,105 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/String.h>
+#include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
+#include <LibCore/System.h>
 #include <LibKeyboard/CharacterMap.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+int set_keymap(String const& keymap);
+
+int set_keymap(String const& keymap)
 {
-    if (pledge("stdio setkeymap getkeymap rpath wpath cpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    if (unveil("/res/keymaps", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/etc/Keyboard.ini", "rwc") < 0) {
-        perror("unveil /etc/Keyboard.ini");
-        return 1;
-    }
-
-    const char* path = nullptr;
-    Core::ArgsParser args_parser;
-    args_parser.add_positional_argument(path, "The mapping file to be used", "file", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
-
-    if (path && path[0] == '/') {
-        if (unveil(path, "r") < 0) {
-            perror("unveil path");
-            return 1;
-        }
-    }
-
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (!path) {
-        auto keymap = Keyboard::CharacterMap::fetch_system_map();
-        if (keymap.is_error()) {
-            warnln("getkeymap: {}", keymap.error());
-            return 1;
-        }
-
-        outln("{}", keymap.value().character_map_name());
-        return 0;
-    }
-
-    auto character_map = Keyboard::CharacterMap::load_from_file(path);
-    if (!character_map.has_value()) {
-        warnln("Cannot read keymap {}", path);
-        warnln("Hint: Must be either a keymap name (e.g. 'en-us') or a full path.");
+    auto character_map = Keyboard::CharacterMap::load_from_file(keymap);
+    if (character_map.is_error()) {
+        warnln("Cannot read keymap {}", keymap);
+        warnln("Hint: Must be a keymap name (e.g. 'en-us')");
         return 1;
     }
 
     int rc = character_map.value().set_system_map();
     if (rc != 0) {
         perror("setkeymap");
-        return rc;
     }
 
-    auto mapper_config(Core::ConfigFile::open("/etc/Keyboard.ini"));
-    mapper_config->write_entry("Mapping", "Keymap", path);
-    mapper_config->sync();
-
     return rc;
+}
+
+ErrorOr<int> serenity_main(Main::Arguments arguments)
+{
+    TRY(Core::System::pledge("stdio setkeymap getkeymap rpath wpath cpath"));
+    TRY(Core::System::unveil("/res/keymaps", "r"));
+    TRY(Core::System::unveil("/etc/Keyboard.ini", "rwc"));
+
+    String mapping;
+    String mappings;
+    Core::ArgsParser args_parser;
+    args_parser.add_option(mapping, "The mapping to be used", "set-keymap", 'm', "keymap");
+    args_parser.add_option(mappings, "Comma separated list of enabled mappings", "set-keymaps", 's', "keymaps");
+    args_parser.parse(arguments);
+
+    TRY(Core::System::unveil(nullptr, nullptr));
+
+    if (mapping.is_empty() && mappings.is_empty()) {
+        auto keymap = TRY(Keyboard::CharacterMap::fetch_system_map());
+        outln("{}", keymap.character_map_name());
+        return 0;
+    }
+
+    auto mapper_config = TRY(Core::ConfigFile::open("/etc/Keyboard.ini", Core::ConfigFile::AllowWriting::Yes));
+
+    int rc = 0;
+
+    if (!mappings.is_empty()) {
+        auto mappings_vector = mappings.split(',');
+
+        if (mappings_vector.is_empty()) {
+            warnln("Keymaps list should not be empty");
+            return 1;
+        }
+
+        // Verify that all specified keymaps are loadable
+        for (auto& keymap_name : mappings_vector) {
+            auto keymap = Keyboard::CharacterMap::load_from_file(keymap_name);
+            if (keymap.is_error()) {
+                warnln("Cannot load keymap {}: {}({})", keymap_name, keymap.error().string_literal(), keymap.error().code());
+                return keymap.error();
+            }
+        }
+
+        auto keymaps = String::join(',', mappings_vector);
+        mapper_config->write_entry("Mapping", "Keymaps", keymaps);
+        TRY(mapper_config->sync());
+        rc = set_keymap(mappings_vector.first());
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    auto keymaps = mapper_config->read_entry("Mapping", "Keymaps");
+    auto keymaps_vector = keymaps.split(',');
+
+    if (!mapping.is_empty()) {
+        if (keymaps_vector.is_empty()) {
+            warnln("No keymaps configured - writing default configurations (en-us)");
+            mapper_config->write_entry("Mapping", "Keymaps", "en-us");
+            TRY(mapper_config->sync());
+            keymaps_vector.append("en-us");
+        }
+
+        if (!keymaps_vector.find(mapping).is_end()) {
+            rc = set_keymap(mapping);
+            if (rc != 0) {
+                return rc;
+            }
+        } else {
+            warnln("Keymap '{}' is not in list of configured keymaps ({})", mapping, keymaps);
+        }
+    }
+
+    return 0;
 }

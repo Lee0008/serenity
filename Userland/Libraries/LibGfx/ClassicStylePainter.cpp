@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020, Sarah Taube <metalflakecobaltpaint@gmail.com>
+ * Copyright (c) 2021, Filiph Sandström <filiph.sandstrom@filfatstudios.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -14,7 +16,7 @@
 
 namespace Gfx {
 
-void ClassicStylePainter::paint_tab_button(Painter& painter, const IntRect& rect, const Palette& palette, bool active, bool hovered, bool enabled, bool top)
+void ClassicStylePainter::paint_tab_button(Painter& painter, IntRect const& rect, Palette const& palette, bool active, bool hovered, bool enabled, bool top, bool in_active_window)
 {
     Color base_color = palette.button();
     Color highlight_color2 = palette.threed_highlight();
@@ -32,7 +34,17 @@ void ClassicStylePainter::paint_tab_button(Painter& painter, const IntRect& rect
         painter.fill_rect({ 1, 1, rect.width() - 2, rect.height() - 1 }, base_color);
 
         // Top line
-        painter.draw_line({ 2, 0 }, { rect.width() - 3, 0 }, highlight_color2);
+        if (active) {
+            auto accent = palette.accent();
+            if (!in_active_window)
+                accent = accent.to_grayscale();
+            painter.draw_line({ 3, 0 }, { rect.width() - 3, 0 }, accent.darkened());
+            Gfx::IntRect accent_rect { 1, 1, rect.width() - 2, 2 };
+            painter.fill_rect_with_gradient(accent_rect, accent, accent.lightened(1.5f));
+            painter.set_pixel({ 2, 0 }, highlight_color2);
+        } else {
+            painter.draw_line({ 2, 0 }, { rect.width() - 3, 0 }, highlight_color2);
+        }
 
         // Left side
         painter.draw_line({ 0, 2 }, { 0, rect.height() - 1 }, highlight_color2);
@@ -54,7 +66,16 @@ void ClassicStylePainter::paint_tab_button(Painter& painter, const IntRect& rect
         painter.fill_rect({ 0, 0, rect.width() - 1, rect.height() }, base_color);
 
         // Bottom line
-        painter.draw_line({ 2, rect.height() - 1 }, { rect.width() - 3, rect.height() - 1 }, shadow_color2);
+        if (active) {
+            auto accent = palette.accent();
+            if (!in_active_window)
+                accent = accent.to_grayscale();
+            Gfx::IntRect accent_rect { 1, rect.height() - 3, rect.width() - 2, 2 };
+            painter.fill_rect_with_gradient(accent_rect, accent, accent.lightened(1.5f));
+            painter.draw_line({ 2, rect.height() - 1 }, { rect.width() - 3, rect.height() - 1 }, accent.darkened());
+        } else {
+            painter.draw_line({ 2, rect.height() - 1 }, { rect.width() - 3, rect.height() - 1 }, shadow_color2);
+        }
 
         // Left side
         painter.draw_line({ 0, 0 }, { 0, rect.height() - 3 }, highlight_color2);
@@ -73,7 +94,7 @@ void ClassicStylePainter::paint_tab_button(Painter& painter, const IntRect& rect
     }
 }
 
-static void paint_button_new(Painter& painter, const IntRect& a_rect, const Palette& palette, bool pressed, bool checked, bool hovered, bool enabled, bool focused)
+static void paint_button_new(Painter& painter, IntRect const& a_rect, Palette const& palette, ButtonStyle style, bool pressed, bool checked, bool hovered, bool enabled, bool focused, bool default_button)
 {
     Color button_color = palette.button();
     Color highlight_color = palette.threed_highlight();
@@ -91,7 +112,7 @@ static void paint_button_new(Painter& painter, const IntRect& a_rect, const Pale
     PainterStateSaver saver(painter);
 
     auto rect = a_rect;
-    if (focused) {
+    if (focused || default_button) {
         painter.draw_rect(a_rect, palette.threed_shadow2());
         rect.shrink(2, 2);
     }
@@ -127,8 +148,13 @@ static void paint_button_new(Painter& painter, const IntRect& a_rect, const Pale
         painter.fill_rect({ 0, 0, rect.width(), rect.height() }, button_color);
 
         // Top highlight
-        painter.draw_line({ 0, 0 }, { rect.width() - 2, 0 }, highlight_color);
-        painter.draw_line({ 0, 0 }, { 0, rect.height() - 2 }, highlight_color);
+        if (style == ButtonStyle::Normal) {
+            painter.draw_line({ 0, 0 }, { rect.width() - 2, 0 }, highlight_color);
+            painter.draw_line({ 0, 0 }, { 0, rect.height() - 2 }, highlight_color);
+        } else if (style == ButtonStyle::ThickCap) {
+            painter.draw_line({ 1, 1 }, { rect.width() - 2, 1 }, highlight_color);
+            painter.draw_line({ 1, 1 }, { 1, rect.height() - 2 }, highlight_color);
+        }
 
         // Outer shadow
         painter.draw_line({ 0, rect.height() - 1 }, { rect.width() - 1, rect.height() - 1 }, shadow_color2);
@@ -140,10 +166,10 @@ static void paint_button_new(Painter& painter, const IntRect& a_rect, const Pale
     }
 }
 
-void ClassicStylePainter::paint_button(Painter& painter, const IntRect& rect, const Palette& palette, ButtonStyle button_style, bool pressed, bool hovered, bool checked, bool enabled, bool focused)
+void ClassicStylePainter::paint_button(Painter& painter, IntRect const& rect, Palette const& palette, ButtonStyle button_style, bool pressed, bool hovered, bool checked, bool enabled, bool focused, bool default_button)
 {
-    if (button_style == ButtonStyle::Normal)
-        return paint_button_new(painter, rect, palette, pressed, checked, hovered, enabled, focused);
+    if (button_style == ButtonStyle::Normal || button_style == ButtonStyle::ThickCap)
+        return paint_button_new(painter, rect, palette, button_style, pressed, checked, hovered, enabled, focused, default_button);
 
     if (button_style == ButtonStyle::Coolbar && !enabled)
         return;
@@ -189,19 +215,16 @@ void ClassicStylePainter::paint_button(Painter& painter, const IntRect& rect, co
     }
 }
 
-void ClassicStylePainter::paint_surface(Painter& painter, const IntRect& rect, const Palette& palette, bool paint_vertical_lines, bool paint_top_line)
+void ClassicStylePainter::paint_frame(Painter& painter, IntRect const& rect, Palette const& palette, FrameShape shape, FrameShadow shadow, int thickness, bool skip_vertical_lines)
 {
-    painter.fill_rect({ rect.x(), rect.y() + 1, rect.width(), rect.height() - 2 }, palette.button());
-    painter.draw_line(rect.top_left(), rect.top_right(), paint_top_line ? palette.threed_highlight() : palette.button());
-    painter.draw_line(rect.bottom_left(), rect.bottom_right(), palette.threed_shadow1());
-    if (paint_vertical_lines) {
-        painter.draw_line(rect.top_left().translated(0, 1), rect.bottom_left().translated(0, -1), palette.threed_highlight());
-        painter.draw_line(rect.top_right(), rect.bottom_right().translated(0, -1), palette.threed_shadow1());
-    }
-}
+    if (shape == Gfx::FrameShape::NoFrame)
+        return;
 
-void ClassicStylePainter::paint_frame(Painter& painter, const IntRect& rect, const Palette& palette, FrameShape shape, FrameShadow shadow, int thickness, bool skip_vertical_lines)
-{
+    if (shape == FrameShape::Window) {
+        StylePainter::paint_window_frame(painter, rect, palette);
+        return;
+    }
+
     Color top_left_color;
     Color bottom_right_color;
     Color dark_shade = palette.threed_shadow1();
@@ -267,14 +290,29 @@ void ClassicStylePainter::paint_frame(Painter& painter, const IntRect& rect, con
     }
 }
 
-void ClassicStylePainter::paint_window_frame(Painter& painter, const IntRect& rect, const Palette& palette)
+void ClassicStylePainter::paint_window_frame(Painter& painter, IntRect const& rect, Palette const& palette)
 {
     Color base_color = palette.button();
     Color dark_shade = palette.threed_shadow2();
     Color mid_shade = palette.threed_shadow1();
     Color light_shade = palette.threed_highlight();
+    auto border_thickness = palette.window_border_thickness();
+    auto border_radius = palette.window_border_radius();
 
-    painter.draw_line(rect.top_left(), rect.top_right(), base_color);
+    if (border_radius > 0) {
+        // FIXME: This will draw "useless" pixels that'll get drawn over by the window contents.
+        // preferrably we should just remove the corner pixels from the completely drawn window
+        // but I don't know how to do that yet. :^)
+        painter.fill_rect_with_rounded_corners(rect, base_color, border_radius);
+        return;
+    }
+
+    painter.draw_rect_with_thickness({ rect.x() + border_thickness / 2,
+                                         rect.y() + border_thickness / 2,
+                                         rect.width() - border_thickness,
+                                         rect.height() - border_thickness },
+        base_color, border_thickness);
+
     painter.draw_line(rect.top_left().translated(0, 1), rect.bottom_left(), base_color);
     painter.draw_line(rect.top_left().translated(1, 1), rect.top_right().translated(-1, 1), light_shade);
     painter.draw_line(rect.top_left().translated(1, 1), rect.bottom_left().translated(1, -1), light_shade);
@@ -293,7 +331,7 @@ void ClassicStylePainter::paint_window_frame(Painter& painter, const IntRect& re
     painter.draw_line(rect.bottom_left().translated(3, -3), rect.bottom_right().translated(-3, -3), base_color);
 }
 
-void ClassicStylePainter::paint_progressbar(Painter& painter, const IntRect& rect, const Palette& palette, int min, int max, int value, const StringView& text, Orientation orientation)
+void ClassicStylePainter::paint_progressbar(Painter& painter, IntRect const& rect, Palette const& palette, int min, int max, int value, StringView text, Orientation orientation)
 {
     // First we fill the entire widget with the gradient. This incurs a bit of
     // overdraw but ensures a consistent look throughout the progression.
@@ -334,27 +372,27 @@ static RefPtr<Gfx::Bitmap> s_filled_circle_bitmap;
 static RefPtr<Gfx::Bitmap> s_changing_filled_circle_bitmap;
 static RefPtr<Gfx::Bitmap> s_changing_unfilled_circle_bitmap;
 
-static const Gfx::Bitmap& circle_bitmap(bool checked, bool changing)
+static Gfx::Bitmap const& circle_bitmap(bool checked, bool changing)
 {
     if (changing)
         return checked ? *s_changing_filled_circle_bitmap : *s_changing_unfilled_circle_bitmap;
     return checked ? *s_filled_circle_bitmap : *s_unfilled_circle_bitmap;
 }
 
-void ClassicStylePainter::paint_radio_button(Painter& painter, const IntRect& rect, const Palette&, bool is_checked, bool is_being_pressed)
+void ClassicStylePainter::paint_radio_button(Painter& painter, IntRect const& rect, Palette const&, bool is_checked, bool is_being_pressed)
 {
     if (!s_unfilled_circle_bitmap) {
-        s_unfilled_circle_bitmap = Bitmap::load_from_file("/res/icons/serenity/unfilled-radio-circle.png");
-        s_filled_circle_bitmap = Bitmap::load_from_file("/res/icons/serenity/filled-radio-circle.png");
-        s_changing_filled_circle_bitmap = Bitmap::load_from_file("/res/icons/serenity/changing-filled-radio-circle.png");
-        s_changing_unfilled_circle_bitmap = Bitmap::load_from_file("/res/icons/serenity/changing-unfilled-radio-circle.png");
+        s_unfilled_circle_bitmap = Bitmap::try_load_from_file("/res/icons/serenity/unfilled-radio-circle.png").release_value_but_fixme_should_propagate_errors();
+        s_filled_circle_bitmap = Bitmap::try_load_from_file("/res/icons/serenity/filled-radio-circle.png").release_value_but_fixme_should_propagate_errors();
+        s_changing_filled_circle_bitmap = Bitmap::try_load_from_file("/res/icons/serenity/changing-filled-radio-circle.png").release_value_but_fixme_should_propagate_errors();
+        s_changing_unfilled_circle_bitmap = Bitmap::try_load_from_file("/res/icons/serenity/changing-unfilled-radio-circle.png").release_value_but_fixme_should_propagate_errors();
     }
 
     auto& bitmap = circle_bitmap(is_checked, is_being_pressed);
     painter.blit(rect.location(), bitmap, bitmap.rect());
 }
 
-static const char* s_checked_bitmap_data = {
+static constexpr Gfx::CharacterBitmap s_checked_bitmap {
     "         "
     "       # "
     "      ## "
@@ -363,14 +401,11 @@ static const char* s_checked_bitmap_data = {
     " #####   "
     "  ###    "
     "   #     "
-    "         "
+    "         ",
+    9, 9
 };
 
-static Gfx::CharacterBitmap* s_checked_bitmap;
-static const int s_checked_bitmap_width = 9;
-static const int s_checked_bitmap_height = 9;
-
-void ClassicStylePainter::paint_check_box(Painter& painter, const IntRect& rect, const Palette& palette, bool is_enabled, bool is_checked, bool is_being_pressed)
+void ClassicStylePainter::paint_check_box(Painter& painter, IntRect const& rect, Palette const& palette, bool is_enabled, bool is_checked, bool is_being_pressed)
 {
     painter.fill_rect(rect, is_enabled ? palette.base() : palette.window());
     paint_frame(painter, rect, palette, Gfx::FrameShape::Container, Gfx::FrameShadow::Sunken, 2);
@@ -381,15 +416,106 @@ void ClassicStylePainter::paint_check_box(Painter& painter, const IntRect& rect,
     }
 
     if (is_checked) {
-        if (!s_checked_bitmap)
-            s_checked_bitmap = &Gfx::CharacterBitmap::create_from_ascii(s_checked_bitmap_data, s_checked_bitmap_width, s_checked_bitmap_height).leak_ref();
-        painter.draw_bitmap(rect.shrunken(4, 4).location(), *s_checked_bitmap, is_enabled ? palette.base_text() : palette.threed_shadow1());
+        painter.draw_bitmap(rect.shrunken(4, 4).location(), s_checked_bitmap, is_enabled ? palette.base_text() : palette.threed_shadow1());
     }
 }
 
-void ClassicStylePainter::paint_transparency_grid(Painter& painter, const IntRect& rect, const Palette& palette)
+void ClassicStylePainter::paint_transparency_grid(Painter& painter, IntRect const& rect, Palette const& palette)
 {
     painter.fill_rect_with_checkerboard(rect, { 8, 8 }, palette.base().darkened(0.9), palette.base());
+}
+
+void ClassicStylePainter::paint_simple_rect_shadow(Painter& painter, IntRect const& containing_rect, Bitmap const& shadow_bitmap, bool shadow_includes_frame, bool fill_content)
+{
+    // The layout of the shadow_bitmap is defined like this:
+    // +---------+----+---------+----+----+----+
+    // |   TL    | T  |   TR    | LT | L  | LB |
+    // +---------+----+---------+----+----+----+
+    // |   BL    | B  |   BR    | RT | R  | RB |
+    // +---------+----+---------+----+----+----+
+    // Located strictly on the top or bottom of the rectangle, above or below of the content:
+    //   TL = top-left     T = top     TR = top-right
+    //   BL = bottom-left  B = bottom  BR = bottom-right
+    // Located on the left or right of the rectangle, but not above or below of the content:
+    //   LT = left-top     L = left    LB = left-bottom
+    //   RT = right-top    R = right   RB = right-bottom
+    // So, the bitmap has two rows and 6 column, two of which are twice as wide.
+    // The height divided by two defines a cell size, and width of each
+    // column must be the same as the height of the cell, except for the
+    // first and third column, which are twice as wide.
+    // If fill_content is true, it will use the RGBA color of right-bottom pixel of TL to fill the rectangle enclosed
+    if (shadow_bitmap.height() % 2 != 0) {
+        dbgln("Can't paint simple rect shadow, shadow bitmap height {} is not even", shadow_bitmap.height());
+        return;
+    }
+    auto base_size = shadow_bitmap.height() / 2;
+    if (shadow_bitmap.width() != base_size * (6 + 2)) {
+        if (shadow_bitmap.width() % base_size != 0)
+            dbgln("Can't paint simple rect shadow, shadow bitmap width {} is not a multiple of {}", shadow_bitmap.width(), base_size);
+        else
+            dbgln("Can't paint simple rect shadow, shadow bitmap width {} but expected {}", shadow_bitmap.width(), base_size * (6 + 2));
+        return;
+    }
+
+    // The containing_rect should have been inflated appropriately
+    VERIFY(containing_rect.size().contains(Gfx::IntSize { base_size, base_size }));
+
+    auto sides_height = containing_rect.height() - 2 * base_size;
+    auto half_height = sides_height / 2;
+    auto containing_horizontal_rect = containing_rect;
+
+    int horizontal_shift = 0;
+    if (half_height < base_size && !shadow_includes_frame) {
+        // If the height is too small we need to shift the left/right accordingly, unless the shadow includes portions of the frame
+        horizontal_shift = base_size - half_height;
+        containing_horizontal_rect.set_left(containing_horizontal_rect.left() + horizontal_shift);
+        containing_horizontal_rect.set_right(containing_horizontal_rect.right() - 2 * horizontal_shift);
+    }
+    auto half_width = containing_horizontal_rect.width() / 2;
+    int corner_piece_width = min(containing_horizontal_rect.width() / 2, base_size * 2);
+    int left_corners_right = containing_horizontal_rect.left() + corner_piece_width;
+    int right_corners_left = max(containing_horizontal_rect.right() - corner_piece_width + 1, left_corners_right + 1);
+    auto paint_horizontal = [&](int y, int src_row) {
+        if (half_width <= 0)
+            return;
+        Gfx::PainterStateSaver save(painter);
+        painter.add_clip_rect({ containing_horizontal_rect.left(), y, containing_horizontal_rect.width(), base_size });
+        painter.blit({ containing_horizontal_rect.left(), y }, shadow_bitmap, { 0, src_row * base_size, corner_piece_width, base_size });
+        painter.blit({ right_corners_left, y }, shadow_bitmap, { 5 * base_size - corner_piece_width, src_row * base_size, corner_piece_width, base_size });
+        for (int x = left_corners_right; x < right_corners_left; x += base_size) {
+            auto width = min(right_corners_left - x, base_size);
+            painter.blit({ x, y }, shadow_bitmap, { corner_piece_width, src_row * base_size, width, base_size });
+        }
+    };
+
+    paint_horizontal(containing_rect.top(), 0);
+    paint_horizontal(containing_rect.bottom() - base_size + 1, 1);
+
+    int corner_piece_height = min(half_height, base_size);
+    int top_corners_bottom = base_size + corner_piece_height;
+    int bottom_corners_top = base_size + max(half_height, sides_height - corner_piece_height);
+    auto paint_vertical = [&](int x, int src_row, int hshift, int hsrcshift) {
+        Gfx::PainterStateSaver save(painter);
+        painter.add_clip_rect({ x, containing_rect.y() + base_size, base_size, containing_rect.height() - 2 * base_size });
+        painter.blit({ x + hshift, containing_rect.top() + top_corners_bottom - corner_piece_height }, shadow_bitmap, { base_size * 5 + hsrcshift, src_row * base_size, base_size - hsrcshift, corner_piece_height });
+        painter.blit({ x + hshift, containing_rect.top() + bottom_corners_top }, shadow_bitmap, { base_size * 7 + hsrcshift, src_row * base_size + base_size - corner_piece_height, base_size - hsrcshift, corner_piece_height });
+        for (int y = top_corners_bottom; y < bottom_corners_top; y += base_size) {
+            auto height = min(bottom_corners_top - y, base_size);
+            painter.blit({ x, containing_rect.top() + y }, shadow_bitmap, { base_size * 6, src_row * base_size, base_size, height });
+        }
+    };
+
+    paint_vertical(containing_rect.left(), 0, horizontal_shift, 0);
+    if (shadow_includes_frame)
+        horizontal_shift = 0; // TODO: fix off-by-one on rectangles barely wide enough
+    paint_vertical(containing_rect.right() - base_size + 1, 1, 0, horizontal_shift);
+
+    if (fill_content) {
+        // Fill the enclosed rectangle with the RGBA color of the right-bottom pixel of the TL tile
+        auto inner_rect = containing_rect.shrunken(2 * base_size, 2 * base_size);
+        if (!inner_rect.is_empty())
+            painter.fill_rect(inner_rect, shadow_bitmap.get_pixel(2 * base_size - 1, base_size - 1));
+    }
 }
 
 }

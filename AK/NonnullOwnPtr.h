@@ -13,6 +13,8 @@
 #include <AK/Traits.h>
 #include <AK/Types.h>
 
+#define NONNULLOWNPTR_SCRUB_BYTE 0xf1
+
 namespace AK {
 
 template<typename T, typename PtrTraits>
@@ -23,7 +25,7 @@ template<typename T>
 class WeakPtr;
 
 template<typename T>
-class NonnullOwnPtr {
+class [[nodiscard]] NonnullOwnPtr {
 public:
     using ElementType = T;
 
@@ -33,7 +35,7 @@ public:
         : m_ptr(&ptr)
     {
         static_assert(
-            requires { requires typename T::AllowOwnPtr()(); } || !requires(T obj) { requires !typename T::AllowOwnPtr()(); obj.ref(); obj.unref(); },
+            requires { requires typename T::AllowOwnPtr()(); } || !requires { requires !typename T::AllowOwnPtr()(); declval<T>().ref(); declval<T>().unref(); },
             "Use NonnullRefPtr<> for RefCounted types");
     }
     NonnullOwnPtr(NonnullOwnPtr&& other)
@@ -51,10 +53,7 @@ public:
     {
         clear();
 #ifdef SANITIZE_PTRS
-        if constexpr (sizeof(T*) == 8)
-            m_ptr = (T*)(0xe3e3e3e3e3e3e3e3);
-        else
-            m_ptr = (T*)(0xe3e3e3e3);
+        m_ptr = (T*)(explode_byte(NONNULLOWNPTR_SCRUB_BYTE));
 #endif
     }
 
@@ -98,17 +97,26 @@ public:
         return exchange(m_ptr, nullptr);
     }
 
-    T* ptr() { return m_ptr; }
-    const T* ptr() const { return m_ptr; }
+    ALWAYS_INLINE RETURNS_NONNULL T* ptr()
+    {
+        VERIFY(m_ptr);
+        return m_ptr;
+    }
 
-    T* operator->() { return m_ptr; }
-    const T* operator->() const { return m_ptr; }
+    ALWAYS_INLINE RETURNS_NONNULL const T* ptr() const
+    {
+        VERIFY(m_ptr);
+        return m_ptr;
+    }
 
-    T& operator*() { return *m_ptr; }
-    const T& operator*() const { return *m_ptr; }
+    ALWAYS_INLINE RETURNS_NONNULL T* operator->() { return ptr(); }
+    ALWAYS_INLINE RETURNS_NONNULL const T* operator->() const { return ptr(); }
 
-    operator const T*() const { return m_ptr; }
-    operator T*() { return m_ptr; }
+    ALWAYS_INLINE T& operator*() { return *ptr(); }
+    ALWAYS_INLINE const T& operator*() const { return *ptr(); }
+
+    ALWAYS_INLINE RETURNS_NONNULL operator const T*() const { return ptr(); }
+    ALWAYS_INLINE RETURNS_NONNULL operator T*() { return ptr(); }
 
     operator bool() const = delete;
     bool operator!() const = delete;
@@ -151,20 +159,26 @@ inline NonnullOwnPtr<T> adopt_own(T& object)
     return NonnullOwnPtr<T>(NonnullOwnPtr<T>::Adopt, object);
 }
 
-#endif
-
 template<class T, class... Args>
-inline NonnullOwnPtr<T>
-make(Args&&... args)
+requires(IsConstructible<T, Args...>) inline NonnullOwnPtr<T> make(Args&&... args)
 {
     return NonnullOwnPtr<T>(NonnullOwnPtr<T>::Adopt, *new T(forward<Args>(args)...));
 }
+
+// FIXME: Remove once P0960R3 is available in Clang.
+template<class T, class... Args>
+inline NonnullOwnPtr<T> make(Args&&... args)
+{
+    return NonnullOwnPtr<T>(NonnullOwnPtr<T>::Adopt, *new T { forward<Args>(args)... });
+}
+
+#endif
 
 template<typename T>
 struct Traits<NonnullOwnPtr<T>> : public GenericTraits<NonnullOwnPtr<T>> {
     using PeekType = T*;
     using ConstPeekType = const T*;
-    static unsigned hash(const NonnullOwnPtr<T>& p) { return int_hash((u32)p.ptr()); }
+    static unsigned hash(const NonnullOwnPtr<T>& p) { return ptr_hash((FlatPtr)p.ptr()); }
     static bool equals(const NonnullOwnPtr<T>& a, const NonnullOwnPtr<T>& b) { return a.ptr() == b.ptr(); }
 };
 
@@ -176,9 +190,9 @@ inline void swap(NonnullOwnPtr<T>& a, NonnullOwnPtr<U>& b)
 
 template<typename T>
 struct Formatter<NonnullOwnPtr<T>> : Formatter<const T*> {
-    void format(FormatBuilder& builder, const NonnullOwnPtr<T>& value)
+    ErrorOr<void> format(FormatBuilder& builder, NonnullOwnPtr<T> const& value)
     {
-        Formatter<const T*>::format(builder, value.ptr());
+        return Formatter<const T*>::format(builder, value.ptr());
     }
 };
 
@@ -186,6 +200,6 @@ struct Formatter<NonnullOwnPtr<T>> : Formatter<const T*> {
 
 #if !defined(KERNEL)
 using AK::adopt_own;
-#endif
 using AK::make;
+#endif
 using AK::NonnullOwnPtr;

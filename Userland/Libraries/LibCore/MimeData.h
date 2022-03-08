@@ -20,7 +20,7 @@ public:
     virtual ~MimeData() { }
 
     ByteBuffer data(const String& mime_type) const { return m_data.get(mime_type).value_or({}); }
-    void set_data(const String& mime_type, const ByteBuffer& data) { m_data.set(mime_type, data); }
+    void set_data(const String& mime_type, ByteBuffer&& data) { m_data.set(mime_type, move(data)); }
 
     bool has_format(const String& mime_type) const { return m_data.contains(mime_type); }
     Vector<String> formats() const;
@@ -47,8 +47,8 @@ private:
     HashMap<String, ByteBuffer> m_data;
 };
 
-String guess_mime_type_based_on_filename(const StringView&);
+String guess_mime_type_based_on_filename(StringView);
 
-Optional<String> guess_mime_type_based_on_sniffed_bytes(const ReadonlyBytes&);
+Optional<String> guess_mime_type_based_on_sniffed_bytes(ReadonlyBytes);
 
 }

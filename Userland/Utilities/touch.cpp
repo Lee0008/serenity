@@ -1,16 +1,17 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibCore/ArgsParser.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <utime.h>
 
@@ -29,36 +30,25 @@ static bool file_exists(const char* path)
     exit(1);
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath cpath fattr", nullptr)) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath cpath fattr"));
 
     Vector<const char*> paths;
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help("Create a file, or update its mtime (time of last modification).");
+    args_parser.add_ignored(nullptr, 'f');
     args_parser.add_positional_argument(paths, "Files to touch", "path", Core::ArgsParser::Required::Yes);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     for (auto path : paths) {
         if (file_exists(path)) {
-            int rc = utime(path, nullptr);
-            if (rc < 0)
-                perror("utime");
+            if (auto result = Core::System::utime(path, {}); result.is_error())
+                warnln("{}", result.release_error());
         } else {
-            int fd = open(path, O_CREAT, 0100644);
-            if (fd < 0) {
-                perror("open");
-                return 1;
-            }
-            int rc = close(fd);
-            if (rc < 0) {
-                perror("close");
-                return 1;
-            }
+            int fd = TRY(Core::System::open(path, O_CREAT, 0100644));
+            TRY(Core::System::close(fd));
         }
     }
     return 0;

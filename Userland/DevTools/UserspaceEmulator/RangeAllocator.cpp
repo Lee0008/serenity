@@ -28,7 +28,7 @@ void RangeAllocator::initialize_with_range(VirtualAddress base, size_t size)
 void RangeAllocator::dump() const
 {
     dbgln("RangeAllocator({})", this);
-    for (auto& range : m_available_ranges) {
+    for (auto const& range : m_available_ranges) {
         dbgln("    {:x} -> {:x}", range.base().get(), range.end().get() - 1);
     }
 }
@@ -179,6 +179,13 @@ void RangeAllocator::deallocate(const Range& range)
             return;
         }
     }
+}
+
+void RangeAllocator::reserve_user_range(VirtualAddress begin, size_t size)
+{
+    auto end = round_up_to_power_of_two(begin.offset(size).get(), PAGE_SIZE);
+    auto allocated_range = allocate_specific(begin.page_base(), end - begin.page_base().get());
+    VERIFY(allocated_range.has_value());
 }
 
 }

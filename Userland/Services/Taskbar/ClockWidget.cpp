@@ -5,13 +5,12 @@
  */
 
 #include "ClockWidget.h"
+#include <LibCore/Process.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/SeparatorWidget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
-#include <serenity.h>
-#include <spawn.h>
 
 namespace Taskbar {
 
@@ -36,7 +35,7 @@ ClockWidget::ClockWidget()
     });
 
     m_calendar_window = add<GUI::Window>(window());
-    m_calendar_window->resize(152, 186);
+    m_calendar_window->resize(m_window_size.width(), m_window_size.height());
     m_calendar_window->set_frameless(true);
     m_calendar_window->set_resizable(false);
     m_calendar_window->set_minimizable(false);
@@ -45,24 +44,22 @@ ClockWidget::ClockWidget()
             close();
     };
 
-    auto& root_container = m_calendar_window->set_main_widget<GUI::Label>();
+    auto& root_container = m_calendar_window->set_main_widget<GUI::Frame>();
     root_container.set_fill_with_background_color(true);
     root_container.set_layout<GUI::VerticalBoxLayout>();
-    root_container.layout()->set_margins({ 0, 2, 0, 2 });
+    root_container.layout()->set_margins({ 2, 0 });
     root_container.layout()->set_spacing(0);
-    root_container.set_frame_thickness(2);
-    root_container.set_frame_shape(Gfx::FrameShape::Container);
-    root_container.set_frame_shadow(Gfx::FrameShadow::Raised);
+    root_container.set_frame_shape(Gfx::FrameShape::Window);
 
     auto& navigation_container = root_container.add<GUI::Widget>();
     navigation_container.set_fixed_height(24);
     navigation_container.set_layout<GUI::HorizontalBoxLayout>();
-    navigation_container.layout()->set_margins({ 2, 2, 3, 2 });
+    navigation_container.layout()->set_margins({ 2 });
 
     m_prev_date = navigation_container.add<GUI::Button>();
     m_prev_date->set_button_style(Gfx::ButtonStyle::Coolbar);
     m_prev_date->set_fixed_size(24, 24);
-    m_prev_date->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/go-back.png"));
+    m_prev_date->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-back.png").release_value_but_fixme_should_propagate_errors());
     m_prev_date->on_click = [&](auto) {
         unsigned view_month = m_calendar->view_month();
         unsigned view_year = m_calendar->view_year();
@@ -96,7 +93,7 @@ ClockWidget::ClockWidget()
     m_next_date = navigation_container.add<GUI::Button>();
     m_next_date->set_button_style(Gfx::ButtonStyle::Coolbar);
     m_next_date->set_fixed_size(24, 24);
-    m_next_date->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/go-forward.png"));
+    m_next_date->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors());
     m_next_date->on_click = [&](auto) {
         unsigned view_month = m_calendar->view_month();
         unsigned view_year = m_calendar->view_year();
@@ -121,7 +118,7 @@ ClockWidget::ClockWidget()
 
     auto& calendar_container = root_container.add<GUI::Widget>();
     calendar_container.set_layout<GUI::HorizontalBoxLayout>();
-    calendar_container.layout()->set_margins({ 4, 4, 5, 4 });
+    calendar_container.layout()->set_margins({ 2 });
 
     m_calendar = calendar_container.add<GUI::Calendar>();
     m_selected_calendar_button->set_text(m_calendar->formatted_date());
@@ -140,13 +137,13 @@ ClockWidget::ClockWidget()
     auto& settings_container = root_container.add<GUI::Widget>();
     settings_container.set_fixed_height(24);
     settings_container.set_layout<GUI::HorizontalBoxLayout>();
-    settings_container.layout()->set_margins({ 2, 2, 3, 2 });
+    settings_container.layout()->set_margins({ 2 });
     settings_container.layout()->add_spacer();
 
     m_jump_to_button = settings_container.add<GUI::Button>();
     m_jump_to_button->set_button_style(Gfx::ButtonStyle::Coolbar);
     m_jump_to_button->set_fixed_size(24, 24);
-    m_jump_to_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/calendar-date.png"));
+    m_jump_to_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/calendar-date.png").release_value_but_fixme_should_propagate_errors());
     m_jump_to_button->set_tooltip("Jump to today");
     m_jump_to_button->on_click = [this](auto) {
         jump_to_current_date();
@@ -155,17 +152,10 @@ ClockWidget::ClockWidget()
     m_calendar_launcher = settings_container.add<GUI::Button>();
     m_calendar_launcher->set_button_style(Gfx::ButtonStyle::Coolbar);
     m_calendar_launcher->set_fixed_size(24, 24);
-    m_calendar_launcher->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-calendar.png"));
+    m_calendar_launcher->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-calendar.png").release_value_but_fixme_should_propagate_errors());
     m_calendar_launcher->set_tooltip("Calendar");
     m_calendar_launcher->on_click = [](auto) {
-        pid_t pid;
-        const char* argv[] = { "Calendar", nullptr };
-        if ((errno = posix_spawn(&pid, "/bin/Calendar", nullptr, nullptr, const_cast<char**>(argv), environ))) {
-            perror("posix_spawn");
-        } else {
-            if (disown(pid) < 0)
-                perror("disown");
-        }
+        Core::Process::spawn("/bin/Calendar"sv);
     };
 }
 
@@ -179,12 +169,22 @@ void ClockWidget::paint_event(GUI::PaintEvent& event)
     auto time_text = Core::DateTime::now().to_string("%T");
     GUI::Painter painter(*this);
     painter.add_clip_rect(frame_inner_rect());
-    painter.draw_text(frame_inner_rect().translated(0, 1), time_text, Gfx::FontDatabase::default_font(), Gfx::TextAlignment::Center, palette().window_text());
+
+    // Render string center-left aligned, but attempt to center the string based on a constant
+    // "ideal" time string (i.e., the same one used to size this widget in the initializer).
+    // This prevents the rest of the string from shifting around while seconds tick.
+    const Gfx::Font& font = Gfx::FontDatabase::default_font();
+    const int frame_width = frame_thickness();
+    const int ideal_width = m_time_width;
+    const int widget_width = max_width();
+    const int translation_x = (widget_width - ideal_width) / 2 - frame_width;
+
+    painter.draw_text(frame_inner_rect().translated(translation_x, frame_width), time_text, font, Gfx::TextAlignment::CenterLeft, palette().window_text());
 }
 
 void ClockWidget::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left) {
+    if (event.button() != GUI::MouseButton::Primary) {
         return;
     } else {
         if (!m_calendar_window->is_visible())
@@ -208,11 +208,12 @@ void ClockWidget::close()
 
 void ClockWidget::position_calendar_window()
 {
+    constexpr auto taskbar_top_padding { 4 };
     m_calendar_window->set_rect(
-        screen_relative_rect().right() - m_calendar_window->width() + 4,
-        screen_relative_rect().top() - m_calendar_window->height() - 3,
-        152,
-        186);
+        screen_relative_rect().right() - m_calendar_window->width() + 1,
+        screen_relative_rect().top() - taskbar_top_padding - m_calendar_window->height(),
+        m_window_size.width(),
+        m_window_size.height());
 }
 
 void ClockWidget::jump_to_current_date()

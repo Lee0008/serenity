@@ -1,8 +1,7 @@
 @GUI::Widget {
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
-        margins: [8, 8, 8, 8]
+        margins: [8]
     }
 
     @DisplaySettings::MonitorWidget {
@@ -33,13 +32,11 @@
 
         @GUI::Widget {
             shrink_to_fit: true
-
-            layout: @GUI::VerticalBoxLayout {
-            }
+            layout: @GUI::VerticalBoxLayout {}
 
             @GUI::Button {
                 name: "wallpaper_open_button"
-                tooltip: "Select wallpaper from file system."
+                tooltip: "Select wallpaper from file system"
                 text: "Browse..."
                 shrink_to_fit: true
             }

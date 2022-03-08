@@ -7,10 +7,11 @@
 #include <AK/OwnPtr.h>
 #include <AK/Singleton.h>
 #include <Kernel/API/MousePacket.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/CommandLine.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Devices/VMWareBackdoor.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
@@ -62,7 +63,7 @@ public:
     VMWareBackdoorDetector()
     {
         if (detect_presence())
-            m_backdoor = make<VMWareBackdoor>();
+            m_backdoor = adopt_nonnull_own_or_enomem(new (nothrow) VMWareBackdoor()).release_value_but_fixme_should_propagate_errors();
     }
 
     VMWareBackdoor* get_instance()
@@ -85,7 +86,7 @@ private:
     OwnPtr<VMWareBackdoor> m_backdoor;
 };
 
-static AK::Singleton<VMWareBackdoorDetector> s_vmware_backdoor;
+static Singleton<VMWareBackdoorDetector> s_vmware_backdoor;
 
 VMWareBackdoor* VMWareBackdoor::the()
 {
@@ -182,40 +183,56 @@ void VMWareBackdoor::send(VMWareCommand& command)
         command.dx);
 }
 
-Optional<MousePacket> VMWareBackdoor::receive_mouse_packet()
+u16 VMWareBackdoor::read_mouse_status_queue_size()
 {
     VMWareCommand command;
     command.bx = 0;
     command.command = VMMOUSE_STATUS;
     send(command);
+
     if (command.ax == 0xFFFF0000) {
         dbgln_if(PS2MOUSE_DEBUG, "PS2MouseDevice: Resetting VMWare mouse");
         disable_absolute_vmmouse();
         enable_absolute_vmmouse();
-        return {};
+        return 0;
     }
-    int words = command.ax & 0xFFFF;
 
-    if (!words || words % 4)
-        return {};
+    return command.ax & 0xFFFF;
+}
+
+MousePacket VMWareBackdoor::receive_mouse_packet()
+{
+    VMWareCommand command;
     command.size = 4;
     command.command = VMMOUSE_DATA;
     send(command);
 
     int buttons = (command.ax & 0xFFFF);
-    int x = (command.bx);
-    int y = (command.cx);
-    int z = (i8)(command.dx); // signed 8 bit value only!
+    int x = command.bx;
+    int y = command.cx;
+    int z = static_cast<i8>(command.dx); // signed 8 bit value only!
+    int w = 0;
+
+    // horizontal scroll is reported as +-2 by qemu
+    // FIXME: Scroll only functions correctly when the sign is flipped there
+    if (z == 2) {
+        w = -1;
+        z = 0;
+    } else if (z == -2) {
+        w = 1;
+        z = 0;
+    }
 
     if constexpr (PS2MOUSE_DEBUG) {
         dbgln("Absolute Mouse: Buttons {:x}", buttons);
-        dbgln("Mouse: x={}, y={}, z={}", x, y, z);
+        dbgln("Mouse: x={}, y={}, z={}, w={}", x, y, z, w);
     }
 
     MousePacket packet;
     packet.x = x;
     packet.y = y;
     packet.z = z;
+    packet.w = w;
     if (buttons & VMMOUSE_LEFT_CLICK)
         packet.buttons |= MousePacket::LeftButton;
     if (buttons & VMMOUSE_RIGHT_CLICK)

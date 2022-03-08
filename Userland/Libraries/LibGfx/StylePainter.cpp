@@ -18,19 +18,14 @@ BaseStylePainter& StylePainter::current()
     return style;
 }
 
-void StylePainter::paint_tab_button(Painter& painter, const IntRect& rect, const Palette& palette, bool active, bool hovered, bool enabled, bool top)
+void StylePainter::paint_tab_button(Painter& painter, const IntRect& rect, const Palette& palette, bool active, bool hovered, bool enabled, bool top, bool in_active_window)
 {
-    current().paint_tab_button(painter, rect, palette, active, hovered, enabled, top);
+    current().paint_tab_button(painter, rect, palette, active, hovered, enabled, top, in_active_window);
 }
 
-void StylePainter::paint_button(Painter& painter, const IntRect& rect, const Palette& palette, ButtonStyle button_style, bool pressed, bool hovered, bool checked, bool enabled, bool focused)
+void StylePainter::paint_button(Painter& painter, const IntRect& rect, const Palette& palette, ButtonStyle button_style, bool pressed, bool hovered, bool checked, bool enabled, bool focused, bool default_button)
 {
-    current().paint_button(painter, rect, palette, button_style, pressed, hovered, checked, enabled, focused);
-}
-
-void StylePainter::paint_surface(Painter& painter, const IntRect& rect, const Palette& palette, bool paint_vertical_lines, bool paint_top_line)
-{
-    current().paint_surface(painter, rect, palette, paint_vertical_lines, paint_top_line);
+    current().paint_button(painter, rect, palette, button_style, pressed, hovered, checked, enabled, focused, default_button);
 }
 
 void StylePainter::paint_frame(Painter& painter, const IntRect& rect, const Palette& palette, FrameShape shape, FrameShadow shadow, int thickness, bool skip_vertical_lines)
@@ -43,7 +38,7 @@ void StylePainter::paint_window_frame(Painter& painter, const IntRect& rect, con
     current().paint_window_frame(painter, rect, palette);
 }
 
-void StylePainter::paint_progressbar(Painter& painter, const IntRect& rect, const Palette& palette, int min, int max, int value, const StringView& text, Orientation orientation)
+void StylePainter::paint_progressbar(Painter& painter, const IntRect& rect, const Palette& palette, int min, int max, int value, StringView text, Orientation orientation)
 {
     current().paint_progressbar(painter, rect, palette, min, max, value, text, orientation);
 }
@@ -61,6 +56,11 @@ void StylePainter::paint_check_box(Painter& painter, const IntRect& rect, const 
 void StylePainter::paint_transparency_grid(Painter& painter, const IntRect& rect, const Palette& palette)
 {
     current().paint_transparency_grid(painter, rect, palette);
+}
+
+void StylePainter::paint_simple_rect_shadow(Painter& painter, IntRect const& rect, Bitmap const& shadow_bitmap, bool shadow_includes_frame, bool fill_content)
+{
+    current().paint_simple_rect_shadow(painter, rect, shadow_bitmap, shadow_includes_frame, fill_content);
 }
 
 }

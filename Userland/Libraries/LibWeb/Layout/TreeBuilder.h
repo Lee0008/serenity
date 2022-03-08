@@ -8,6 +8,7 @@
 
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/RefPtr.h>
+#include <LibWeb/CSS/Display.h>
 #include <LibWeb/Forward.h>
 
 namespace Web::Layout {
@@ -19,13 +20,20 @@ public:
     RefPtr<Layout::Node> build(DOM::Node&);
 
 private:
-    void create_layout_tree(DOM::Node&);
+    struct Context {
+        bool has_svg_root = false;
+    };
+
+    void create_layout_tree(DOM::Node&, Context&);
 
     void push_parent(Layout::NodeWithStyle& node) { m_parent_stack.append(&node); }
     void pop_parent() { m_parent_stack.take_last(); }
 
-    template<CSS::Display, typename Callback>
-    void for_each_in_tree_with_display(NodeWithStyle& root, Callback);
+    template<CSS::Display::Internal, typename Callback>
+    void for_each_in_tree_with_internal_display(NodeWithStyle& root, Callback);
+
+    template<CSS::Display::Inside, typename Callback>
+    void for_each_in_tree_with_inside_display(NodeWithStyle& root, Callback);
 
     void fixup_tables(NodeWithStyle& root);
     void remove_irrelevant_boxes(NodeWithStyle& root);

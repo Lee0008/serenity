@@ -12,13 +12,14 @@
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Types.h>
+#include <AK/Vector.h>
 #include <ctype.h>
 
 namespace Shell {
 
 class Formatter final : public AST::NodeVisitor {
 public:
-    Formatter(const StringView& source, ssize_t cursor = -1)
+    Formatter(StringView source, ssize_t cursor = -1)
         : m_builders({ StringBuilder { round_up_to_power_of_two(source.length(), 16) } })
         , m_source(source)
         , m_cursor(cursor)

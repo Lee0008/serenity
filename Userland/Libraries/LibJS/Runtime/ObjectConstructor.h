@@ -19,16 +19,17 @@ public:
     virtual void initialize(GlobalObject&) override;
     virtual ~ObjectConstructor() override;
 
-    virtual Value call() override;
-    virtual Value construct(Function& new_target) override;
+    virtual ThrowCompletionOr<Value> call() override;
+    virtual ThrowCompletionOr<Object*> construct(FunctionObject& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
 
-    JS_DECLARE_NATIVE_FUNCTION(define_property_);
+    JS_DECLARE_NATIVE_FUNCTION(define_property);
     JS_DECLARE_NATIVE_FUNCTION(define_properties);
     JS_DECLARE_NATIVE_FUNCTION(is);
     JS_DECLARE_NATIVE_FUNCTION(get_own_property_descriptor);
+    JS_DECLARE_NATIVE_FUNCTION(get_own_property_descriptors);
     JS_DECLARE_NATIVE_FUNCTION(get_own_property_names);
     JS_DECLARE_NATIVE_FUNCTION(get_own_property_symbols);
     JS_DECLARE_NATIVE_FUNCTION(get_prototype_of);
@@ -39,6 +40,7 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(prevent_extensions);
     JS_DECLARE_NATIVE_FUNCTION(seal);
     JS_DECLARE_NATIVE_FUNCTION(freeze);
+    JS_DECLARE_NATIVE_FUNCTION(from_entries);
     JS_DECLARE_NATIVE_FUNCTION(keys);
     JS_DECLARE_NATIVE_FUNCTION(values);
     JS_DECLARE_NATIVE_FUNCTION(entries);

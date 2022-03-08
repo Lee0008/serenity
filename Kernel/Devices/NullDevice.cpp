@@ -4,22 +4,19 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "NullDevice.h"
 #include <AK/Singleton.h>
-#include <AK/StdLibExtras.h>
+#include <Kernel/Devices/DeviceManagement.h>
+#include <Kernel/Devices/NullDevice.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
-static AK::Singleton<NullDevice> s_the;
-
-UNMAP_AFTER_INIT void NullDevice::initialize()
+UNMAP_AFTER_INIT NonnullRefPtr<NullDevice> NullDevice::must_initialize()
 {
-    s_the.ensure_instance();
-}
-
-NullDevice& NullDevice::the()
-{
-    return *s_the;
+    auto null_device_or_error = DeviceManagement::try_create_device<NullDevice>();
+    // FIXME: Find a way to propagate errors
+    VERIFY(!null_device_or_error.is_error());
+    return null_device_or_error.release_value();
 }
 
 UNMAP_AFTER_INIT NullDevice::NullDevice()
@@ -31,17 +28,17 @@ UNMAP_AFTER_INIT NullDevice::~NullDevice()
 {
 }
 
-bool NullDevice::can_read(const FileDescription&, size_t) const
+bool NullDevice::can_read(const OpenFileDescription&, u64) const
 {
     return true;
 }
 
-KResultOr<size_t> NullDevice::read(FileDescription&, u64, UserOrKernelBuffer&, size_t)
+ErrorOr<size_t> NullDevice::read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t)
 {
     return 0;
 }
 
-KResultOr<size_t> NullDevice::write(FileDescription&, u64, const UserOrKernelBuffer&, size_t buffer_size)
+ErrorOr<size_t> NullDevice::write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t buffer_size)
 {
     return buffer_size;
 }

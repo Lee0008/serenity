@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2021-2022, Matthew Olsson <mattco@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -51,8 +51,8 @@ enum class TextRenderingMode : u8 {
 };
 
 struct TextState {
-    float character_spacing { 3.0f };
-    float word_spacing { 5.0f };
+    float character_spacing { 0.0f };
+    float word_spacing { 0.0f };
     float horizontal_scaling { 1.0f };
     float leading { 0.0f };
     FlyString font_family { "Liberation Serif" };
@@ -79,25 +79,25 @@ struct GraphicsState {
 
 class Renderer {
 public:
-    static void render(Document&, Page const&, RefPtr<Gfx::Bitmap>);
+    static PDFErrorOr<void> render(Document&, Page const&, RefPtr<Gfx::Bitmap>);
 
 private:
     Renderer(RefPtr<Document>, Page const&, RefPtr<Gfx::Bitmap>);
 
-    void render();
+    PDFErrorOr<void> render();
 
-    void handle_command(Command const&);
+    PDFErrorOr<void> handle_command(Command const&);
 #define V(name, snake_name, symbol) \
-    void handle_##snake_name(Vector<Value> const& args);
+    PDFErrorOr<void> handle_##snake_name(Vector<Value> const& args);
     ENUMERATE_COMMANDS(V)
 #undef V
-    void handle_text_next_line_show_string(Vector<Value> const& args);
-    void handle_text_next_line_show_string_set_spacing(Vector<Value> const& args);
+    PDFErrorOr<void> handle_text_next_line_show_string(Vector<Value> const& args);
+    PDFErrorOr<void> handle_text_next_line_show_string_set_spacing(Vector<Value> const& args);
 
-    void set_graphics_state_from_dict(NonnullRefPtr<DictObject>);
+    PDFErrorOr<void> set_graphics_state_from_dict(NonnullRefPtr<DictObject>);
     // shift is the manual advance given in the TJ command array
     void show_text(String const&, float shift = 0.0f);
-    RefPtr<ColorSpace> get_color_space(Value const&);
+    PDFErrorOr<NonnullRefPtr<ColorSpace>> get_color_space(Value const&);
 
     ALWAYS_INLINE GraphicsState const& state() const { return m_graphics_state_stack.last(); }
     ALWAYS_INLINE GraphicsState& state() { return m_graphics_state_stack.last(); }
@@ -135,43 +135,37 @@ namespace AK {
 
 template<>
 struct Formatter<PDF::LineCapStyle> : Formatter<StringView> {
-    void format(FormatBuilder& builder, PDF::LineCapStyle const& style)
+    ErrorOr<void> format(FormatBuilder& builder, PDF::LineCapStyle const& style)
     {
         switch (style) {
         case PDF::LineCapStyle::ButtCap:
-            Formatter<StringView>::format(builder, "LineCapStyle::ButtCap");
-            break;
+            return Formatter<StringView>::format(builder, "LineCapStyle::ButtCap");
         case PDF::LineCapStyle::RoundCap:
-            Formatter<StringView>::format(builder, "LineCapStyle::RoundCap");
-            break;
+            return Formatter<StringView>::format(builder, "LineCapStyle::RoundCap");
         case PDF::LineCapStyle::SquareCap:
-            Formatter<StringView>::format(builder, "LineCapStyle::SquareCap");
-            break;
+            return Formatter<StringView>::format(builder, "LineCapStyle::SquareCap");
         }
     }
 };
 
 template<>
 struct Formatter<PDF::LineJoinStyle> : Formatter<StringView> {
-    void format(FormatBuilder& builder, PDF::LineJoinStyle const& style)
+    ErrorOr<void> format(FormatBuilder& builder, PDF::LineJoinStyle const& style)
     {
         switch (style) {
         case PDF::LineJoinStyle::Miter:
-            Formatter<StringView>::format(builder, "LineJoinStyle::Miter");
-            break;
+            return Formatter<StringView>::format(builder, "LineJoinStyle::Miter");
         case PDF::LineJoinStyle::Round:
-            Formatter<StringView>::format(builder, "LineJoinStyle::Round");
-            break;
+            return Formatter<StringView>::format(builder, "LineJoinStyle::Round");
         case PDF::LineJoinStyle::Bevel:
-            Formatter<StringView>::format(builder, "LineJoinStyle::Bevel");
-            break;
+            return Formatter<StringView>::format(builder, "LineJoinStyle::Bevel");
         }
     }
 };
 
 template<>
 struct Formatter<PDF::LineDashPattern> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::LineDashPattern const& pattern)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::LineDashPattern const& pattern)
     {
         StringBuilder builder;
         builder.append("[");
@@ -191,40 +185,32 @@ struct Formatter<PDF::LineDashPattern> : Formatter<StringView> {
 
 template<>
 struct Formatter<PDF::TextRenderingMode> : Formatter<StringView> {
-    void format(FormatBuilder& builder, PDF::TextRenderingMode const& style)
+    ErrorOr<void> format(FormatBuilder& builder, PDF::TextRenderingMode const& style)
     {
         switch (style) {
         case PDF::TextRenderingMode::Fill:
-            Formatter<StringView>::format(builder, "TextRenderingMode::Fill");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::Fill");
         case PDF::TextRenderingMode::Stroke:
-            Formatter<StringView>::format(builder, "TextRenderingMode::Stroke");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::Stroke");
         case PDF::TextRenderingMode::FillThenStroke:
-            Formatter<StringView>::format(builder, "TextRenderingMode::FillThenStroke");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::FillThenStroke");
         case PDF::TextRenderingMode::Invisible:
-            Formatter<StringView>::format(builder, "TextRenderingMode::Invisible");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::Invisible");
         case PDF::TextRenderingMode::FillAndClip:
-            Formatter<StringView>::format(builder, "TextRenderingMode::FillAndClip");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::FillAndClip");
         case PDF::TextRenderingMode::StrokeAndClip:
-            Formatter<StringView>::format(builder, "TextRenderingMode::StrokeAndClip");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::StrokeAndClip");
         case PDF::TextRenderingMode::FillStrokeAndClip:
-            Formatter<StringView>::format(builder, "TextRenderingMode::FillStrokeAndClip");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::FillStrokeAndClip");
         case PDF::TextRenderingMode::Clip:
-            Formatter<StringView>::format(builder, "TextRenderingMode::Clip");
-            break;
+            return Formatter<StringView>::format(builder, "TextRenderingMode::Clip");
         }
     }
 };
 
 template<>
 struct Formatter<PDF::TextState> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::TextState const& state)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::TextState const& state)
     {
         StringBuilder builder;
         builder.append("TextState {\n");
@@ -239,13 +225,13 @@ struct Formatter<PDF::TextState> : Formatter<StringView> {
         builder.appendff("    rise={}\n", state.rise);
         builder.appendff("    knockout={}\n", state.knockout);
         builder.append(" }");
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 
 template<>
 struct Formatter<PDF::GraphicsState> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::GraphicsState const& state)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::GraphicsState const& state)
     {
         StringBuilder builder;
         builder.append("GraphicsState {\n");
@@ -259,7 +245,7 @@ struct Formatter<PDF::GraphicsState> : Formatter<StringView> {
         builder.appendff("  line_dash_pattern={}\n", state.line_dash_pattern);
         builder.appendff("  text_state={}\n", state.text_state);
         builder.append("}");
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 

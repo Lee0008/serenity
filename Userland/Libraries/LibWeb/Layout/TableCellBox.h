@@ -6,11 +6,11 @@
 
 #pragma once
 
-#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/BlockContainer.h>
 
 namespace Web::Layout {
 
-class TableCellBox final : public BlockBox {
+class TableCellBox final : public BlockContainer {
 public:
     TableCellBox(DOM::Document&, DOM::Element*, NonnullRefPtr<CSS::StyleProperties>);
     TableCellBox(DOM::Document&, DOM::Element*, CSS::ComputedValues);
@@ -21,10 +21,7 @@ public:
 
     size_t colspan() const;
 
-    static CSS::Display static_display() { return CSS::Display::TableCell; }
-
-private:
-    virtual float width_of_logical_containing_block() const override;
+    static CSS::Display static_display() { return CSS::Display { CSS::Display::Internal::TableCell }; }
 };
 
 }

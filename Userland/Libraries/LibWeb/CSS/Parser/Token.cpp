@@ -6,6 +6,7 @@
 
 #include <AK/String.h>
 #include <LibWeb/CSS/Parser/Token.h>
+#include <LibWeb/CSS/Serialize.h>
 
 namespace Web::CSS {
 
@@ -14,92 +15,153 @@ String Token::to_string() const
     StringBuilder builder;
 
     switch (m_type) {
-    case TokenType::Invalid:
+    case Type::EndOfFile:
+        return "";
+    case Type::Ident:
+        return serialize_an_identifier(ident());
+    case Type::Function:
+        return String::formatted("{}(", serialize_an_identifier(function()));
+    case Type::AtKeyword:
+        return String::formatted("@{}", serialize_an_identifier(at_keyword()));
+    case Type::Hash:
+        return String::formatted("#{}", serialize_an_identifier(hash_value()));
+    case Type::String:
+        return serialize_a_string(string());
+    case Type::BadString:
+        return "";
+    case Type::Url:
+        return serialize_a_url(url());
+    case Type::BadUrl:
+        return "url()";
+    case Type::Delim:
+        return m_value;
+    case Type::Number:
+        return String::number(m_number_value);
+    case Type::Percentage:
+        return String::formatted("{}%", m_number_value);
+    case Type::Dimension:
+        return String::formatted("{}{}", m_number_value, m_unit);
+    case Type::Whitespace:
+        return " ";
+    case Type::CDO:
+        return "<!--";
+    case Type::CDC:
+        return "-->";
+    case Type::Colon:
+        return ":";
+    case Type::Semicolon:
+        return ";";
+    case Type::Comma:
+        return ",";
+    case Type::OpenSquare:
+        return "[";
+    case Type::CloseSquare:
+        return "]";
+    case Type::OpenParen:
+        return "(";
+    case Type::CloseParen:
+        return ")";
+    case Type::OpenCurly:
+        return "{";
+    case Type::CloseCurly:
+        return "}";
+    case Type::Invalid:
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+String Token::to_debug_string() const
+{
+    StringBuilder builder;
+
+    switch (m_type) {
+    case Type::Invalid:
         VERIFY_NOT_REACHED();
 
-    case TokenType::EndOfFile:
+    case Type::EndOfFile:
         builder.append("__EOF__");
         break;
-    case TokenType::Ident:
-        //builder.append("Identifier");
-        builder.append(m_value.to_string());
+    case Type::Ident:
+        builder.append("Identifier: ");
+        builder.append(m_value);
         return builder.to_string();
-    case TokenType::Function:
+    case Type::Function:
         builder.append("Function");
         break;
-    case TokenType::AtKeyword:
+    case Type::AtKeyword:
         builder.append("@");
         break;
-    case TokenType::Hash:
-        builder.append("#");
-        builder.append(m_value.to_string());
+    case Type::Hash:
+        builder.append("Hash: ");
+        builder.append(m_value);
         return builder.to_string();
-    case TokenType::String:
-        //builder.append("String");
-        builder.append(m_value.to_string());
+    case Type::String:
+        builder.append("String: ");
+        builder.append(m_value);
         return builder.to_string();
-    case TokenType::BadString:
+    case Type::BadString:
         builder.append("Invalid String");
         break;
-    case TokenType::Url:
+    case Type::Url:
         builder.append("Url");
         break;
-    case TokenType::BadUrl:
+    case Type::BadUrl:
         builder.append("Invalid Url");
         break;
-    case TokenType::Delim:
-        //builder.append("Delimiter");
-        builder.append(m_value.to_string());
+    case Type::Delim:
+        builder.append("Delimiter: ");
+        builder.append(m_value);
         return builder.to_string();
-    case TokenType::Number:
-        //builder.append("Number");
-        builder.append(m_value.to_string());
-        builder.append(m_unit.to_string());
+    case Type::Number:
+        builder.append("Number: ");
+        builder.append(m_value);
+        builder.append(m_number_type == NumberType::Integer ? " (int)" : " (float)");
         return builder.to_string();
-    case TokenType::Percentage:
-        //builder.append("Percentage");
-        builder.append(m_value.to_string());
-        builder.append(m_unit.to_string());
+    case Type::Percentage:
+        builder.append("Percentage: ");
+        builder.append(m_value);
+        builder.append('%');
         return builder.to_string();
-    case TokenType::Dimension:
-        //builder.append("Dimension");
-        builder.append(m_value.to_string());
-        builder.append(m_unit.to_string());
+    case Type::Dimension:
+        builder.append("Dimension: ");
+        builder.append(m_value);
+        builder.append(m_unit);
         return builder.to_string();
-    case TokenType::Whitespace:
+    case Type::Whitespace:
         builder.append("Whitespace");
         break;
-    case TokenType::CDO:
+    case Type::CDO:
         builder.append("CDO");
         break;
-    case TokenType::CDC:
+    case Type::CDC:
         builder.append("CDC");
         break;
-    case TokenType::Colon:
+    case Type::Colon:
         builder.append(":");
         break;
-    case TokenType::Semicolon:
+    case Type::Semicolon:
         builder.append(";");
         break;
-    case TokenType::Comma:
+    case Type::Comma:
         builder.append(",");
         break;
-    case TokenType::OpenSquare:
+    case Type::OpenSquare:
         builder.append("[");
         break;
-    case TokenType::CloseSquare:
+    case Type::CloseSquare:
         builder.append("]");
         break;
-    case TokenType::OpenParen:
+    case Type::OpenParen:
         builder.append("(");
         break;
-    case TokenType::CloseParen:
+    case Type::CloseParen:
         builder.append(")");
         break;
-    case TokenType::OpenCurly:
+    case Type::OpenCurly:
         builder.append("{");
         break;
-    case TokenType::CloseCurly:
+    case Type::CloseCurly:
         builder.append("}");
         break;
     }
@@ -111,9 +173,9 @@ String Token::to_string() const
     builder.append(" ");
 
     builder.append(" { value: '");
-    builder.append(m_value.to_string());
+    builder.append(m_value);
 
-    if (m_type == Token::TokenType::Hash) {
+    if (m_type == Token::Type::Hash) {
         builder.append("', hash_type: '");
         if (m_hash_type == Token::HashType::Unrestricted) {
             builder.append("Unrestricted");
@@ -122,7 +184,7 @@ String Token::to_string() const
         }
     }
 
-    if (m_type == Token::TokenType::Number) {
+    if (m_type == Token::Type::Number) {
         builder.append("', number_type: '");
         if (m_number_type == Token::NumberType::Integer) {
             builder.append("Integer");
@@ -131,7 +193,7 @@ String Token::to_string() const
         }
     }
 
-    if (m_type == Token::TokenType::Dimension) {
+    if (m_type == Token::Type::Dimension) {
         builder.append("', number_type: '");
         if (m_number_type == Token::NumberType::Integer) {
             builder.append("Integer");
@@ -140,53 +202,53 @@ String Token::to_string() const
         }
 
         builder.append("', unit: '");
-        builder.append(m_unit.to_string());
+        builder.append(m_unit);
     }
 
     builder.append("' }");
     return builder.to_string();
 }
 
-Token::TokenType Token::mirror_variant() const
+Token::Type Token::mirror_variant() const
 {
-    if (is_open_curly()) {
-        return TokenType::CloseCurly;
+    if (is(Token::Type::OpenCurly)) {
+        return Type::CloseCurly;
     }
 
-    if (is_open_square()) {
-        return TokenType::CloseSquare;
+    if (is(Token::Type::OpenSquare)) {
+        return Type::CloseSquare;
     }
 
-    if (is_open_paren()) {
-        return TokenType::CloseParen;
+    if (is(Token::Type::OpenParen)) {
+        return Type::CloseParen;
     }
 
-    return TokenType::Invalid;
+    return Type::Invalid;
 }
 
 String Token::bracket_string() const
 {
-    if (is_open_curly()) {
+    if (is(Token::Type::OpenCurly)) {
         return "{";
     }
 
-    if (is_close_curly()) {
+    if (is(Token::Type::CloseCurly)) {
         return "}";
     }
 
-    if (is_open_square()) {
+    if (is(Token::Type::OpenSquare)) {
         return "[";
     }
 
-    if (is_close_square()) {
+    if (is(Token::Type::CloseSquare)) {
         return "]";
     }
 
-    if (is_open_paren()) {
+    if (is(Token::Type::OpenParen)) {
         return "(";
     }
 
-    if (is_close_paren()) {
+    if (is(Token::Type::CloseParen)) {
         return ")";
     }
 
@@ -195,27 +257,27 @@ String Token::bracket_string() const
 
 String Token::bracket_mirror_string() const
 {
-    if (is_open_curly()) {
+    if (is(Token::Type::OpenCurly)) {
         return "}";
     }
 
-    if (is_close_curly()) {
+    if (is(Token::Type::CloseCurly)) {
         return "{";
     }
 
-    if (is_open_square()) {
+    if (is(Token::Type::OpenSquare)) {
         return "]";
     }
 
-    if (is_close_square()) {
+    if (is(Token::Type::CloseSquare)) {
         return "[";
     }
 
-    if (is_open_paren()) {
+    if (is(Token::Type::OpenParen)) {
         return ")";
     }
 
-    if (is_close_paren()) {
+    if (is(Token::Type::CloseParen)) {
         return "(";
     }
 

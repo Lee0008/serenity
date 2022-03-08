@@ -24,12 +24,14 @@ CreateNewLayerDialog::CreateNewLayerDialog(Gfx::IntSize const& suggested_size, G
     main_widget.set_fill_with_background_color(true);
 
     auto& layout = main_widget.set_layout<GUI::VerticalBoxLayout>();
-    layout.set_margins({ 4, 4, 4, 4 });
+    layout.set_margins(4);
 
     auto& name_label = main_widget.add<GUI::Label>("Name:");
     name_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
     m_name_textbox = main_widget.add<GUI::TextBox>();
+    m_name_textbox->set_text("Layer");
+    m_name_textbox->select_all();
     m_name_textbox->on_change = [this] {
         m_layer_name = m_name_textbox->text();
     };
@@ -65,8 +67,12 @@ CreateNewLayerDialog::CreateNewLayerDialog(Gfx::IntSize const& suggested_size, G
         m_layer_size.set_height(value);
     };
 
-    width_spinbox.set_range(0, 16384);
-    height_spinbox.set_range(0, 16384);
+    m_name_textbox->on_return_pressed = [this] {
+        done(ExecOK);
+    };
+
+    width_spinbox.set_range(1, 16384);
+    height_spinbox.set_range(1, 16384);
 
     width_spinbox.set_value(suggested_size.width());
     height_spinbox.set_value(suggested_size.height());

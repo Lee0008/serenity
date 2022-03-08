@@ -24,7 +24,6 @@ public:
     int row_count(const GUI::ModelIndex&) const override { return m_playlist_items.size(); }
     int column_count(const GUI::ModelIndex&) const override { return 6; }
     GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
-    void update() override;
     String column_name(int column) const override;
     Vector<M3UEntry>& items() { return m_playlist_items; }
 
@@ -41,19 +40,22 @@ public:
     void doubleclick_event(GUI::MouseEvent& event) override;
 
     Function<void(const Gfx::Point<int>&)> on_doubleclick;
+
+private:
+    PlaylistTableView();
 };
 
 class PlaylistWidget : public GUI::Widget {
     C_OBJECT(PlaylistWidget)
 public:
-    PlaylistWidget();
     void set_data_model(RefPtr<PlaylistModel> model)
     {
         m_table_view->set_model(model);
         m_table_view->update();
     }
 
-protected:
 private:
+    PlaylistWidget();
+
     RefPtr<PlaylistTableView> m_table_view;
 };

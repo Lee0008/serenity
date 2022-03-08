@@ -7,64 +7,78 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <AK/Span.h>
 #include <LibJS/Forward.h>
 
-#define ENUMERATE_BYTECODE_OPS(O) \
-    O(Load)                       \
-    O(LoadImmediate)              \
-    O(Store)                      \
-    O(Add)                        \
-    O(Sub)                        \
-    O(Mul)                        \
-    O(Div)                        \
-    O(Mod)                        \
-    O(Exp)                        \
-    O(GreaterThan)                \
-    O(GreaterThanEquals)          \
-    O(LessThan)                   \
-    O(LessThanEquals)             \
-    O(AbstractInequals)           \
-    O(AbstractEquals)             \
-    O(TypedInequals)              \
-    O(TypedEquals)                \
-    O(NewBigInt)                  \
-    O(NewArray)                   \
-    O(NewString)                  \
-    O(NewObject)                  \
-    O(GetVariable)                \
-    O(SetVariable)                \
-    O(PutById)                    \
-    O(GetById)                    \
-    O(PutByValue)                 \
-    O(GetByValue)                 \
-    O(Jump)                       \
-    O(JumpConditional)            \
-    O(JumpNullish)                \
-    O(Call)                       \
-    O(NewFunction)                \
-    O(Return)                     \
-    O(BitwiseAnd)                 \
-    O(BitwiseOr)                  \
-    O(BitwiseXor)                 \
-    O(BitwiseNot)                 \
-    O(Not)                        \
-    O(UnaryPlus)                  \
-    O(UnaryMinus)                 \
-    O(Typeof)                     \
-    O(LeftShift)                  \
-    O(RightShift)                 \
-    O(UnsignedRightShift)         \
-    O(In)                         \
-    O(InstanceOf)                 \
-    O(ConcatString)               \
-    O(Increment)                  \
-    O(Decrement)                  \
-    O(Throw)                      \
-    O(PushLexicalEnvironment)     \
-    O(LoadArgument)               \
-    O(EnterUnwindContext)         \
-    O(LeaveUnwindContext)         \
-    O(ContinuePendingUnwind)      \
+#define ENUMERATE_BYTECODE_OPS(O)    \
+    O(Add)                           \
+    O(BitwiseAnd)                    \
+    O(BitwiseNot)                    \
+    O(BitwiseOr)                     \
+    O(BitwiseXor)                    \
+    O(Call)                          \
+    O(ConcatString)                  \
+    O(ContinuePendingUnwind)         \
+    O(CopyObjectExcludingProperties) \
+    O(CreateEnvironment)             \
+    O(CreateVariable)                \
+    O(Decrement)                     \
+    O(Div)                           \
+    O(EnterUnwindContext)            \
+    O(Exp)                           \
+    O(FinishUnwind)                  \
+    O(GetById)                       \
+    O(GetByValue)                    \
+    O(GetIterator)                   \
+    O(GetVariable)                   \
+    O(GreaterThan)                   \
+    O(GreaterThanEquals)             \
+    O(In)                            \
+    O(Increment)                     \
+    O(InstanceOf)                    \
+    O(IteratorNext)                  \
+    O(IteratorResultDone)            \
+    O(IteratorResultValue)           \
+    O(IteratorToArray)               \
+    O(Jump)                          \
+    O(JumpConditional)               \
+    O(JumpNullish)                   \
+    O(JumpUndefined)                 \
+    O(LeaveEnvironment)              \
+    O(LeaveUnwindContext)            \
+    O(LeftShift)                     \
+    O(LessThan)                      \
+    O(LessThanEquals)                \
+    O(Load)                          \
+    O(LoadImmediate)                 \
+    O(LooselyEquals)                 \
+    O(LooselyInequals)               \
+    O(Mod)                           \
+    O(Mul)                           \
+    O(NewArray)                      \
+    O(NewBigInt)                     \
+    O(NewClass)                      \
+    O(NewFunction)                   \
+    O(NewObject)                     \
+    O(NewRegExp)                     \
+    O(NewString)                     \
+    O(Not)                           \
+    O(PushDeclarativeEnvironment)    \
+    O(PutById)                       \
+    O(PutByValue)                    \
+    O(ResolveThisBinding)            \
+    O(Return)                        \
+    O(RightShift)                    \
+    O(SetVariable)                   \
+    O(Store)                         \
+    O(StrictlyEquals)                \
+    O(StrictlyInequals)              \
+    O(Sub)                           \
+    O(Throw)                         \
+    O(Typeof)                        \
+    O(UnaryMinus)                    \
+    O(UnaryPlus)                     \
+    O(UnsignedRightShift)            \
     O(Yield)
 
 namespace JS::Bytecode {
@@ -80,10 +94,12 @@ public:
 #undef __BYTECODE_OP
     };
 
+    bool is_terminator() const;
     Type type() const { return m_type; }
     size_t length() const;
     String to_string(Bytecode::Executable const&) const;
-    void execute(Bytecode::Interpreter&) const;
+    ThrowCompletionOr<void> execute(Bytecode::Interpreter&) const;
+    void replace_references(BasicBlock const&, BasicBlock const&);
     static void destroy(Instruction&);
 
 protected:
@@ -94,6 +110,36 @@ protected:
 
 private:
     Type m_type {};
+};
+
+class InstructionStreamIterator {
+public:
+    explicit InstructionStreamIterator(ReadonlyBytes bytes)
+        : m_bytes(bytes)
+    {
+    }
+
+    size_t offset() const { return m_offset; }
+    bool at_end() const { return m_offset >= m_bytes.size(); }
+    void jump(size_t offset)
+    {
+        VERIFY(offset <= m_bytes.size());
+        m_offset = offset;
+    }
+
+    Instruction const& operator*() const { return dereference(); }
+
+    ALWAYS_INLINE void operator++()
+    {
+        VERIFY(!at_end());
+        m_offset += dereference().length();
+    }
+
+private:
+    Instruction const& dereference() const { return *reinterpret_cast<Instruction const*>(m_bytes.data() + offset()); }
+
+    ReadonlyBytes m_bytes;
+    size_t m_offset { 0 };
 };
 
 }

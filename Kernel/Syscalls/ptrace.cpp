@@ -6,24 +6,25 @@
  */
 
 #include <AK/ScopeGuard.h>
+#include <Kernel/Memory/PrivateInodeVMObject.h>
+#include <Kernel/Memory/Region.h>
+#include <Kernel/Memory/ScopedAddressSpaceSwitcher.h>
+#include <Kernel/Memory/SharedInodeVMObject.h>
 #include <Kernel/Process.h>
-#include <Kernel/VM/MemoryManager.h>
-#include <Kernel/VM/PrivateInodeVMObject.h>
-#include <Kernel/VM/ProcessPagingScope.h>
-#include <Kernel/VM/Region.h>
-#include <Kernel/VM/SharedInodeVMObject.h>
+#include <Kernel/Scheduler.h>
+#include <Kernel/ThreadTracer.h>
 
 namespace Kernel {
 
-static KResultOr<u32> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& params, Process& caller)
+static ErrorOr<FlatPtr> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& params, Process& caller)
 {
-    ScopedSpinLock scheduler_lock(g_scheduler_lock);
+    SpinlockLocker scheduler_lock(g_scheduler_lock);
     if (params.request == PT_TRACE_ME) {
-        if (Process::current()->tracer())
+        if (Process::current().tracer())
             return EBUSY;
 
         caller.set_wait_for_tracer_at_next_execve(true);
-        return KSuccess;
+        return 0;
     }
 
     // FIXME: PID/TID BUG
@@ -37,7 +38,7 @@ static KResultOr<u32> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& par
     if (!peer)
         return ESRCH;
 
-    Locker ptrace_locker(peer->process().ptrace_lock());
+    MutexLocker ptrace_locker(peer->process().ptrace_lock());
 
     if ((peer->process().uid() != caller.euid())
         || (peer->process().uid() != peer->process().euid())) // Disallow tracing setuid processes
@@ -51,14 +52,12 @@ static KResultOr<u32> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& par
         if (peer_process.tracer()) {
             return EBUSY;
         }
-        auto result = peer_process.start_tracing_from(caller.pid());
-        if (result.is_error())
-            return result.error();
-        ScopedSpinLock lock(peer->get_lock());
+        TRY(peer_process.start_tracing_from(caller.pid()));
+        SpinlockLocker lock(peer->get_lock());
         if (peer->state() != Thread::State::Stopped) {
             peer->send_signal(SIGSTOP, &caller);
         }
-        return KSuccess;
+        return 0;
     }
 
     auto* tracer = peer_process.tracer();
@@ -93,8 +92,7 @@ static KResultOr<u32> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& par
         if (!tracer->has_regs())
             return EINVAL;
         auto* regs = reinterpret_cast<PtraceRegisters*>(params.addr);
-        if (!copy_to_user(regs, &tracer->regs()))
-            return EFAULT;
+        TRY(copy_to_user(regs, &tracer->regs()));
         break;
     }
 
@@ -103,8 +101,7 @@ static KResultOr<u32> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& par
             return EINVAL;
 
         PtraceRegisters regs {};
-        if (!copy_from_user(&regs, (const PtraceRegisters*)params.addr))
-            return EFAULT;
+        TRY(copy_from_user(&regs, (const PtraceRegisters*)params.addr));
 
         auto& peer_saved_registers = peer->get_register_dump_from_stack();
         // Verify that the saved registers are in usermode context
@@ -117,52 +114,55 @@ static KResultOr<u32> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& par
     }
 
     case PT_PEEK: {
-        Kernel::Syscall::SC_ptrace_peek_params peek_params {};
-        if (!copy_from_user(&peek_params, reinterpret_cast<Kernel::Syscall::SC_ptrace_peek_params*>(params.addr)))
-            return EFAULT;
-        if (!is_user_address(VirtualAddress { peek_params.address }))
-            return EFAULT;
-        auto result = peer->process().peek_user_data(Userspace<const u32*> { (FlatPtr)peek_params.address });
-        if (result.is_error())
-            return result.error();
-        if (!copy_to_user(peek_params.out_data, &result.value()))
-            return EFAULT;
+        auto data = TRY(peer->process().peek_user_data(Userspace<const FlatPtr*> { (FlatPtr)params.addr }));
+        TRY(copy_to_user((FlatPtr*)params.data, &data));
         break;
     }
 
     case PT_POKE:
-        if (!is_user_address(VirtualAddress { params.addr }))
-            return EFAULT;
-        return peer->process().poke_user_data(Userspace<u32*> { (FlatPtr)params.addr }, params.data);
+        TRY(peer->process().poke_user_data(Userspace<FlatPtr*> { (FlatPtr)params.addr }, params.data));
+        return 0;
+
+    case PT_PEEKBUF: {
+        Kernel::Syscall::SC_ptrace_buf_params buf_params {};
+        TRY(copy_from_user(&buf_params, reinterpret_cast<Kernel::Syscall::SC_ptrace_buf_params*>(params.data)));
+        // This is a comparatively large allocation on the Kernel stack.
+        // However, we know that we're close to the root of the call stack, and the following calls shouldn't go too deep.
+        Array<u8, PAGE_SIZE> buf;
+        FlatPtr tracee_ptr = (FlatPtr)params.addr;
+        while (buf_params.buf.size > 0) {
+            size_t copy_this_iteration = min(buf.size(), buf_params.buf.size);
+            TRY(peer->process().peek_user_data(buf.span().slice(0, copy_this_iteration), Userspace<const u8*> { tracee_ptr }));
+            TRY(copy_to_user((void*)buf_params.buf.data, buf.data(), copy_this_iteration));
+            tracee_ptr += copy_this_iteration;
+            buf_params.buf.data += copy_this_iteration;
+            buf_params.buf.size -= copy_this_iteration;
+        }
+        break;
+    }
 
     case PT_PEEKDEBUG: {
-        Kernel::Syscall::SC_ptrace_peek_params peek_params {};
-        if (!copy_from_user(&peek_params, reinterpret_cast<Kernel::Syscall::SC_ptrace_peek_params*>(params.addr)))
-            return EFAULT;
-        auto result = peer->peek_debug_register(reinterpret_cast<uintptr_t>(peek_params.address));
-        if (result.is_error())
-            return result.error();
-        if (!copy_to_user(peek_params.out_data, &result.value()))
-            return EFAULT;
+        auto data = TRY(peer->peek_debug_register(reinterpret_cast<uintptr_t>(params.addr)));
+        TRY(copy_to_user((FlatPtr*)params.data, &data));
         break;
     }
     case PT_POKEDEBUG:
-        return peer->poke_debug_register(reinterpret_cast<uintptr_t>(params.addr), params.data);
+        TRY(peer->poke_debug_register(reinterpret_cast<uintptr_t>(params.addr), params.data));
+        return 0;
     default:
         return EINVAL;
     }
 
-    return KSuccess;
+    return 0;
 }
 
-KResultOr<int> Process::sys$ptrace(Userspace<const Syscall::SC_ptrace_params*> user_params)
+ErrorOr<FlatPtr> Process::sys$ptrace(Userspace<const Syscall::SC_ptrace_params*> user_params)
 {
-    REQUIRE_PROMISE(ptrace);
-    Syscall::SC_ptrace_params params {};
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
-    auto result = handle_ptrace(params, *this);
-    return result.is_error() ? result.error().error() : result.value();
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::ptrace));
+    auto params = TRY(copy_typed_from_user(user_params));
+
+    return handle_ptrace(params, *this);
 }
 
 /**
@@ -170,41 +170,41 @@ KResultOr<int> Process::sys$ptrace(Userspace<const Syscall::SC_ptrace_params*> u
  */
 bool Process::has_tracee_thread(ProcessID tracer_pid)
 {
-    if (auto tracer = this->tracer())
+    if (auto const* tracer = this->tracer())
         return tracer->tracer_pid() == tracer_pid;
     return false;
 }
 
-KResultOr<u32> Process::peek_user_data(Userspace<const u32*> address)
+ErrorOr<FlatPtr> Process::peek_user_data(Userspace<const FlatPtr*> address)
 {
-    uint32_t result;
-
     // This function can be called from the context of another
     // process that called PT_PEEK
-    ProcessPagingScope scope(*this);
-    if (!copy_from_user(&result, address)) {
-        dbgln("Invalid address for peek_user_data: {}", address.ptr());
-        return EFAULT;
-    }
-
-    return result;
+    ScopedAddressSpaceSwitcher switcher(*this);
+    return TRY(copy_typed_from_user(address));
 }
 
-KResult Process::poke_user_data(Userspace<u32*> address, u32 data)
+ErrorOr<void> Process::peek_user_data(Span<u8> destination, Userspace<const u8*> address)
 {
-    Range range = { VirtualAddress(address), sizeof(u32) };
-    auto* region = space().find_region_containing(range);
+    // This function can be called from the context of another
+    // process that called PT_PEEKBUF
+    ScopedAddressSpaceSwitcher switcher(*this);
+    TRY(copy_from_user(destination.data(), address, destination.size()));
+    return {};
+}
+
+ErrorOr<void> Process::poke_user_data(Userspace<FlatPtr*> address, FlatPtr data)
+{
+    Memory::VirtualRange range = { address.vaddr(), sizeof(FlatPtr) };
+    auto* region = address_space().find_region_containing(range);
     if (!region)
         return EFAULT;
-    ProcessPagingScope scope(*this);
+    ScopedAddressSpaceSwitcher switcher(*this);
     if (region->is_shared()) {
         // If the region is shared, we change its vmobject to a PrivateInodeVMObject
         // to prevent the write operation from changing any shared inode data
         VERIFY(region->vmobject().is_shared_inode());
-        auto vmobject = PrivateInodeVMObject::create_with_inode(static_cast<SharedInodeVMObject&>(region->vmobject()).inode());
-        if (!vmobject)
-            return ENOMEM;
-        region->set_vmobject(vmobject.release_nonnull());
+        auto vmobject = TRY(Memory::PrivateInodeVMObject::try_create_with_inode(static_cast<Memory::SharedInodeVMObject&>(region->vmobject()).inode()));
+        region->set_vmobject(move(vmobject));
         region->set_shared(false);
     }
     const bool was_writable = region->is_writable();
@@ -219,17 +219,12 @@ KResult Process::poke_user_data(Userspace<u32*> address, u32 data)
         }
     });
 
-    if (!copy_to_user(address, &data)) {
-        dbgln("poke_user_data: Bad address {:p}", address.ptr());
-        return EFAULT;
-    }
-
-    return KSuccess;
+    return copy_to_user(address, &data);
 }
 
-KResultOr<u32> Thread::peek_debug_register(u32 register_index)
+ErrorOr<FlatPtr> Thread::peek_debug_register(u32 register_index)
 {
-    u32 data;
+    FlatPtr data;
     switch (register_index) {
     case 0:
         data = m_debug_register_state.dr0;
@@ -255,7 +250,7 @@ KResultOr<u32> Thread::peek_debug_register(u32 register_index)
     return data;
 }
 
-KResult Thread::poke_debug_register(u32 register_index, u32 data)
+ErrorOr<void> Thread::poke_debug_register(u32 register_index, FlatPtr data)
 {
     switch (register_index) {
     case 0:
@@ -276,7 +271,7 @@ KResult Thread::poke_debug_register(u32 register_index, u32 data)
     default:
         return EINVAL;
     }
-    return KSuccess;
+    return {};
 }
 
 }

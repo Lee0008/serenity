@@ -4,54 +4,30 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
 #include <LibCore/DateTime.h>
 #include <LibCore/File.h>
 #include <LibCore/ProcessStatisticsReader.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <pwd.h>
-#include <stdio.h>
 #include <sys/stat.h>
 #include <time.h>
 
-int main()
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath"));
+    TRY(Core::System::unveil("/dev", "r"));
+    TRY(Core::System::unveil("/etc/passwd", "r"));
+    TRY(Core::System::unveil("/etc/timezone", "r"));
+    TRY(Core::System::unveil("/var/run/utmp", "r"));
+    TRY(Core::System::unveil("/proc", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    if (unveil("/dev", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/etc/passwd", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/var/run/utmp", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/proc", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    unveil(nullptr, nullptr);
-
-    auto file_or_error = Core::File::open("/var/run/utmp", Core::OpenMode::ReadOnly);
-    if (file_or_error.is_error()) {
-        warnln("Error: {}", file_or_error.error());
-        return 1;
-    }
-    auto& file = *file_or_error.value();
-    auto json = JsonValue::from_string(file.read_all());
-    if (!json.has_value() || !json.value().is_object()) {
+    auto file = TRY(Core::File::open("/var/run/utmp", Core::OpenMode::ReadOnly));
+    auto json = TRY(JsonValue::from_string(file->read_all()));
+    if (!json.is_object()) {
         warnln("Error: Could not parse /var/run/utmp");
         return 1;
     }
@@ -65,7 +41,7 @@ int main()
     auto now = time(nullptr);
 
     outln("\033[1m{:10} {:12} {:16} {:6} {}\033[0m", "USER", "TTY", "LOGIN@", "IDLE", "WHAT");
-    json.value().as_object().for_each_member([&](auto& tty, auto& value) {
+    json.as_object().for_each_member([&](auto& tty, auto& value) {
         const JsonObject& entry = value.as_object();
         auto uid = entry.get("uid").to_u32();
         [[maybe_unused]] auto pid = entry.get("pid").to_i32();
@@ -93,7 +69,7 @@ int main()
 
         String what = "n/a";
 
-        for (auto& process : process_statistics.value()) {
+        for (auto& process : process_statistics.value().processes) {
             if (process.tty == tty && process.pid == process.pgid)
                 what = process.name;
         }

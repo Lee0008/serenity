@@ -1,27 +1,77 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "ThreadStackWidget.h"
-#include <AK/ByteBuffer.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/Model.h>
 #include <LibSymbolication/Symbolication.h>
 #include <LibThreading/BackgroundAction.h>
+
+class ThreadStackModel final : public GUI::Model {
+
+    enum Column {
+        Address,
+        Object,
+        Symbol
+    };
+
+public:
+    int column_count(GUI::ModelIndex const&) const override { return 3; };
+    int row_count(GUI::ModelIndex const&) const override { return m_symbols.size(); };
+    bool is_column_sortable(int) const override { return false; }
+
+    String column_name(int column) const override
+    {
+        switch (column) {
+        case Column::Address:
+            return "Address";
+        case Column::Object:
+            return "Object";
+        case Column::Symbol:
+            return "Symbol";
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    }
+
+    GUI::Variant data(GUI::ModelIndex const& model_index, GUI::ModelRole) const override
+    {
+        auto& symbol = m_symbols[model_index.row()];
+        switch (model_index.column()) {
+        case Column::Address:
+            return String::formatted("{:p}", symbol.address);
+        case Column::Object:
+            return symbol.object;
+        case Column::Symbol:
+            return symbol.name;
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    };
+
+    void set_symbols(Vector<Symbolication::Symbol> const& symbols)
+    {
+        if (m_symbols == symbols)
+            return;
+        m_symbols = symbols;
+        invalidate();
+    }
+
+private:
+    Vector<Symbolication::Symbol> m_symbols;
+};
 
 ThreadStackWidget::ThreadStackWidget()
 {
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 4, 4, 4, 4 });
-    m_stack_editor = add<GUI::TextEditor>();
-    m_stack_editor->set_mode(GUI::TextEditor::ReadOnly);
-    m_stack_editor->set_text("Symbolicating...");
-}
-
-ThreadStackWidget::~ThreadStackWidget()
-{
+    layout()->set_margins(4);
+    m_stack_table = add<GUI::TableView>();
+    m_stack_table->set_model(adopt_ref(*new ThreadStackModel()));
 }
 
 void ThreadStackWidget::show_event(GUI::ShowEvent&)
@@ -60,32 +110,20 @@ private:
 
 void ThreadStackWidget::refresh()
 {
-    Threading::BackgroundAction<Vector<Symbolication::Symbol>>::create(
-        [pid = m_pid, tid = m_tid] {
-            return Symbolication::symbolicate_thread(pid, tid);
+    (void)Threading::BackgroundAction<Vector<Symbolication::Symbol>>::construct(
+        [pid = m_pid, tid = m_tid](auto&) {
+            return Symbolication::symbolicate_thread(pid, tid, Symbolication::IncludeSourcePosition::No);
         },
 
         [weak_this = make_weak_ptr()](auto result) {
             if (!weak_this)
                 return;
-            Core::EventLoop::main().post_event(const_cast<Core::Object&>(*weak_this), make<CompletionEvent>(move(result)));
+            Core::EventLoop::with_main_locked([&](auto* main_event_loop) { main_event_loop->post_event(const_cast<Core::Object&>(*weak_this), make<CompletionEvent>(move(result))); });
         });
 }
 
 void ThreadStackWidget::custom_event(Core::CustomEvent& event)
 {
-    auto& completion_event = downcast<CompletionEvent>(event);
-
-    StringBuilder builder;
-
-    for (auto& symbol : completion_event.symbols()) {
-        builder.appendff("{:p}", symbol.address);
-        if (!symbol.name.is_empty())
-            builder.appendff("  {}", symbol.name);
-        builder.append('\n');
-    }
-
-    if (m_stack_editor->text() != builder.string_view()) {
-        m_stack_editor->set_text(builder.string_view());
-    }
+    auto& completion_event = verify_cast<CompletionEvent>(event);
+    verify_cast<ThreadStackModel>(m_stack_table->model())->set_symbols(completion_event.symbols());
 }

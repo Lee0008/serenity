@@ -1,5 +1,6 @@
 @GUI::Widget {
     layout: @GUI::VerticalBoxLayout {
+        spacing: 2
     }
 
     @GUI::ToolbarContainer {
@@ -12,8 +13,7 @@
 
     @GUI::Widget {
         name: "webview_container"
-        layout: @GUI::VerticalBoxLayout {
-        }
+        layout: @GUI::VerticalBoxLayout {}
     }
 
     @GUI::Statusbar {

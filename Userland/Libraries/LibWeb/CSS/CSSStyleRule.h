@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <AK/NonnullRefPtr.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <LibWeb/CSS/CSSRule.h>
 #include <LibWeb/CSS/CSSStyleDeclaration.h>
@@ -14,28 +15,37 @@
 
 namespace Web::CSS {
 
-class CSSStyleRule : public CSSRule {
+class CSSStyleRule final : public CSSRule {
     AK_MAKE_NONCOPYABLE(CSSStyleRule);
     AK_MAKE_NONMOVABLE(CSSStyleRule);
 
 public:
-    static NonnullRefPtr<CSSStyleRule> create(Vector<Selector>&& selectors, NonnullRefPtr<CSSStyleDeclaration>&& declaration)
+    using WrapperType = Bindings::CSSStyleRuleWrapper;
+
+    static NonnullRefPtr<CSSStyleRule> create(NonnullRefPtrVector<Selector>&& selectors, NonnullRefPtr<CSSStyleDeclaration>&& declaration)
     {
         return adopt_ref(*new CSSStyleRule(move(selectors), move(declaration)));
     }
 
-    ~CSSStyleRule();
+    virtual ~CSSStyleRule() override;
 
-    const Vector<Selector>& selectors() const { return m_selectors; }
+    const NonnullRefPtrVector<Selector>& selectors() const { return m_selectors; }
     const CSSStyleDeclaration& declaration() const { return m_declaration; }
 
-    virtual StringView class_name() const { return "CSSStyleRule"; };
-    virtual Type type() const { return Type::Style; };
+    virtual StringView class_name() const override { return "CSSStyleRule"; };
+    virtual Type type() const override { return Type::Style; };
+
+    String selector_text() const;
+    void set_selector_text(StringView);
+
+    CSSStyleDeclaration* style();
 
 private:
-    CSSStyleRule(Vector<Selector>&&, NonnullRefPtr<CSSStyleDeclaration>&&);
+    CSSStyleRule(NonnullRefPtrVector<Selector>&&, NonnullRefPtr<CSSStyleDeclaration>&&);
 
-    Vector<Selector> m_selectors;
+    virtual String serialized() const override;
+
+    NonnullRefPtrVector<Selector> m_selectors;
     NonnullRefPtr<CSSStyleDeclaration> m_declaration;
 };
 

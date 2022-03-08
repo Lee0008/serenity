@@ -4,31 +4,27 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Optional.h>
 #include <AK/String.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <grp.h>
-#include <pwd.h>
-#include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath chown", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath chown", nullptr));
 
     const char* gid_arg = nullptr;
     const char* path = nullptr;
+    bool dont_follow_symlinks = false;
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help("Change the owning group for a file or directory.");
+    args_parser.add_option(dont_follow_symlinks, "Don't follow symlinks", "no-dereference", 'h');
     args_parser.add_positional_argument(gid_arg, "Group ID", "gid");
     args_parser.add_positional_argument(path, "Path to file", "path");
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     gid_t new_gid = -1;
 
@@ -49,10 +45,10 @@ int main(int argc, char** argv)
         new_gid = group->gr_gid;
     }
 
-    int rc = chown(path, -1, new_gid);
-    if (rc < 0) {
-        perror("chgrp");
-        return 1;
+    if (dont_follow_symlinks) {
+        TRY(Core::System::lchown(path, -1, new_gid));
+    } else {
+        TRY(Core::System::chown(path, -1, new_gid));
     }
 
     return 0;

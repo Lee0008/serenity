@@ -7,7 +7,9 @@
 #pragma once
 
 #include <AK/Array.h>
+#include <AK/Format.h>
 #include <AK/Random.h>
+#include <AK/Vector.h>
 #include <LibCrypto/PK/Code/Code.h>
 
 namespace Crypto {
@@ -147,11 +149,14 @@ public:
     void MGF1(ReadonlyBytes seed, size_t length, Bytes out)
     {
         auto& hash_fn = this->hasher();
-        ByteBuffer T = ByteBuffer::create_zeroed(0);
+        ByteBuffer T;
         for (size_t counter = 0; counter < length / HashFunction::DigestSize - 1; ++counter) {
             hash_fn.update(seed);
             hash_fn.update((u8*)&counter, 4);
-            T.append(hash_fn.digest().data, HashFunction::DigestSize);
+            if (auto result = T.try_append(hash_fn.digest().data, HashFunction::DigestSize); result.is_error()) {
+                dbgln("EMSA_PSS: MGF1 digest failed: {}", result.error());
+                return;
+            }
         }
         out.overwrite(0, T.data(), length);
     }

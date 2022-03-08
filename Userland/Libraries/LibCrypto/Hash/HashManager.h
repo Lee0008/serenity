@@ -59,42 +59,49 @@ struct MultiHashDigestVariant {
     {
     }
 
-    const u8* immutable_data() const
+    [[nodiscard]] const u8* immutable_data() const
     {
         return m_digest.visit(
             [&](const Empty&) -> const u8* { VERIFY_NOT_REACHED(); },
             [&](const auto& value) { return value.immutable_data(); });
     }
 
-    size_t data_length()
+    [[nodiscard]] size_t data_length() const
     {
         return m_digest.visit(
             [&](const Empty&) -> size_t { VERIFY_NOT_REACHED(); },
             [&](const auto& value) { return value.data_length(); });
     }
 
+    [[nodiscard]] ReadonlyBytes bytes() const
+    {
+        return m_digest.visit(
+            [&](const Empty&) -> ReadonlyBytes { VERIFY_NOT_REACHED(); },
+            [&](const auto& value) { return value.bytes(); });
+    }
+
     using DigestVariant = Variant<Empty, MD5::DigestType, SHA1::DigestType, SHA256::DigestType, SHA384::DigestType, SHA512::DigestType>;
-    DigestVariant m_digest { Empty {} };
+    DigestVariant m_digest {};
 };
 
-class Manager final : public HashFunction<0, MultiHashDigestVariant> {
+class Manager final : public HashFunction<0, 0, MultiHashDigestVariant> {
 public:
     using HashFunction::update;
 
     Manager()
     {
-        m_pre_init_buffer = ByteBuffer::create_zeroed(0);
+        m_pre_init_buffer = ByteBuffer();
     }
 
     Manager(const Manager& other) // NOT a copy constructor!
     {
-        m_pre_init_buffer = ByteBuffer::create_zeroed(0); // will not be used
+        m_pre_init_buffer = ByteBuffer(); // will not be used
         initialize(other.m_kind);
     }
 
     Manager(HashKind kind)
     {
-        m_pre_init_buffer = ByteBuffer::create_zeroed(0);
+        m_pre_init_buffer = ByteBuffer();
         initialize(kind);
     }
 
@@ -184,11 +191,18 @@ public:
             [&](auto& hash) { hash.reset(); });
     }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         return m_algorithm.visit(
             [&](const Empty&) -> String { return "UninitializedHashManager"; },
             [&](const auto& hash) { return hash.class_name(); });
+    }
+#endif
+
+    inline HashKind kind() const
+    {
+        return m_kind;
     }
 
     inline bool is(HashKind kind) const
@@ -198,7 +212,7 @@ public:
 
 private:
     using AlgorithmVariant = Variant<Empty, MD5, SHA1, SHA256, SHA384, SHA512>;
-    AlgorithmVariant m_algorithm { Empty {} };
+    AlgorithmVariant m_algorithm {};
     HashKind m_kind { HashKind::None };
     ByteBuffer m_pre_init_buffer;
 };

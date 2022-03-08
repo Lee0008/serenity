@@ -5,16 +5,16 @@
  */
 
 #include <LibGUI/Notification.h>
-#include <LibIPC/ServerConnection.h>
+#include <LibIPC/ConnectionToServer.h>
 #include <NotificationServer/NotificationClientEndpoint.h>
 #include <NotificationServer/NotificationServerEndpoint.h>
 
 namespace GUI {
 
-class NotificationServerConnection final
-    : public IPC::ServerConnection<NotificationClientEndpoint, NotificationServerEndpoint>
+class ConnectionToNotificationServer final
+    : public IPC::ConnectionToServer<NotificationClientEndpoint, NotificationServerEndpoint>
     , public NotificationClientEndpoint {
-    C_OBJECT(NotificationServerConnection)
+    IPC_CLIENT_CONNECTION(ConnectionToNotificationServer, "/tmp/portal/notify")
 
     friend class Notification;
 
@@ -25,12 +25,11 @@ public:
     }
 
 private:
-    explicit NotificationServerConnection(Notification* notification)
-        : IPC::ServerConnection<NotificationClientEndpoint, NotificationServerEndpoint>(*this, "/tmp/portal/notify")
+    explicit ConnectionToNotificationServer(NonnullOwnPtr<Core::Stream::LocalSocket> socket, Notification* notification)
+        : IPC::ConnectionToServer<NotificationClientEndpoint, NotificationServerEndpoint>(*this, move(socket))
         , m_notification(notification)
     {
     }
-    virtual void dummy() override { }
     Notification* m_notification;
 };
 
@@ -46,7 +45,7 @@ void Notification::show()
 {
     VERIFY(!m_shown && !m_destroyed);
     auto icon = m_icon ? m_icon->to_shareable_bitmap() : Gfx::ShareableBitmap();
-    m_connection = NotificationServerConnection::construct(this);
+    m_connection = ConnectionToNotificationServer::try_create(this).release_value_but_fixme_should_propagate_errors();
     m_connection->show_notification(m_text, m_title, icon);
     m_shown = true;
 }

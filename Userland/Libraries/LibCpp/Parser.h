@@ -18,13 +18,12 @@ class Parser final {
     AK_MAKE_NONCOPYABLE(Parser);
 
 public:
-    explicit Parser(const StringView& program, const String& filename, Preprocessor::Definitions&& = {});
+    explicit Parser(Vector<Token> tokens, String const& filename);
     ~Parser() = default;
 
     NonnullRefPtr<TranslationUnit> parse();
     bool eof() const;
 
-    RefPtr<ASTNode> eof_node() const;
     RefPtr<ASTNode> node_at(Position) const;
     Optional<size_t> index_of_node_at(Position) const;
     Optional<Token> token_at(Position) const;
@@ -33,14 +32,18 @@ public:
     String text_of_node(const ASTNode&) const;
     StringView text_of_token(const Cpp::Token& token) const;
     void print_tokens() const;
-    const Vector<String>& errors() const { return m_state.errors; }
-    const Preprocessor::Definitions& preprocessor_definitions() const { return m_preprocessor_definitions; }
+    Vector<Token> const& tokens() const { return m_tokens; }
+    const Vector<String>& errors() const { return m_errors; }
 
-    struct TokenAndPreprocessorDefinition {
-        Token token;
-        Preprocessor::DefinedValue preprocessor_value;
+    struct TodoEntry {
+        String content;
+        String filename;
+        size_t line { 0 };
+        size_t column { 0 };
     };
-    const Vector<TokenAndPreprocessorDefinition>& replaced_preprocessor_tokens() const { return m_replaced_preprocessor_tokens; }
+    Vector<TodoEntry> get_todo_entries() const;
+
+    Vector<Token> tokens_in_range(Position start, Position end) const;
 
 private:
     enum class DeclarationType {
@@ -54,7 +57,7 @@ private:
     };
 
     Optional<DeclarationType> match_declaration_in_translation_unit();
-    Optional<Parser::DeclarationType> match_class_member(const StringView& class_name);
+    Optional<Parser::DeclarationType> match_class_member(StringView class_name);
 
     bool match_function_declaration();
     bool match_comment();
@@ -78,9 +81,10 @@ private:
     bool match_sizeof_expression();
     bool match_braced_init_list();
     bool match_type();
+    bool match_named_type();
     bool match_access_specifier();
-    bool match_constructor(const StringView& class_name);
-    bool match_destructor(const StringView& class_name);
+    bool match_constructor(StringView class_name);
+    bool match_destructor(StringView class_name);
 
     Optional<NonnullRefPtrVector<Parameter>> parse_parameter_list(ASTNode& parent);
     Optional<Token> consume_whitespace();
@@ -103,6 +107,7 @@ private:
     NonnullRefPtr<UnaryExpression> parse_unary_expression(ASTNode& parent);
     NonnullRefPtr<BooleanLiteral> parse_boolean_literal(ASTNode& parent);
     NonnullRefPtr<Type> parse_type(ASTNode& parent);
+    NonnullRefPtr<NamedType> parse_named_type(ASTNode& parent);
     NonnullRefPtr<BinaryExpression> parse_binary_expression(ASTNode& parent, NonnullRefPtr<Expression> lhs, BinaryOp);
     NonnullRefPtr<AssignmentExpression> parse_assignment_expression(ASTNode& parent, NonnullRefPtr<Expression> lhs, AssignmentOp);
     NonnullRefPtr<ForStatement> parse_for_statement(ASTNode& parent);
@@ -129,6 +134,7 @@ private:
     Token peek(size_t offset = 0) const;
     Optional<Token> peek(Token::Type) const;
     Position position() const;
+    Position previous_token_end() const;
     String text_in_range(Position start, Position end) const;
 
     void save_state();
@@ -136,8 +142,7 @@ private:
 
     struct State {
         size_t token_index { 0 };
-        Vector<String> errors;
-        NonnullRefPtrVector<ASTNode> nodes;
+        NonnullRefPtrVector<ASTNode> state_nodes;
     };
 
     void error(StringView message = {});
@@ -147,9 +152,13 @@ private:
     create_ast_node(ASTNode& parent, const Position& start, Optional<Position> end, Args&&... args)
     {
         auto node = adopt_ref(*new T(&parent, start, end, m_filename, forward<Args>(args)...));
-        if (!parent.is_dummy_node()) {
-            m_state.nodes.append(node);
+
+        if (m_saved_states.is_empty()) {
+            m_nodes.append(node);
+        } else {
+            m_state.state_nodes.append(node);
         }
+
         return node;
     }
 
@@ -157,7 +166,7 @@ private:
     create_root_ast_node(const Position& start, Position end)
     {
         auto node = adopt_ref(*new TranslationUnit(nullptr, start, end, m_filename));
-        m_state.nodes.append(node);
+        m_nodes.append(node);
         m_root_node = node;
         return node;
     }
@@ -172,8 +181,6 @@ private:
     void consume_attribute_specification();
     void consume_access_specifier();
     bool match_ellipsis();
-    void initialize_program_tokens(const StringView& program);
-    void add_tokens_for_preprocessor(Token& replaced_token, Preprocessor::DefinedValue&);
     Vector<StringView> parse_type_qualifiers();
     Vector<StringView> parse_function_qualifiers();
 
@@ -183,14 +190,13 @@ private:
     };
     void parse_constructor_or_destructor_impl(FunctionDeclaration&, CtorOrDtor);
 
-    Preprocessor::Definitions m_preprocessor_definitions;
     String m_filename;
     Vector<Token> m_tokens;
     State m_state;
     Vector<State> m_saved_states;
     RefPtr<TranslationUnit> m_root_node;
-
-    Vector<TokenAndPreprocessorDefinition> m_replaced_preprocessor_tokens;
+    Vector<String> m_errors;
+    NonnullRefPtrVector<ASTNode> m_nodes;
 };
 
 }

@@ -7,34 +7,19 @@
 #include <AK/QuickSort.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ProcessStatisticsReader.h>
-#include <stdio.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath tty", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
+    TRY(Core::System::pledge("stdio rpath tty"));
     String this_tty = ttyname(STDIN_FILENO);
 
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    if (unveil("/proc/all", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/etc/passwd", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    unveil(nullptr, nullptr);
+    TRY(Core::System::pledge("stdio rpath"));
+    TRY(Core::System::unveil("/proc/all", "r"));
+    TRY(Core::System::unveil("/etc/passwd", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     enum class Alignment {
         Left,
@@ -50,17 +35,21 @@ int main(int argc, char** argv)
 
     bool every_process_flag = false;
     bool full_format_flag = false;
+    String pid_list;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(every_process_flag, "Show every process", nullptr, 'e');
     args_parser.add_option(full_format_flag, "Full format", nullptr, 'f');
-    args_parser.parse(argc, argv);
+    args_parser.add_option(pid_list, "A comma-separated list of PIDs. Only processes matching those PIDs will be selected", nullptr, 'q', "pid-list");
+    args_parser.parse(arguments);
 
     Vector<Column> columns;
 
     int uid_column = -1;
     int pid_column = -1;
     int ppid_column = -1;
+    int pgid_column = -1;
+    int sid_column = -1;
     int state_column = -1;
     int tty_column = -1;
     int cmd_column = -1;
@@ -74,6 +63,8 @@ int main(int argc, char** argv)
         uid_column = add_column("UID", Alignment::Left);
         pid_column = add_column("PID", Alignment::Right);
         ppid_column = add_column("PPID", Alignment::Right);
+        pgid_column = add_column("PGID", Alignment::Right);
+        sid_column = add_column("SID", Alignment::Right);
         state_column = add_column("STATE", Alignment::Left);
         tty_column = add_column("TTY", Alignment::Left);
         cmd_column = add_column("CMD", Alignment::Left);
@@ -83,22 +74,50 @@ int main(int argc, char** argv)
         cmd_column = add_column("CMD", Alignment::Left);
     }
 
-    auto processes = Core::ProcessStatisticsReader::get_all();
-    if (!processes.has_value())
+    auto all_processes = Core::ProcessStatisticsReader::get_all();
+    if (!all_processes.has_value())
         return 1;
 
-    quick_sort(processes.value(), [](auto& a, auto& b) { return a.pid < b.pid; });
+    auto& processes = all_processes.value().processes;
+
+    if (!pid_list.is_empty()) {
+        every_process_flag = true;
+        auto string_parts = pid_list.split_view(',');
+        Vector<pid_t> selected_pids;
+        selected_pids.ensure_capacity(string_parts.size());
+
+        for (size_t i = 0; i < string_parts.size(); i++) {
+            auto pid = string_parts[i].to_int();
+
+            if (!pid.has_value()) {
+                warnln("Invalid value for -q: {}", pid_list);
+                warnln("Could not parse '{}' as a PID.", string_parts[i]);
+                return 1;
+            }
+
+            selected_pids.append(pid.value());
+        }
+
+        processes.remove_all_matching([&](auto& a) { return selected_pids.find(a.pid) == selected_pids.end(); });
+
+        auto processes_sort_predicate = [&selected_pids](auto& a, auto& b) {
+            return selected_pids.find_first_index(a.pid).value() < selected_pids.find_first_index(b.pid).value();
+        };
+        quick_sort(processes, processes_sort_predicate);
+    } else {
+        quick_sort(processes, [](auto& a, auto& b) { return a.pid < b.pid; });
+    }
 
     Vector<Vector<String>> rows;
-    rows.ensure_capacity(1 + processes.value().size());
+    TRY(rows.try_ensure_capacity(1 + processes.size()));
 
     Vector<String> header;
-    header.ensure_capacity(columns.size());
+    TRY(header.try_ensure_capacity(columns.size()));
     for (auto& column : columns)
-        header.append(column.title);
+        header.unchecked_append(column.title);
     rows.append(move(header));
 
-    for (auto const& process : processes.value()) {
+    for (auto const& process : processes) {
         auto tty = process.tty;
 
         if (!every_process_flag && tty != this_tty)
@@ -112,7 +131,7 @@ int main(int argc, char** argv)
         auto* state = process.threads.is_empty() ? "Zombie" : process.threads.first().state.characters();
 
         Vector<String> row;
-        row.resize(columns.size());
+        TRY(row.try_resize(columns.size()));
 
         if (uid_column != -1)
             row[uid_column] = process.username;
@@ -120,6 +139,10 @@ int main(int argc, char** argv)
             row[pid_column] = String::number(process.pid);
         if (ppid_column != -1)
             row[ppid_column] = String::number(process.ppid);
+        if (pgid_column != -1)
+            row[pgid_column] = String::number(process.pgid);
+        if (sid_column != -1)
+            row[sid_column] = String::number(process.sid);
         if (tty_column != -1)
             row[tty_column] = tty;
         if (state_column != -1)
@@ -127,7 +150,7 @@ int main(int argc, char** argv)
         if (cmd_column != -1)
             row[cmd_column] = process.name;
 
-        rows.append(move(row));
+        TRY(rows.try_append(move(row)));
     }
 
     for (size_t i = 0; i < columns.size(); i++) {

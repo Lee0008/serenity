@@ -46,6 +46,8 @@ struct multiboot_mmap_entry {
 } __attribute__((packed));
 typedef struct multiboot_mmap_entry multiboot_memory_map_t;
 
+#define MULTIBOOT_INFO_FRAMEBUFFER_INFO (1 << 12)
+
 struct multiboot_info {
     // Multiboot info version number.
     u32 flags;
@@ -121,5 +123,3 @@ struct multiboot_info {
     };
 };
 typedef struct multiboot_info multiboot_info_t;
-
-extern "C" multiboot_info_t* multiboot_info_ptr;

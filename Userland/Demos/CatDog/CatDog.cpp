@@ -1,16 +1,39 @@
 /*
  * Copyright (c) 2021, Richard Gráčik <r.gracik@gmail.com>
+ * Copyright (c) 2022, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "CatDog.h"
+#include <LibCore/ProcessStatisticsReader.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
-#include <LibGUI/WindowServerConnection.h>
 
 void CatDog::timer_event(Core::TimerEvent&)
 {
+    auto maybe_proc_info = Core::ProcessStatisticsReader::get_all(m_proc_all);
+    if (maybe_proc_info.has_value()) {
+        auto proc_info = maybe_proc_info.release_value();
+
+        auto maybe_paint_program = proc_info.processes.first_matching([](auto& process) {
+            return process.name.equals_ignoring_case("pixelpaint") || process.name.equals_ignoring_case("fonteditor");
+        });
+        if (maybe_paint_program.has_value()) {
+            m_main_state = MainState::Artist;
+        } else {
+            auto maybe_inspector_program = proc_info.processes.first_matching([](auto& process) {
+                return process.name.equals_ignoring_case("inspector") || process.name.equals_ignoring_case("systemmonitor") || process.name.equals_ignoring_case("profiler");
+            });
+
+            if (maybe_inspector_program.has_value())
+                m_main_state = MainState::Inspector;
+            // If we currently have an application state but that app isn't open anymore, go back to idle.
+            else if (!is_non_application_state(m_main_state))
+                m_main_state = MainState::Idle;
+        }
+    }
+
     if (!m_roaming)
         return;
     if (m_temp_pos.x() > 48) {
@@ -86,13 +109,13 @@ void CatDog::timer_event(Core::TimerEvent&)
     }
 
     if (!m_up && !m_down && !m_left && !m_right) {
-        m_curr_bmp = m_still;
-        if (m_timer.elapsed() > 5000) {
-            m_curr_bmp = m_sleep1;
-            if (m_curr_frame == 2)
-                m_curr_bmp = m_sleep2;
-            m_sleeping = true;
-        }
+        // Select the movement-free image based on the main state.
+        if (m_timer.elapsed() > 5000)
+            m_main_state = MainState::Sleeping;
+        set_image_by_main_state();
+    } else if (is_non_application_state(m_main_state)) {
+        // If CatDog currently moves, it should be idle the next time it stops.
+        m_main_state = MainState::Idle;
     }
 
     update();
@@ -105,37 +128,28 @@ void CatDog::paint_event(GUI::PaintEvent& event)
     painter.blit(Gfx::IntPoint(0, 0), *m_curr_bmp, m_curr_bmp->rect());
 }
 
-void CatDog::mousemove_event(GUI::MouseEvent& event)
+void CatDog::track_mouse_move(Gfx::IntPoint const& point)
 {
     if (!m_roaming)
         return;
-    if (m_temp_pos == event.position())
+    Gfx::IntPoint relative_point = point - window()->position();
+    if (m_temp_pos == relative_point)
         return;
-    m_temp_pos = event.position();
+    m_temp_pos = relative_point;
     m_timer.start();
-    if (m_sleeping) {
-        m_curr_bmp = m_alert;
+    if (m_main_state == MainState::Sleeping) {
+        m_main_state = MainState::Alerted;
+        set_image_by_main_state();
         update();
     }
-    m_sleeping = false;
 }
 
 void CatDog::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
     if (on_click)
         on_click();
-}
-
-void CatDog::track_cursor_globally()
-{
-    VERIFY(window());
-    auto window_id = window()->window_id();
-    VERIFY(window_id >= 0);
-
-    set_global_cursor_tracking(true);
-    GUI::WindowServerConnection::the().set_global_cursor_tracking(window_id, true);
 }
 
 void CatDog::context_menu_event(GUI::ContextMenuEvent& event)

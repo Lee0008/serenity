@@ -7,7 +7,6 @@
 #pragma once
 
 #include <AK/Span.h>
-#include <AK/Vector.h>
 #include <LibCrypto/BigInt/UnsignedBigInteger.h>
 #include <LibCrypto/NumberTheory/ModularFunctions.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
@@ -60,9 +59,7 @@ public:
     {
     }
 
-    RSAPrivateKey()
-    {
-    }
+    RSAPrivateKey() = default;
 
     const Integer& modulus() const { return m_modulus; }
     const Integer& private_exponent() const { return m_private_exponent; }
@@ -143,7 +140,7 @@ public:
         import_private_key(privateKeyPEM);
     }
 
-    RSA(const StringView& privKeyPEM)
+    RSA(StringView privKeyPEM)
     {
         import_private_key(privKeyPEM.bytes());
         m_public_key.set(m_private_key.modulus(), m_private_key.public_exponent());
@@ -163,9 +160,17 @@ public:
     virtual void sign(ReadonlyBytes in, Bytes& out) override;
     virtual void verify(ReadonlyBytes in, Bytes& out) override;
 
-    virtual String class_name() const override { return "RSA"; }
+#ifndef KERNEL
+    virtual String class_name() const override
+    {
+        return "RSA";
+    }
+#endif
 
-    virtual size_t output_size() const override { return m_public_key.length(); }
+    virtual size_t output_size() const override
+    {
+        return m_public_key.length();
+    }
 
     void import_public_key(ReadonlyBytes, bool pem = true);
     void import_private_key(ReadonlyBytes, bool pem = true);
@@ -207,8 +212,16 @@ public:
     virtual void sign(ReadonlyBytes, Bytes&) override;
     virtual void verify(ReadonlyBytes, Bytes&) override;
 
-    virtual String class_name() const override { return "RSA_PKCS1-EME"; }
-    virtual size_t output_size() const override { return m_public_key.length(); }
+#ifndef KERNEL
+    virtual String class_name() const override
+    {
+        return "RSA_PKCS1-EME";
+    }
+#endif
+    virtual size_t output_size() const override
+    {
+        return m_public_key.length();
+    }
 };
 }
 }

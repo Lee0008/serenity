@@ -6,8 +6,8 @@
 
 #include <AK/Base64.h>
 #include <AK/StringBuilder.h>
-#include <LibHTTP/HttpJob.h>
 #include <LibHTTP/HttpRequest.h>
+#include <LibHTTP/Job.h>
 
 namespace HTTP {
 
@@ -55,7 +55,6 @@ ByteBuffer HttpRequest::to_raw_request() const
         builder.append(header.value);
         builder.append("\r\n");
     }
-    builder.append("Connection: close\r\n");
     if (!m_body.is_empty()) {
         builder.appendff("Content-Length: {}\r\n\r\n", m_body.size());
         builder.append((char const*)m_body.data(), m_body.size());
@@ -198,7 +197,10 @@ Optional<HttpRequest::BasicAuthenticationCredentials> HttpRequest::parse_http_ba
     auto token = value.substring_view(6);
     if (token.is_empty())
         return {};
-    auto decoded_token = String::copy(decode_base64(token));
+    auto decoded_token_bb = decode_base64(token);
+    if (decoded_token_bb.is_error())
+        return {};
+    auto decoded_token = String::copy(decoded_token_bb.value());
     auto colon_index = decoded_token.find(':');
     if (!colon_index.has_value())
         return {};

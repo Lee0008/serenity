@@ -8,7 +8,9 @@
 
 #include <AK/Function.h>
 #include <AK/Stream.h>
+#include <LibCore/Forward.h>
 #include <LibCore/Object.h>
+#include <LibCore/Stream.h>
 
 namespace Core {
 
@@ -35,26 +37,31 @@ public:
     NetworkResponse* response() { return m_response.ptr(); }
     const NetworkResponse* response() const { return m_response.ptr(); }
 
-    virtual void start() = 0;
-    virtual void shutdown() = 0;
+    enum class ShutdownMode {
+        DetachFromSocket,
+        CloseSocket,
+    };
+    virtual void start(Core::Stream::Socket&) = 0;
+    virtual void shutdown(ShutdownMode) = 0;
+    virtual void fail(Error error) { did_fail(error); }
 
     void cancel()
     {
-        shutdown();
+        shutdown(ShutdownMode::DetachFromSocket);
         m_error = Error::Cancelled;
     }
 
 protected:
-    NetworkJob(OutputStream&);
+    NetworkJob(Core::Stream::Stream&);
     void did_finish(NonnullRefPtr<NetworkResponse>&&);
     void did_fail(Error);
     void did_progress(Optional<u32> total_size, u32 downloaded);
 
-    size_t do_write(ReadonlyBytes bytes) { return m_output_stream.write(bytes); }
+    ErrorOr<size_t> do_write(ReadonlyBytes bytes) { return m_output_stream.write(bytes); }
 
 private:
     RefPtr<NetworkResponse> m_response;
-    OutputStream& m_output_stream;
+    Core::Stream::Stream& m_output_stream;
     Error m_error { Error::None };
 };
 

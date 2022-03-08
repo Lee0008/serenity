@@ -7,18 +7,17 @@
 #include <AK/QuickSort.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
+ErrorOr<int> serenity_main([[maybe_unused]] Main::Arguments arguments)
 {
-    if (pledge("stdio", nullptr) > 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio"sv));
 
     Vector<String> lines;
 
@@ -37,13 +36,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
         lines.append({ buffer, AK::ShouldChomp::Chomp });
     }
 
-    quick_sort(lines, [](auto& a, auto& b) {
-        return strcmp(a.characters(), b.characters()) < 0;
-    });
+    quick_sort(lines);
 
     for (auto& line : lines) {
-        fputs(line.characters(), stdout);
-        fputc('\n', stdout);
+        outln("{}", line);
     }
 
     return 0;

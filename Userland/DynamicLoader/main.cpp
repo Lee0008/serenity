@@ -8,6 +8,7 @@
 #include <LibC/unistd.h>
 #include <LibELF/AuxiliaryVector.h>
 #include <LibELF/DynamicLinker.h>
+#include <LibELF/Relocation.h>
 
 char* __static_environ[] = { nullptr }; // We don't get the environment without some libc workarounds..
 
@@ -35,26 +36,8 @@ static void perform_self_relocations(auxv_t* auxvp)
         }
     }
     VERIFY(found_base_address);
-    Elf32_Ehdr* header = (Elf32_Ehdr*)(base_address);
-    Elf32_Phdr* pheader = (Elf32_Phdr*)(base_address + header->e_phoff);
-    u32 dynamic_section_addr = 0;
-    for (size_t i = 0; i < (size_t)header->e_phnum; ++i, ++pheader) {
-        if (pheader->p_type != PT_DYNAMIC)
-            continue;
-        dynamic_section_addr = pheader->p_vaddr + base_address;
-    }
-    if (!dynamic_section_addr)
+    if (!ELF::perform_relative_relocations(base_address))
         exit(1);
-
-    auto dynamic_object = ELF::DynamicObject::create({}, (VirtualAddress(base_address)), (VirtualAddress(dynamic_section_addr)));
-
-    dynamic_object->relocation_section().for_each_relocation([base_address](auto& reloc) {
-        if (reloc.type() != R_386_RELATIVE)
-            return IterationDecision::Continue;
-
-        *(u32*)reloc.address().as_ptr() += base_address;
-        return IterationDecision::Continue;
-    });
 }
 
 static void display_help()
@@ -74,9 +57,17 @@ this helper program directly.
 extern "C" {
 
 // The compiler expects a previous declaration
-void _start(int, char**, char**);
+void _start(int, char**, char**) __attribute__((used));
+void _entry(int, char**, char**) __attribute__((used));
 
-void _start(int argc, char** argv, char** envp)
+NAKED void _start(int, char**, char**)
+{
+    asm(
+        "push $0\n"
+        "jmp _entry@plt\n");
+}
+
+void _entry(int argc, char** argv, char** envp)
 {
     char** env;
     for (env = envp; *env; ++env) {
@@ -101,7 +92,7 @@ void _start(int argc, char** argv, char** envp)
         }
     }
 
-    if (main_program_name == "/usr/lib/Loader.so") {
+    if (main_program_name == "/usr/lib/Loader.so"sv) {
         // We've been invoked directly as an executable rather than as the
         // ELF interpreter for some other binary. In the future we may want
         // to support launching a program directly from the dynamic loader
@@ -115,11 +106,5 @@ void _start(int argc, char** argv, char** envp)
 
     ELF::DynamicLinker::linker_main(move(main_program_name), main_program_fd, is_secure, argc, argv, envp);
     VERIFY_NOT_REACHED();
-}
-
-void _fini();
-
-void _fini()
-{
 }
 }

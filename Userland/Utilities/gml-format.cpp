@@ -6,12 +6,13 @@
 
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
-#include <LibGUI/GMLFormatter.h>
-#include <unistd.h>
+#include <LibCore/System.h>
+#include <LibGUI/GML/Formatter.h>
+#include <LibMain/Main.h>
 
-bool format_file(const StringView&, bool);
+ErrorOr<bool> format_file(StringView, bool);
 
-bool format_file(const StringView& path, bool inplace)
+ErrorOr<bool> format_file(StringView path, bool inplace)
 {
     auto read_from_stdin = path == "-";
     RefPtr<Core::File> file;
@@ -19,19 +20,18 @@ bool format_file(const StringView& path, bool inplace)
         file = Core::File::standard_input();
     } else {
         auto open_mode = inplace ? Core::OpenMode::ReadWrite : Core::OpenMode::ReadOnly;
-        auto file_or_error = Core::File::open(path, open_mode);
-        if (file_or_error.is_error()) {
-            warnln("Could not open {}: {}", path, file_or_error.error());
-            return false;
-        }
-        file = file_or_error.value();
+        file = TRY(Core::File::open(path, open_mode));
     }
-    auto formatted_gml = GUI::format_gml(file->read_all());
-    if (formatted_gml.is_null()) {
-        warnln("Failed to parse GML!");
+    auto contents = file->read_all();
+    auto formatted_gml_or_error = GUI::GML::format_gml(contents);
+    if (formatted_gml_or_error.is_error()) {
+        warnln("Failed to parse GML: {}", formatted_gml_or_error.error());
         return false;
     }
+    auto formatted_gml = formatted_gml_or_error.release_value();
     if (inplace && !read_from_stdin) {
+        if (formatted_gml == contents)
+            return true;
         if (!file->seek(0) || !file->truncate(0)) {
             warnln("Could not truncate {}: {}", path, file->error_string());
             return false;
@@ -43,16 +43,13 @@ bool format_file(const StringView& path, bool inplace)
     } else {
         out("{}", formatted_gml);
     }
-    return true;
+    return formatted_gml == contents;
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments args)
 {
 #ifdef __serenity__
-    if (pledge("stdio rpath wpath cpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath wpath cpath", nullptr));
 #endif
 
     bool inplace = false;
@@ -62,25 +59,26 @@ int main(int argc, char** argv)
     args_parser.set_general_help("Format GML files.");
     args_parser.add_option(inplace, "Write formatted contents back to file rather than standard output", "inplace", 'i');
     args_parser.add_positional_argument(files, "File(s) to process", "path", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(args);
 
 #ifdef __serenity__
-    if (!inplace) {
-        if (pledge("stdio rpath", nullptr) < 0) {
-            perror("pledge");
-            return 1;
-        }
-    }
+    if (!inplace)
+        TRY(Core::System::pledge("stdio rpath", nullptr));
 #endif
-
-    unsigned exit_code = 0;
 
     if (files.is_empty())
         files.append("-");
+
+    auto formatting_changed = false;
     for (auto& file : files) {
-        if (!format_file(file, inplace))
-            exit_code = 1;
+        if (!TRY(format_file(file, inplace)))
+            formatting_changed = true;
     }
 
-    return exit_code;
+    if (formatting_changed) {
+        dbgln("Some GML formatting issues were encountered.");
+        return 1;
+    }
+
+    return 0;
 }

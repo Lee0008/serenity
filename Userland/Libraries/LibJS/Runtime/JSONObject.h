@@ -20,11 +20,13 @@ public:
 
     // The base implementation of stringify is exposed because it is used by
     // test-js to communicate between the JS tests and the C++ test runner.
-    static String stringify_impl(GlobalObject&, Value value, Value replacer, Value space);
+    static ThrowCompletionOr<String> stringify_impl(GlobalObject&, Value value, Value replacer, Value space);
+
+    static Value parse_json_value(GlobalObject&, const JsonValue&);
 
 private:
     struct StringifyState {
-        Function* replacer_function { nullptr };
+        FunctionObject* replacer_function { nullptr };
         HashTable<Object*> seen_objects;
         String indent { String::empty() };
         String gap;
@@ -32,16 +34,15 @@ private:
     };
 
     // Stringify helpers
-    static String serialize_json_property(GlobalObject&, StringifyState&, const PropertyName& key, Object* holder);
-    static String serialize_json_object(GlobalObject&, StringifyState&, Object&);
-    static String serialize_json_array(GlobalObject&, StringifyState&, Object&);
+    static ThrowCompletionOr<String> serialize_json_property(GlobalObject&, StringifyState&, const PropertyKey& key, Object* holder);
+    static ThrowCompletionOr<String> serialize_json_object(GlobalObject&, StringifyState&, Object&);
+    static ThrowCompletionOr<String> serialize_json_array(GlobalObject&, StringifyState&, Object&);
     static String quote_json_string(String);
 
     // Parse helpers
     static Object* parse_json_object(GlobalObject&, const JsonObject&);
     static Array* parse_json_array(GlobalObject&, const JsonArray&);
-    static Value parse_json_value(GlobalObject&, const JsonValue&);
-    static Value internalize_json_property(GlobalObject&, Object* holder, const PropertyName& name, Function& reviver);
+    static ThrowCompletionOr<Value> internalize_json_property(GlobalObject&, Object* holder, PropertyKey const& name, FunctionObject& reviver);
 
     JS_DECLARE_NATIVE_FUNCTION(stringify);
     JS_DECLARE_NATIVE_FUNCTION(parse);

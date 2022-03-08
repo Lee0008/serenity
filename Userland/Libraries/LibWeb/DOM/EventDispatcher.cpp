@@ -1,111 +1,139 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2022, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
 #include <AK/TypeCasts.h>
-#include <LibJS/Runtime/Function.h>
+#include <LibJS/Runtime/AbstractOperations.h>
+#include <LibJS/Runtime/FunctionObject.h>
 #include <LibWeb/Bindings/EventTargetWrapper.h>
 #include <LibWeb/Bindings/EventTargetWrapperFactory.h>
 #include <LibWeb/Bindings/EventWrapper.h>
 #include <LibWeb/Bindings/EventWrapperFactory.h>
-#include <LibWeb/Bindings/ScriptExecutionContext.h>
+#include <LibWeb/Bindings/IDLAbstractOperations.h>
 #include <LibWeb/Bindings/WindowObject.h>
+#include <LibWeb/DOM/AbortSignal.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/EventDispatcher.h>
-#include <LibWeb/DOM/EventListener.h>
 #include <LibWeb/DOM/EventTarget.h>
+#include <LibWeb/DOM/IDLEventListener.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/ShadowRoot.h>
-#include <LibWeb/DOM/Window.h>
 #include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/Scripting/ExceptionReporter.h>
+#include <LibWeb/HTML/Window.h>
 #include <LibWeb/UIEvents/MouseEvent.h>
 
 namespace Web::DOM {
 
 // FIXME: This shouldn't be here, as retargeting is not only used by the event dispatcher.
 //        When moving this function, it needs to be generalized. https://dom.spec.whatwg.org/#retarget
-static EventTarget* retarget(EventTarget* left, [[maybe_unused]] EventTarget* right)
+static EventTarget* retarget(EventTarget* left, EventTarget* right)
 {
-    // FIXME
     for (;;) {
         if (!is<Node>(left))
             return left;
 
-        auto* left_node = downcast<Node>(left);
-        auto* left_root = left_node->root();
+        auto* left_node = verify_cast<Node>(left);
+        auto& left_root = left_node->root();
         if (!is<ShadowRoot>(left_root))
             return left;
 
-        // FIXME: If right is a node and left’s root is a shadow-including inclusive ancestor of right, return left.
+        if (is<Node>(right) && left_root.is_shadow_including_inclusive_ancestor_of(verify_cast<Node>(*right)))
+            return left;
 
-        auto* left_shadow_root = downcast<ShadowRoot>(left_root);
-        left = left_shadow_root->host();
+        auto& left_shadow_root = verify_cast<ShadowRoot>(left_root);
+        left = left_shadow_root.host();
     }
 }
 
 // https://dom.spec.whatwg.org/#concept-event-listener-inner-invoke
-bool EventDispatcher::inner_invoke(Event& event, Vector<EventTarget::EventListenerRegistration>& listeners, Event::Phase phase, bool invocation_target_in_shadow_tree)
+bool EventDispatcher::inner_invoke(Event& event, Vector<NonnullRefPtr<DOM::DOMEventListener>>& listeners, Event::Phase phase, bool invocation_target_in_shadow_tree)
 {
+    // 1. Let found be false.
     bool found = false;
 
+    // 2. For each listener in listeners, whose removed is false:
     for (auto& listener : listeners) {
-        if (listener.listener->removed())
+        if (listener->removed)
             continue;
 
-        if (event.type() != listener.listener->type())
+        // 1. If event’s type attribute value is not listener’s type, then continue.
+        if (event.type() != listener->type)
             continue;
 
+        // 2. Set found to true.
         found = true;
 
-        if (phase == Event::Phase::CapturingPhase && !listener.listener->capture())
+        // 3. If phase is "capturing" and listener’s capture is false, then continue.
+        if (phase == Event::Phase::CapturingPhase && !listener->capture)
             continue;
 
-        if (phase == Event::Phase::BubblingPhase && listener.listener->capture())
+        // 4. If phase is "bubbling" and listener’s capture is true, then continue.
+        if (phase == Event::Phase::BubblingPhase && listener->capture)
             continue;
 
-        if (listener.listener->once())
-            event.current_target()->remove_from_event_listener_list(listener.listener);
+        // 5. If listener’s once is true, then remove listener from event’s currentTarget attribute value’s event listener list.
+        if (listener->once)
+            event.current_target()->remove_from_event_listener_list(listener);
 
-        auto& function = listener.listener->function();
-        auto& global = function.global_object();
+        // 6. Let global be listener callback’s associated Realm’s global object.
+        auto& callback = listener->callback->callback();
+        auto& global = callback.callback.cell()->global_object();
 
+        // 7. Let currentEvent be undefined.
         RefPtr<Event> current_event;
 
+        // 8. If global is a Window object, then:
         if (is<Bindings::WindowObject>(global)) {
-            auto& bindings_window_global = downcast<Bindings::WindowObject>(global);
+            auto& bindings_window_global = verify_cast<Bindings::WindowObject>(global);
             auto& window_impl = bindings_window_global.impl();
+
+            // 1. Set currentEvent to global’s current event.
             current_event = window_impl.current_event();
+
+            // 2. If invocationTargetInShadowTree is false, then set global’s current event to event.
             if (!invocation_target_in_shadow_tree)
                 window_impl.set_current_event(&event);
         }
 
-        if (listener.listener->passive())
+        // 9. If listener’s passive is true, then set event’s in passive listener flag.
+        if (listener->passive)
             event.set_in_passive_listener(true);
 
+        // 10. Call a user object’s operation with listener’s callback, "handleEvent", « event », and event’s currentTarget attribute value. If this throws an exception, then:
+        // FIXME: These should be wrapped for us in call_user_object_operation, but it currently doesn't do that.
         auto* this_value = Bindings::wrap(global, *event.current_target());
         auto* wrapped_event = Bindings::wrap(global, event);
-        auto& vm = global.vm();
-        [[maybe_unused]] auto rc = vm.call(listener.listener->function(), this_value, wrapped_event);
-        if (vm.exception()) {
-            vm.clear_exception();
-            // FIXME: Set legacyOutputDidListenersThrowFlag if given. (Only used by IndexedDB currently)
+        auto result = Bindings::IDL::call_user_object_operation(callback, "handleEvent", this_value, wrapped_event);
+
+        // If this throws an exception, then:
+        if (result.is_error()) {
+            // 1. Report the exception.
+            HTML::report_exception(result);
+
+            // FIXME: 2. Set legacyOutputDidListenersThrowFlag if given. (Only used by IndexedDB currently)
         }
 
+        // 11. Unset event’s in passive listener flag.
         event.set_in_passive_listener(false);
+
+        // 12. If global is a Window object, then set global’s current event to currentEvent.
         if (is<Bindings::WindowObject>(global)) {
-            auto& bindings_window_global = downcast<Bindings::WindowObject>(global);
+            auto& bindings_window_global = verify_cast<Bindings::WindowObject>(global);
             auto& window_impl = bindings_window_global.impl();
             window_impl.set_current_event(current_event);
         }
 
+        // 13. If event’s stop immediate propagation flag is set, then return found.
         if (event.should_stop_immediate_propagation())
             return found;
     }
 
+    // 3. Return found.
     return found;
 }
 
@@ -128,7 +156,7 @@ void EventDispatcher::invoke(Event::PathEntry& struct_, Event& event, Event::Pha
     event.set_current_target(struct_.invocation_target);
 
     // NOTE: This is an intentional copy. Any event listeners added after this point will not be invoked.
-    auto listeners = event.current_target()->listeners();
+    auto listeners = event.current_target()->event_listener_list();
     bool invocation_target_in_shadow_tree = struct_.invocation_target_in_shadow_tree;
 
     bool found = inner_invoke(event, listeners, phase, invocation_target_in_shadow_tree);
@@ -162,7 +190,7 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
         target_override = target;
     } else {
         // NOTE: This can be done because legacy_target_override is only set for events targeted at Window.
-        target_override = downcast<Window>(*target).document();
+        target_override = verify_cast<HTML::Window>(*target).associated_document();
     }
 
     RefPtr<EventTarget> activation_target;
@@ -181,7 +209,7 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
 
         bool is_activation_event = is<UIEvents::MouseEvent>(*event) && event->type() == HTML::EventNames::click;
 
-        if (is_activation_event && target->activation_behaviour)
+        if (is_activation_event && target->activation_behavior)
             activation_target = target;
 
         // FIXME: Let slottable be target, if target is a slottable and is assigned, and null otherwise.
@@ -201,9 +229,9 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
                 touch_targets.append(retarget(touch_target, parent));
             }
 
-            // FIXME: or parent is a node and target’s root is a shadow-including inclusive ancestor of parent, then:
-            if (is<Window>(parent)) {
-                if (is_activation_event && event->bubbles() && !activation_target && parent->activation_behaviour)
+            if (is<HTML::Window>(parent)
+                || (is<Node>(parent) && verify_cast<Node>(*target).root().is_shadow_including_inclusive_ancestor_of(verify_cast<Node>(*parent)))) {
+                if (is_activation_event && event->bubbles() && !activation_target && parent->activation_behavior)
                     activation_target = parent;
 
                 event->append_to_path(*parent, nullptr, related_target, touch_targets, slot_in_closed_tree);
@@ -212,7 +240,7 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
             } else {
                 target = *parent;
 
-                if (is_activation_event && !activation_target && target->activation_behaviour)
+                if (is_activation_event && !activation_target && target->activation_behavior)
                     activation_target = target;
 
                 event->append_to_path(*parent, target, related_target, touch_targets, slot_in_closed_tree);
@@ -232,13 +260,13 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
         VERIFY(clear_targets_struct.has_value());
 
         if (is<Node>(clear_targets_struct.value().shadow_adjusted_target.ptr())) {
-            auto& shadow_adjusted_target_node = downcast<Node>(*clear_targets_struct.value().shadow_adjusted_target);
+            auto& shadow_adjusted_target_node = verify_cast<Node>(*clear_targets_struct.value().shadow_adjusted_target);
             if (is<ShadowRoot>(shadow_adjusted_target_node.root()))
                 clear_targets = true;
         }
 
         if (!clear_targets && is<Node>(clear_targets_struct.value().related_target.ptr())) {
-            auto& related_target_node = downcast<Node>(*clear_targets_struct.value().related_target);
+            auto& related_target_node = verify_cast<Node>(*clear_targets_struct.value().related_target);
             if (is<ShadowRoot>(related_target_node.root()))
                 clear_targets = true;
         }
@@ -246,7 +274,7 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
         if (!clear_targets) {
             for (auto touch_target : clear_targets_struct.value().touch_target_list) {
                 if (is<Node>(*touch_target.ptr())) {
-                    auto& touch_target_node = downcast<Node>(*touch_target.ptr());
+                    auto& touch_target_node = verify_cast<Node>(*touch_target.ptr());
                     if (is<ShadowRoot>(touch_target_node.root())) {
                         clear_targets = true;
                         break;
@@ -255,8 +283,8 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
             }
         }
 
-        if (activation_target && activation_target->legacy_pre_activation_behaviour)
-            activation_target->legacy_pre_activation_behaviour();
+        if (activation_target)
+            activation_target->legacy_pre_activation_behavior();
 
         for (ssize_t i = event->path().size() - 1; i >= 0; --i) {
             auto& entry = event->path().at(i);
@@ -298,11 +326,10 @@ bool EventDispatcher::dispatch(NonnullRefPtr<EventTarget> target, NonnullRefPtr<
 
     if (activation_target) {
         if (!event->cancelled()) {
-            // NOTE: Since activation_target is set, it will have activation behaviour.
-            activation_target->activation_behaviour(event);
+            // NOTE: Since activation_target is set, it will have activation behavior.
+            activation_target->activation_behavior(event);
         } else {
-            if (activation_target->legacy_cancelled_activation_behaviour)
-                activation_target->legacy_cancelled_activation_behaviour();
+            activation_target->legacy_cancelled_activation_behavior();
         }
     }
 

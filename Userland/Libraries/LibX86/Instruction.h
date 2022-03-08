@@ -103,10 +103,39 @@ enum InstructionFormat {
     OP_RM32_reg32_imm8,
     OP_RM16_reg16_CL,
     OP_RM32_reg32_CL,
+    OP_mm1_rm32,
+    OP_rm32_mm2,
     OP_mm1_mm2m64,
     OP_mm1_mm2m32,
+    OP_mm1_mm2m64_imm8,
     OP_mm1_imm8,
     OP_mm1m64_mm2,
+    OP_reg_mm1,
+    OP_reg_mm1_imm8,
+    OP_mm1_r32m16_imm8,
+
+    // SSE instructions mutate on some prefixes, so we have to mark them
+    // for further parsing
+    __SSE,
+    OP_xmm1_xmm2m32,
+    OP_xmm1_xmm2m64,
+    OP_xmm1_xmm2m128,
+    OP_xmm1_xmm2m32_imm8,
+    OP_xmm1_xmm2m128_imm8,
+    OP_xmm1m32_xmm2,
+    OP_xmm1m64_xmm2,
+    OP_xmm1m128_xmm2,
+    OP_reg_xmm1,
+    OP_reg_xmm1_imm8,
+    OP_xmm1_rm32,
+    OP_xmm1_m64,
+    OP_m64_xmm2,
+    OP_rm8_xmm2m32,
+    OP_xmm1_mm2m64,
+    OP_mm1m64_xmm2,
+    OP_mm1_xmm2m64,
+    OP_r32_xmm2m32,
+    OP_xmm1_r32m16_imm8,
     __EndFormatsWithRMByte,
 
     OP_reg32_imm32,
@@ -176,14 +205,14 @@ struct InstructionDescriptor {
     // a non-null slashes member that's indexed by the three R/M bits.
     InstructionDescriptor* slashes { nullptr };
 
-    unsigned imm1_bytes_for_address_size(bool a32)
+    unsigned imm1_bytes_for_address_size(bool a32) const
     {
         if (imm1_bytes == CurrentAddressSize)
             return a32 ? 4 : 2;
         return imm1_bytes;
     }
 
-    unsigned imm2_bytes_for_address_size(bool a32)
+    unsigned imm2_bytes_for_address_size(bool a32) const
     {
         if (imm2_bytes == CurrentAddressSize)
             return a32 ? 4 : 2;
@@ -197,6 +226,9 @@ extern InstructionDescriptor s_table16[256];
 extern InstructionDescriptor s_table32[256];
 extern InstructionDescriptor s_0f_table16[256];
 extern InstructionDescriptor s_0f_table32[256];
+extern InstructionDescriptor s_sse_table_np[256];
+extern InstructionDescriptor s_sse_table_66[256];
+extern InstructionDescriptor s_sse_table_f3[256];
 
 struct Prefix {
     enum Op {
@@ -275,23 +307,34 @@ enum MMXRegisterIndex {
     RegisterMM7
 };
 
+enum XMMRegisterIndex {
+    RegisterXMM0 = 0,
+    RegisterXMM1,
+    RegisterXMM2,
+    RegisterXMM3,
+    RegisterXMM4,
+    RegisterXMM5,
+    RegisterXMM6,
+    RegisterXMM7
+};
+
 class LogicalAddress {
 public:
-    LogicalAddress() { }
-    LogicalAddress(u16 selector, u32 offset)
+    LogicalAddress() = default;
+    LogicalAddress(u16 selector, FlatPtr offset)
         : m_selector(selector)
         , m_offset(offset)
     {
     }
 
     u16 selector() const { return m_selector; }
-    u32 offset() const { return m_offset; }
+    FlatPtr offset() const { return m_offset; }
     void set_selector(u16 selector) { m_selector = selector; }
-    void set_offset(u32 offset) { m_offset = offset; }
+    void set_offset(FlatPtr offset) { m_offset = offset; }
 
 private:
     u16 m_selector { 0 };
-    u32 m_offset { 0 };
+    FlatPtr m_offset { 0 };
 };
 
 class InstructionStream {
@@ -365,6 +408,7 @@ public:
     String to_string_fpu64(const Instruction&) const;
     String to_string_fpu80(const Instruction&) const;
     String to_string_mm(const Instruction&) const;
+    String to_string_xmm(const Instruction&) const;
 
     bool is_register() const { return m_register_index != 0x7f; }
 
@@ -373,6 +417,11 @@ public:
     RegisterIndex16 reg16() const { return static_cast<RegisterIndex16>(register_index()); }
     RegisterIndex8 reg8() const { return static_cast<RegisterIndex8>(register_index()); }
     FpuRegisterIndex reg_fpu() const { return static_cast<FpuRegisterIndex>(register_index()); }
+
+    // helpers to get the parts by name as in the spec
+    u8 mod() const { return m_rm_byte >> 6; }
+    u8 reg() const { return m_rm_byte >> 3 & 0b111; }
+    u8 rm() const { return m_rm_byte & 0b111; }
 
     template<typename CPU, typename T>
     void write8(CPU&, const Instruction&, T);
@@ -404,7 +453,7 @@ public:
     LogicalAddress resolve(const CPU&, const Instruction&);
 
 private:
-    MemoryOrRegisterReference() { }
+    MemoryOrRegisterReference() = default;
 
     String to_string(const Instruction&) const;
     String to_string_a16() const;
@@ -429,7 +478,7 @@ private:
         u16 m_displacement16;
     };
 
-    u8 m_rm { 0 };
+    u8 m_rm_byte { 0 };
     u8 m_sib { 0 };
     u8 m_displacement_bytes { 0 };
     u8 m_register_index : 7 { 0x7f };
@@ -467,8 +516,8 @@ public:
     String mnemonic() const;
 
     u8 op() const { return m_op; }
-    u8 rm() const { return m_modrm.m_rm; }
-    u8 slash() const { return (rm() >> 3) & 7; }
+    u8 modrm_byte() const { return m_modrm.m_rm_byte; }
+    u8 slash() const { return (modrm_byte() >> 3) & 7; }
 
     u8 imm8() const { return m_imm1; }
     u16 imm16() const { return m_imm1; }
@@ -535,7 +584,7 @@ ALWAYS_INLINE LogicalAddress MemoryOrRegisterReference::resolve16(const CPU& cpu
     auto default_segment = SegmentRegister::DS;
     u16 offset = 0;
 
-    switch (m_rm & 7) {
+    switch (rm()) {
     case 0:
         offset = cpu.bx().value() + cpu.si().value() + m_displacement16;
         break;
@@ -557,7 +606,7 @@ ALWAYS_INLINE LogicalAddress MemoryOrRegisterReference::resolve16(const CPU& cpu
         offset = cpu.di().value() + m_displacement16;
         break;
     case 6:
-        if ((m_rm & 0xc0) == 0)
+        if (mod() == 0)
             offset = m_displacement16;
         else {
             default_segment = SegmentRegister::SS;
@@ -579,16 +628,16 @@ ALWAYS_INLINE LogicalAddress MemoryOrRegisterReference::resolve32(const CPU& cpu
     auto default_segment = SegmentRegister::DS;
     u32 offset = 0;
 
-    switch (m_rm & 0x07) {
+    switch (rm()) {
     case 0 ... 3:
     case 6 ... 7:
-        offset = cpu.const_gpr32((RegisterIndex32)(m_rm & 0x07)).value() + m_displacement32;
+        offset = cpu.const_gpr32((RegisterIndex32)(rm())).value() + m_displacement32;
         break;
     case 4:
         offset = evaluate_sib(cpu, default_segment);
         break;
     default: // 5
-        if ((m_rm & 0xc0) == 0x00) {
+        if (mod() == 0) {
             offset = m_displacement32;
             break;
         } else {
@@ -628,7 +677,7 @@ ALWAYS_INLINE u32 MemoryOrRegisterReference::evaluate_sib(const CPU& cpu, Segmen
         base += cpu.esp().value();
         break;
     default: // 5
-        switch ((m_rm >> 6) & 3) {
+        switch (mod()) {
         case 0:
             break;
         case 1:
@@ -843,10 +892,22 @@ ALWAYS_INLINE Instruction::Instruction(InstructionStreamType& stream, bool o32, 
         m_descriptor = m_o32 ? &s_table32[m_op] : &s_table16[m_op];
     }
 
+    if (m_descriptor->format == __SSE) {
+        if (m_rep_prefix == 0xF3) {
+            m_descriptor = &s_sse_table_f3[m_sub_op];
+        } else if (m_has_operand_size_override_prefix) {
+            // This was unset while parsing the prefix initially
+            m_o32 = true;
+            m_descriptor = &s_sse_table_66[m_sub_op];
+        } else {
+            m_descriptor = &s_sse_table_np[m_sub_op];
+        }
+    }
+
     if (m_descriptor->has_rm) {
         // Consume ModR/M (may include SIB and displacement.)
         m_modrm.decode(stream, m_a32);
-        m_register_index = (m_modrm.m_rm >> 3) & 7;
+        m_register_index = m_modrm.reg();
     } else {
         if (has_sub_op())
             m_register_index = m_sub_op & 7;
@@ -857,8 +918,8 @@ ALWAYS_INLINE Instruction::Instruction(InstructionStreamType& stream, bool o32, 
     bool has_slash = m_descriptor->format == MultibyteWithSlash;
     if (has_slash) {
         m_descriptor = &m_descriptor->slashes[slash()];
-        if ((rm() & 0xc0) == 0xc0 && m_descriptor->slashes)
-            m_descriptor = &m_descriptor->slashes[rm() & 7];
+        if ((modrm_byte() & 0xc0) == 0xc0 && m_descriptor->slashes)
+            m_descriptor = &m_descriptor->slashes[modrm_byte() & 7];
     }
 
     if (!m_descriptor->mnemonic) {
@@ -924,7 +985,7 @@ ALWAYS_INLINE Instruction::Instruction(InstructionStreamType& stream, bool o32, 
 template<typename InstructionStreamType>
 ALWAYS_INLINE void MemoryOrRegisterReference::decode(InstructionStreamType& stream, bool a32)
 {
-    m_rm = stream.read8();
+    m_rm_byte = stream.read8();
 
     if (a32) {
         decode32(stream);
@@ -962,21 +1023,21 @@ ALWAYS_INLINE void MemoryOrRegisterReference::decode(InstructionStreamType& stre
 template<typename InstructionStreamType>
 ALWAYS_INLINE void MemoryOrRegisterReference::decode16(InstructionStreamType&)
 {
-    switch (m_rm & 0xc0) {
-    case 0:
-        if ((m_rm & 0x07) == 6)
+    switch (mod()) {
+    case 0b00:
+        if (rm() == 6)
             m_displacement_bytes = 2;
         else
             VERIFY(m_displacement_bytes == 0);
         break;
-    case 0x40:
+    case 0b01:
         m_displacement_bytes = 1;
         break;
-    case 0x80:
+    case 0b10:
         m_displacement_bytes = 2;
         break;
-    case 0xc0:
-        m_register_index = m_rm & 7;
+    case 0b11:
+        m_register_index = rm();
         break;
     }
 }
@@ -984,34 +1045,34 @@ ALWAYS_INLINE void MemoryOrRegisterReference::decode16(InstructionStreamType&)
 template<typename InstructionStreamType>
 ALWAYS_INLINE void MemoryOrRegisterReference::decode32(InstructionStreamType& stream)
 {
-    switch (m_rm & 0xc0) {
-    case 0:
-        if ((m_rm & 0x07) == 5)
+    switch (mod()) {
+    case 0b00:
+        if (rm() == 5)
             m_displacement_bytes = 4;
         break;
-    case 0x40:
+    case 0b01:
         m_displacement_bytes = 1;
         break;
-    case 0x80:
+    case 0b10:
         m_displacement_bytes = 4;
         break;
-    case 0xc0:
-        m_register_index = m_rm & 7;
+    case 0b11:
+        m_register_index = rm();
         return;
     }
 
-    m_has_sib = (m_rm & 0x07) == 4;
+    m_has_sib = rm() == 4;
     if (m_has_sib) {
         m_sib = stream.read8();
         if ((m_sib & 0x07) == 5) {
-            switch ((m_rm >> 6) & 0x03) {
-            case 0:
+            switch (mod()) {
+            case 0b00:
                 m_displacement_bytes = 4;
                 break;
-            case 1:
+            case 0b01:
                 m_displacement_bytes = 1;
                 break;
-            case 2:
+            case 0b10:
                 m_displacement_bytes = 4;
                 break;
             default:

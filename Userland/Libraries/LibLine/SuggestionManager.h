@@ -26,24 +26,24 @@ public:
     static constexpr ForSearchTag ForSearch {};
 
     // Intentionally not explicit. (To allow suggesting bare strings)
-    CompletionSuggestion(const String& completion)
+    CompletionSuggestion(String const& completion)
         : CompletionSuggestion(completion, "", {})
     {
     }
 
-    CompletionSuggestion(const String& completion, ForSearchTag)
+    CompletionSuggestion(String const& completion, ForSearchTag)
         : text_string(completion)
     {
     }
 
-    CompletionSuggestion(const StringView& completion, const StringView& trailing_trivia)
+    CompletionSuggestion(StringView completion, StringView trailing_trivia)
         : CompletionSuggestion(completion, trailing_trivia, {})
     {
     }
 
-    CompletionSuggestion(const StringView& completion, const StringView& trailing_trivia, Style style);
+    CompletionSuggestion(StringView completion, StringView trailing_trivia, Style style);
 
-    bool operator==(const CompletionSuggestion& suggestion) const
+    bool operator==(CompletionSuggestion const& suggestion) const
     {
         return suggestion.text_string == text_string;
     }
@@ -53,6 +53,8 @@ public:
     Style style;
     size_t start_index { 0 };
     size_t input_offset { 0 };
+    size_t static_offset { 0 };
+    size_t invariant_offset { 0 };
 
     Utf32View text_view;
     Utf32View trivia_view;
@@ -73,7 +75,7 @@ public:
     size_t next_index() const { return m_next_suggestion_index; }
     void set_start_index(size_t index) const { m_last_displayed_suggestion_index = index; }
 
-    size_t for_each_suggestion(Function<IterationDecision(const CompletionSuggestion&, size_t)>) const;
+    size_t for_each_suggestion(Function<IterationDecision(CompletionSuggestion const&, size_t)>) const;
 
     enum CompletionMode {
         DontComplete,
@@ -102,15 +104,9 @@ public:
 
     void next();
     void previous();
-    void set_suggestion_variants(size_t static_offset, size_t invariant_offset, size_t suggestion_index) const
-    {
-        m_next_suggestion_index = suggestion_index;
-        m_next_suggestion_static_offset = static_offset;
-        m_next_suggestion_invariant_offset = invariant_offset;
-    }
 
-    const CompletionSuggestion& suggest();
-    const CompletionSuggestion& current_suggestion() const { return m_last_shown_suggestion; }
+    CompletionSuggestion const& suggest();
+    CompletionSuggestion const& current_suggestion() const { return m_last_shown_suggestion; }
     bool is_current_suggestion_complete() const { return m_last_shown_suggestion_was_complete; }
 
     void reset()
@@ -131,8 +127,6 @@ private:
     size_t m_last_shown_suggestion_display_length { 0 };
     bool m_last_shown_suggestion_was_complete { false };
     mutable size_t m_next_suggestion_index { 0 };
-    mutable size_t m_next_suggestion_invariant_offset { 0 };
-    mutable size_t m_next_suggestion_static_offset { 0 };
     size_t m_largest_common_suggestion_prefix_length { 0 };
     mutable size_t m_last_displayed_suggestion_index { 0 };
     size_t m_selected_suggestion_index { 0 };

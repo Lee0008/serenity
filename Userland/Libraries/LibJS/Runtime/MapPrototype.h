@@ -7,11 +7,12 @@
 #pragma once
 
 #include <LibJS/Runtime/Map.h>
+#include <LibJS/Runtime/PrototypeObject.h>
 
 namespace JS {
 
-class MapPrototype final : public Object {
-    JS_OBJECT(MapPrototype, Object);
+class MapPrototype final : public PrototypeObject<MapPrototype, Map> {
+    JS_PROTOTYPE_OBJECT(MapPrototype, Map, Map);
 
 public:
     MapPrototype(GlobalObject&);
@@ -19,8 +20,6 @@ public:
     virtual ~MapPrototype() override;
 
 private:
-    static Map* typed_this(VM&, GlobalObject&);
-
     JS_DECLARE_NATIVE_FUNCTION(clear);
     JS_DECLARE_NATIVE_FUNCTION(delete_);
     JS_DECLARE_NATIVE_FUNCTION(entries);
@@ -31,7 +30,7 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(set);
     JS_DECLARE_NATIVE_FUNCTION(values);
 
-    JS_DECLARE_NATIVE_GETTER(size_getter);
+    JS_DECLARE_NATIVE_FUNCTION(size_getter);
 };
 
 }

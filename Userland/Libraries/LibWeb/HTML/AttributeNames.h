@@ -27,7 +27,7 @@ namespace AttributeNames {
     __ENUMERATE_HTML_ATTRIBUTE(autoplay)                   \
     __ENUMERATE_HTML_ATTRIBUTE(axis)                       \
     __ENUMERATE_HTML_ATTRIBUTE(background)                 \
-    __ENUMERATE_HTML_ATTRIBUTE(behaviour)                  \
+    __ENUMERATE_HTML_ATTRIBUTE(behavior)                   \
     __ENUMERATE_HTML_ATTRIBUTE(bgcolor)                    \
     __ENUMERATE_HTML_ATTRIBUTE(border)                     \
     __ENUMERATE_HTML_ATTRIBUTE(cellpadding)                \
@@ -61,6 +61,7 @@ namespace AttributeNames {
     __ENUMERATE_HTML_ATTRIBUTE(event)                      \
     __ENUMERATE_HTML_ATTRIBUTE(face)                       \
     __ENUMERATE_HTML_ATTRIBUTE(for_)                       \
+    __ENUMERATE_HTML_ATTRIBUTE(form)                       \
     __ENUMERATE_HTML_ATTRIBUTE(formnovalidate)             \
     __ENUMERATE_HTML_ATTRIBUTE(formtarget)                 \
     __ENUMERATE_HTML_ATTRIBUTE(frame)                      \
@@ -167,6 +168,7 @@ namespace AttributeNames {
     __ENUMERATE_HTML_ATTRIBUTE(placeholder)                \
     __ENUMERATE_HTML_ATTRIBUTE(playsinline)                \
     __ENUMERATE_HTML_ATTRIBUTE(poster)                     \
+    __ENUMERATE_HTML_ATTRIBUTE(preload)                    \
     __ENUMERATE_HTML_ATTRIBUTE(readonly)                   \
     __ENUMERATE_HTML_ATTRIBUTE(rel)                        \
     __ENUMERATE_HTML_ATTRIBUTE(required)                   \

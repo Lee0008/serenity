@@ -95,16 +95,19 @@ int main(int argc, char** argv)
             if (block_size > file_size)
                 continue;
 
-            auto buffer = ByteBuffer::create_uninitialized(block_size);
+            auto buffer_result = ByteBuffer::create_uninitialized(block_size);
+            if (buffer_result.is_error()) {
+                warnln("Not enough memory to allocate space for block size = {}", block_size);
+                continue;
+            }
             Vector<Result> results;
 
             outln("Running: file_size={} block_size={}", file_size, block_size);
-            Core::ElapsedTimer timer;
-            timer.start();
+            auto timer = Core::ElapsedTimer::start_new();
             while (timer.elapsed() < time_per_benchmark * 1000) {
                 out(".");
                 fflush(stdout);
-                auto result = benchmark(filename, file_size, block_size, buffer, allow_cache);
+                auto result = benchmark(filename, file_size, block_size, buffer_result.value(), allow_cache);
                 if (!result.has_value())
                     return 1;
                 results.append(result.release_value());
@@ -141,11 +144,10 @@ Optional<Result> benchmark(const String& filename, int file_size, int block_size
 
     Result result;
 
-    Core::ElapsedTimer timer;
-    timer.start();
+    auto timer = Core::ElapsedTimer::start_new();
 
     ssize_t total_written = 0;
-    for (ssize_t j = 0; j < file_size; j += block_size) {
+    while (total_written < file_size) {
         auto nwritten = write(fd, buffer.data(), block_size);
         if (nwritten < 0) {
             perror("write");

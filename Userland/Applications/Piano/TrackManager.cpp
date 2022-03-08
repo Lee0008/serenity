@@ -1,19 +1,29 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2019-2020, William McPherson <willmcpherson2@gmail.com>
+ * Copyright (c) 2021, JJ Roberts-White <computerfido@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "TrackManager.h"
+#include "Applications/Piano/Music.h"
 
 TrackManager::TrackManager()
 {
     add_track();
 }
 
-TrackManager::~TrackManager()
+void TrackManager::time_forward(int amount)
 {
+    int new_value = (static_cast<int>(m_time) + amount) % roll_length;
+
+    if (new_value < 0) { // If the new time value is negative add roll_length to wrap around
+        m_time = roll_length + new_value;
+    } else {
+        m_time = new_value;
+    }
 }
 
 void TrackManager::fill_buffer(Span<Sample> buffer)
@@ -49,9 +59,9 @@ void TrackManager::reset()
         track->reset();
 }
 
-void TrackManager::set_note_current_octave(int note, Switch switch_note)
+void TrackManager::set_keyboard_note(int note, Switch note_switch)
 {
-    current_track().set_note(note + octave_base(), switch_note);
+    m_tracks[m_current_track]->set_keyboard_note(note, note_switch);
 }
 
 void TrackManager::set_octave(Direction direction)
@@ -77,8 +87,11 @@ void TrackManager::add_track()
     m_tracks.append(make<Track>(m_time));
 }
 
-void TrackManager::next_track()
+int TrackManager::next_track_index()
 {
-    if (++m_current_track >= m_tracks.size())
-        m_current_track = 0;
+    auto next_track_index = m_current_track + 1;
+    if (next_track_index >= m_tracks.size())
+        return 0;
+    else
+        return next_track_index;
 }

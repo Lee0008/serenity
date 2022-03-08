@@ -5,12 +5,14 @@
  */
 
 #include <AK/Assertions.h>
-#include <AK/MappedFile.h>
 #include <AK/NumberFormat.h>
+#include <AK/StringUtils.h>
 #include <LibArchive/Zip.h>
 #include <LibCompress/Deflate.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/MappedFile.h>
+#include <LibCore/System.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -71,71 +73,81 @@ static bool unpack_zip_member(Archive::ZipMember zip_member, bool quiet)
     return true;
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     const char* path;
     int map_size_limit = 32 * MiB;
     bool quiet { false };
     String output_directory_path;
+    Vector<StringView> file_filters;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(map_size_limit, "Maximum chunk size to map", "map-size-limit", 0, "size");
     args_parser.add_option(output_directory_path, "Directory to receive the archive content", "output-directory", 'd', "path");
     args_parser.add_option(quiet, "Be less verbose", "quiet", 'q');
     args_parser.add_positional_argument(path, "File to unzip", "path", Core::ArgsParser::Required::Yes);
-    args_parser.parse(argc, argv);
+    args_parser.add_positional_argument(file_filters, "Files or filters in the archive to extract", "files", Core::ArgsParser::Required::No);
+    args_parser.parse(arguments);
 
     String zip_file_path { path };
 
-    struct stat st;
-    int rc = stat(zip_file_path.characters(), &st);
-    if (rc < 0) {
-        perror("stat");
-        return 1;
-    }
+    struct stat st = TRY(Core::System::stat(zip_file_path));
 
     // FIXME: Map file chunk-by-chunk once we have mmap() with offset.
     //        This will require mapping some parts then unmapping them repeatedly,
     //        but it would be significantly faster and less syscall heavy than seek()/read() at every read.
     if (st.st_size >= map_size_limit) {
         warnln("unzip warning: Refusing to map file since it is larger than {}, pass '--map-size-limit {}' to get around this",
-            human_readable_size(map_size_limit).characters(),
+            human_readable_size(map_size_limit),
             round_up_to_power_of_two(st.st_size, 16));
         return 1;
     }
 
-    auto file_or_error = MappedFile::map(zip_file_path);
-    if (file_or_error.is_error()) {
-        warnln("Failed to open {}: {}", zip_file_path, file_or_error.error());
-        return 1;
+    RefPtr<Core::MappedFile> mapped_file;
+    ReadonlyBytes input_bytes;
+    if (st.st_size > 0) {
+        mapped_file = TRY(Core::MappedFile::map(zip_file_path));
+        input_bytes = mapped_file->bytes();
     }
-    auto& mapped_file = *file_or_error.value();
 
     if (!quiet)
         warnln("Archive: {}", zip_file_path);
 
-    auto zip_file = Archive::Zip::try_create(mapped_file.bytes());
+    auto zip_file = Archive::Zip::try_create(input_bytes);
     if (!zip_file.has_value()) {
         warnln("Invalid zip file {}", zip_file_path);
         return 1;
     }
 
     if (!output_directory_path.is_null()) {
-        rc = mkdir(output_directory_path.characters(), 0755);
-        if (rc < 0 && errno != EEXIST) {
-            perror("mkdir");
-            return 1;
-        }
-
-        rc = chdir(output_directory_path.characters());
-        if (rc < 0) {
-            perror("chdir");
-            return 1;
-        }
+        auto mkdir_error = Core::System::mkdir(output_directory_path, 0755);
+        if (mkdir_error.is_error() && mkdir_error.error().code() != EEXIST)
+            return mkdir_error.release_error();
+        TRY(Core::System::chdir(output_directory_path));
     }
 
     auto success = zip_file->for_each_member([&](auto zip_member) {
-        return unpack_zip_member(zip_member, quiet) ? IterationDecision::Continue : IterationDecision::Break;
+        bool keep_file = false;
+
+        if (!file_filters.is_empty()) {
+            for (auto& filter : file_filters) {
+                // Convert underscore wildcards (usual unzip convention) to question marks (as used by StringUtils)
+                auto string_filter = filter.replace("_", "?", true);
+                if (zip_member.name.matches(string_filter, CaseSensitivity::CaseSensitive)) {
+                    keep_file = true;
+                    break;
+                }
+            }
+        } else {
+            keep_file = true;
+        }
+
+        if (keep_file) {
+            if (!unpack_zip_member(zip_member, quiet))
+                return IterationDecision::Break;
+        }
+
+        return IterationDecision::Continue;
     });
 
     return success ? 0 : 1;

@@ -7,14 +7,15 @@
 #include <LibTest/TestCase.h>
 
 #include <AK/Base64.h>
-#include <AK/ByteBuffer.h>
 #include <AK/String.h>
 #include <string.h>
 
 TEST_CASE(test_decode)
 {
     auto decode_equal = [&](const char* input, const char* expected) {
-        auto decoded = decode_base64(StringView(input));
+        auto decoded_option = decode_base64(StringView(input));
+        EXPECT(!decoded_option.is_error());
+        auto decoded = decoded_option.release_value();
         EXPECT(String::copy(decoded) == String(expected));
         EXPECT(StringView(expected).length() <= calculate_base64_decoded_length(StringView(input).bytes()));
     };
@@ -26,6 +27,16 @@ TEST_CASE(test_decode)
     decode_equal("Zm9vYg==", "foob");
     decode_equal("Zm9vYmE=", "fooba");
     decode_equal("Zm9vYmFy", "foobar");
+    decode_equal("Z m\r9\n   v\v  Ym\tFy", "foobar");
+    EXPECT_EQ(decode_base64(" ZD Qg\r\nPS An Zm91cic\r\n 7"sv).value(), decode_base64("ZDQgPSAnZm91cic7"sv).value());
+}
+
+TEST_CASE(test_decode_invalid)
+{
+    EXPECT(decode_base64(StringView("asdf\xffqwe")).is_error());
+    EXPECT(decode_base64(StringView("asdf\x80qwe")).is_error());
+    EXPECT(decode_base64(StringView("asdf:qwe")).is_error());
+    EXPECT(decode_base64(StringView("asdf=qwe")).is_error());
 }
 
 TEST_CASE(test_encode)

@@ -9,12 +9,12 @@
 #include <AK/RefCounted.h>
 #include <AK/Types.h>
 #include <Kernel/Graphics/Console/VGAConsole.h>
-#include <Kernel/SpinLock.h>
+#include <Kernel/Locking/Spinlock.h>
 
 namespace Kernel::Graphics {
 class TextModeConsole final : public VGAConsole {
 public:
-    static NonnullRefPtr<TextModeConsole> initialize(const VGACompatibleAdapter& adapter);
+    static NonnullRefPtr<TextModeConsole> initialize();
     virtual size_t chars_per_line() const override { return width(); };
 
     virtual bool has_hardware_cursor() const override { return true; }
@@ -24,25 +24,23 @@ public:
     virtual void set_cursor(size_t x, size_t y) override;
     virtual void hide_cursor() override;
     virtual void show_cursor() override;
-    virtual void clear(size_t x, size_t y, size_t length) const override;
-    virtual void write(size_t x, size_t y, char ch, bool critical = false) const override;
-    virtual void write(size_t x, size_t y, char ch, Color background, Color foreground, bool critical = false) const override;
-    virtual void write(char ch, bool critical = false) const override;
+    virtual void clear(size_t x, size_t y, size_t length) override;
+    virtual void write(size_t x, size_t y, char ch, bool critical = false) override;
+    virtual void write(size_t x, size_t y, char ch, Color background, Color foreground, bool critical = false) override;
+    virtual void write(char ch, bool critical = false) override;
+    virtual void flush(size_t, size_t, size_t, size_t) override { }
 
     virtual void enable() override { }
-    virtual void disable() override { VERIFY_NOT_REACHED(); }
+    virtual void disable() override { }
 
 private:
     void clear_vga_row(u16 row);
-    void set_vga_start_row(u16 row);
 
-    explicit TextModeConsole(const VGACompatibleAdapter&);
+    TextModeConsole();
 
-    mutable SpinLock<u8> m_vga_lock;
-    u16 m_vga_start_row { 0 };
-    u16 m_current_vga_start_address { 0 };
-    u8* m_current_vga_window { nullptr };
-    u16 m_cursor_x { 0 };
-    u16 m_cursor_y { 0 };
+    mutable Spinlock m_vga_lock;
+
+    VirtualAddress m_current_vga_window;
 };
+
 }

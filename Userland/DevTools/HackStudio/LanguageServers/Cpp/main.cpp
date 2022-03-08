@@ -4,53 +4,40 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "ClientConnection.h"
+#include "ConnectionFromClient.h"
 #include "Tests.h"
-#include <AK/LexicalPath.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
-#include <LibCore/File.h>
 #include <LibCore/LocalServer.h>
-#include <LibIPC/ClientConnection.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <LibCore/System.h>
+#include <LibIPC/SingleServer.h>
+#include <LibMain/Main.h>
 
-static int mode_server();
+static ErrorOr<int> mode_server();
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     bool tests = false;
 
     Core::ArgsParser parser;
     parser.add_option(tests, "Run tests", "tests", 't');
-    parser.parse(argc, argv);
+    parser.parse(arguments);
 
-    if (tests) {
+    if (tests)
         return run_tests();
-    }
 
     return mode_server();
 }
 
-int mode_server()
+ErrorOr<int> mode_server()
 {
     Core::EventLoop event_loop;
-    if (pledge("stdio unix recvfd rpath ", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio unix recvfd rpath"));
 
-    auto socket = Core::LocalSocket::take_over_accepted_socket_from_system_server();
-    IPC::new_client_connection<LanguageServers::Cpp::ClientConnection>(socket.release_nonnull(), 1);
-    if (pledge("stdio recvfd rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    auto client = TRY(IPC::take_over_accepted_client_from_system_server<LanguageServers::Cpp::ConnectionFromClient>());
 
-    if (unveil("/usr/include", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd rpath"));
+    TRY(Core::System::unveil("/usr/include", "r"));
 
     // unveil will be sealed later, when we know the project's root path.
     return event_loop.exec();

@@ -1,13 +1,13 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#ifndef AUTOCOMPLETE_DEBUG
-#cmakedefine01 AUTOCOMPLETE_DEBUG
+#ifndef AFLACLOADER_DEBUG
+#cmakedefine01 AFLACLOADER_DEBUG
 #endif
 
 #ifndef AWAVLOADER_DEBUG
@@ -26,12 +26,8 @@
 #cmakedefine01 CALLBACK_MACHINE_DEBUG
 #endif
 
-#ifndef CHTTPJOB_DEBUG
-#cmakedefine01 CHTTPJOB_DEBUG
-#endif
-
-#ifndef CNETWORKJOB_DEBUG
-#cmakedefine01 CNETWORKJOB_DEBUG
+#ifndef CANVAS_RENDERING_CONTEXT_2D_DEBUG
+#cmakedefine01 CANVAS_RENDERING_CONTEXT_2D_DEBUG
 #endif
 
 #ifndef COMPOSE_DEBUG
@@ -42,12 +38,12 @@
 #cmakedefine01 COPY_DEBUG
 #endif
 
-#ifndef CPP_LANGUAGE_SERVER_DEBUG
-#cmakedefine01 CPP_LANGUAGE_SERVER_DEBUG
-#endif
-
 #ifndef CPP_DEBUG
 #cmakedefine01 CPP_DEBUG
+#endif
+
+#ifndef CPP_LANGUAGE_SERVER_DEBUG
+#cmakedefine01 CPP_LANGUAGE_SERVER_DEBUG
 #endif
 
 #ifndef CRYPTO_DEBUG
@@ -62,6 +58,14 @@
 #cmakedefine01 CSS_LOADER_DEBUG
 #endif
 
+#ifndef CSS_PARSER_DEBUG
+#cmakedefine01 CSS_PARSER_DEBUG
+#endif
+
+#ifndef CSS_TOKENIZER_DEBUG
+#cmakedefine01 CSS_TOKENIZER_DEBUG
+#endif
+
 #ifndef CURSOR_TOOL_DEBUG
 #cmakedefine01 CURSOR_TOOL_DEBUG
 #endif
@@ -74,12 +78,12 @@
 #cmakedefine01 DEFERRED_INVOKE_DEBUG
 #endif
 
-#ifndef DHCPV4CLIENT_DEBUG
-#cmakedefine01 DHCPV4CLIENT_DEBUG
-#endif
-
 #ifndef DHCPV4_DEBUG
 #cmakedefine01 DHCPV4_DEBUG
+#endif
+
+#ifndef DHCPV4CLIENT_DEBUG
+#cmakedefine01 DHCPV4CLIENT_DEBUG
 #endif
 
 #ifndef DIFF_DEBUG
@@ -92,6 +96,10 @@
 
 #ifndef DOUBLECLICK_DEBUG
 #cmakedefine01 DOUBLECLICK_DEBUG
+#endif
+
+#ifndef DRAG_DEBUG
+#cmakedefine01 DRAG_DEBUG
 #endif
 
 #ifndef DWARF_DEBUG
@@ -190,6 +198,10 @@
 #cmakedefine01 HTML_SCRIPT_DEBUG
 #endif
 
+#ifndef HTTPJOB_DEBUG
+#cmakedefine01 HTTPJOB_DEBUG
+#endif
+
 #ifndef HTTPSJOB_DEBUG
 #cmakedefine01 HTTPSJOB_DEBUG
 #endif
@@ -210,10 +222,6 @@
 #cmakedefine01 IMAGE_LOADER_DEBUG
 #endif
 
-#ifndef IRC_DEBUG
-#cmakedefine01 IRC_DEBUG
-#endif
-
 #ifndef ITEM_RECTS_DEBUG
 #cmakedefine01 ITEM_RECTS_DEBUG
 #endif
@@ -230,6 +238,10 @@
 #cmakedefine01 JS_BYTECODE_DEBUG
 #endif
 
+#ifndef JS_MODULE_DEBUG
+#cmakedefine01 JS_MODULE_DEBUG
+#endif
+
 #ifndef KEYBOARD_SHORTCUTS_DEBUG
 #cmakedefine01 KEYBOARD_SHORTCUTS_DEBUG
 #endif
@@ -240,6 +252,10 @@
 
 #ifndef LEXER_DEBUG
 #cmakedefine01 LEXER_DEBUG
+#endif
+
+#ifndef LIBWEB_CSS_DEBUG
+#cmakedefine01 LIBWEB_CSS_DEBUG
 #endif
 
 #ifndef LINE_EDITOR_DEBUG
@@ -290,12 +306,12 @@
 #cmakedefine01 MOVE_DEBUG
 #endif
 
-#ifndef NT_DEBUG
-#cmakedefine01 NT_DEBUG
+#ifndef NETWORKJOB_DEBUG
+#cmakedefine01 NETWORKJOB_DEBUG
 #endif
 
-#ifndef OBJECT_DEBUG
-#cmakedefine01 OBJECT_DEBUG
+#ifndef NT_DEBUG
+#cmakedefine01 NT_DEBUG
 #endif
 
 #ifndef OCCLUSIONS_DEBUG
@@ -336,6 +352,10 @@
 
 #ifndef REGEX_DEBUG
 #cmakedefine01 REGEX_DEBUG
+#endif
+
+#ifndef REQUESTSERVER_DEBUG
+#cmakedefine01 REQUESTSERVER_DEBUG
 #endif
 
 #ifndef RESIZE_DEBUG
@@ -382,6 +402,10 @@
 #cmakedefine01 SQL_DEBUG
 #endif
 
+#ifndef SQLSERVER_DEBUG
+#cmakedefine01 SQLSERVER_DEBUG
+#endif
+
 #ifndef SYNTAX_HIGHLIGHTING_DEBUG
 #cmakedefine01 SYNTAX_HIGHLIGHTING_DEBUG
 #endif
@@ -414,6 +438,10 @@
 #cmakedefine01 TLS_DEBUG
 #endif
 
+#ifndef TLS_SSL_KEYLOG_DEBUG
+#cmakedefine01 TLS_SSL_KEYLOG_DEBUG
+#endif
+
 #ifndef TOKENIZER_TRACE_DEBUG
 #cmakedefine01 TOKENIZER_TRACE_DEBUG
 #endif
@@ -438,8 +466,16 @@
 #cmakedefine01 WASM_TRACE_DEBUG
 #endif
 
+#ifndef WASM_VALIDATOR_DEBUG
+#cmakedefine01 WASM_VALIDATOR_DEBUG
+#endif
+
 #ifndef WEBSERVER_DEBUG
 #cmakedefine01 WEBSERVER_DEBUG
+#endif
+
+#ifndef WEB_WORKER_DEBUG
+#cmakedefine01 WEB_WORKER_DEBUG
 #endif
 
 #ifndef WINDOWMANAGER_DEBUG

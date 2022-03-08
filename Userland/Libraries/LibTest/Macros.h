@@ -9,6 +9,7 @@
 
 #include <AK/Assertions.h>
 #include <AK/CheckedFormatString.h>
+#include <AK/Math.h>
 #include <LibTest/CrashTest.h>
 
 namespace AK {
@@ -54,6 +55,19 @@ void current_test_case_did_fail();
         }                                                                                                                                                                                    \
     } while (false)
 
+#define EXPECT_EQ_TRUTH(a, b)                                                                                             \
+    do {                                                                                                                  \
+        auto lhs = (a);                                                                                                   \
+        auto rhs = (b);                                                                                                   \
+        bool ltruth = static_cast<bool>(lhs);                                                                             \
+        bool rtruth = static_cast<bool>(rhs);                                                                             \
+        if (ltruth != rtruth) {                                                                                           \
+            ::AK::warnln("\033[31;1mFAIL\033[0m: {}:{}: EXPECT_EQ_TRUTH({}, {}) failed with lhs={} ({}) and rhs={} ({})", \
+                __FILE__, __LINE__, #a, #b, FormatIfSupported { lhs }, ltruth, FormatIfSupported { rhs }, rtruth);        \
+            ::Test::current_test_case_did_fail();                                                                         \
+        }                                                                                                                 \
+    } while (false)
+
 // If you're stuck and `EXPECT_EQ` seems to refuse to print anything useful,
 // try this: It'll spit out a nice compiler error telling you why it doesn't print.
 #define EXPECT_EQ_FORCE(a, b)                                                                                                                    \
@@ -89,7 +103,7 @@ void current_test_case_did_fail();
         auto expect_close_lhs = a;                                                                              \
         auto expect_close_rhs = b;                                                                              \
         auto expect_close_diff = static_cast<double>(expect_close_lhs) - static_cast<double>(expect_close_rhs); \
-        if (fabs(expect_close_diff) > 0.0000005) {                                                              \
+        if (AK::fabs(expect_close_diff) > 0.0000005) {                                                          \
             ::AK::warnln("\033[31;1mFAIL\033[0m: {}:{}: EXPECT_APPROXIMATE({}, {})"                             \
                          " failed with lhs={}, rhs={}, (lhs-rhs)={}",                                           \
                 __FILE__, __LINE__, #a, #b, expect_close_lhs, expect_close_rhs, expect_close_diff);             \
@@ -112,4 +126,18 @@ void current_test_case_did_fail();
         Test::Crash crash(test_message, test_func); \
         if (!crash.run())                           \
             ::Test::current_test_case_did_fail();   \
+    } while (false)
+
+#define EXPECT_CRASH_WITH_SIGNAL(test_message, signal, test_func) \
+    do {                                                          \
+        Test::Crash crash(test_message, test_func, (signal));     \
+        if (!crash.run())                                         \
+            ::Test::current_test_case_did_fail();                 \
+    } while (false)
+
+#define EXPECT_NO_CRASH(test_message, test_func)       \
+    do {                                               \
+        Test::Crash crash(test_message, test_func, 0); \
+        if (!crash.run())                              \
+            ::Test::current_test_case_did_fail();      \
     } while (false)

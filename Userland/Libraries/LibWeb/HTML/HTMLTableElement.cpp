@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/CSS/Parser/DeprecatedCSSParser.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/HTMLCollection.h>
 #include <LibWeb/HTML/HTMLTableColElement.h>
@@ -15,7 +15,7 @@
 
 namespace Web::HTML {
 
-HTMLTableElement::HTMLTableElement(DOM::Document& document, QualifiedName qualified_name)
+HTMLTableElement::HTMLTableElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
 {
 }
@@ -51,13 +51,16 @@ RefPtr<HTMLTableCaptionElement> HTMLTableElement::caption()
     return first_child_of_type<HTMLTableCaptionElement>();
 }
 
-void HTMLTableElement::set_caption(HTMLTableCaptionElement& caption)
+void HTMLTableElement::set_caption(HTMLTableCaptionElement* caption)
 {
+    // FIXME: This is not always the case, but this function is currently written in a way that assumes non-null.
+    VERIFY(caption);
+
     // FIXME: The spec requires deleting the current caption if caption is null
     //        Currently the wrapper generator doesn't send us a nullable value
     delete_caption();
 
-    pre_insert(caption, first_child());
+    pre_insert(*caption, first_child());
 }
 
 NonnullRefPtr<HTMLTableCaptionElement> HTMLTableElement::create_caption()
@@ -69,7 +72,7 @@ NonnullRefPtr<HTMLTableCaptionElement> HTMLTableElement::create_caption()
 
     auto caption = DOM::create_element(document(), TagNames::caption, Namespace::HTML);
     pre_insert(caption, first_child());
-    return caption;
+    return static_ptr_cast<HTMLTableCaptionElement>(caption);
 }
 
 void HTMLTableElement::delete_caption()
@@ -84,8 +87,8 @@ RefPtr<HTMLTableSectionElement> HTMLTableElement::t_head()
 {
     for (auto* child = first_child(); child; child = child->next_sibling()) {
         if (is<HTMLTableSectionElement>(*child)) {
-            auto table_section_element = &downcast<HTMLTableSectionElement>(*child);
-            if (table_section_element->tag_name() == TagNames::thead)
+            auto table_section_element = &verify_cast<HTMLTableSectionElement>(*child);
+            if (table_section_element->local_name() == TagNames::thead)
                 return table_section_element;
         }
     }
@@ -93,9 +96,12 @@ RefPtr<HTMLTableSectionElement> HTMLTableElement::t_head()
     return nullptr;
 }
 
-DOM::ExceptionOr<void> HTMLTableElement::set_t_head(HTMLTableSectionElement& thead)
+DOM::ExceptionOr<void> HTMLTableElement::set_t_head(HTMLTableSectionElement* thead)
 {
-    if (thead.tag_name() != TagNames::thead)
+    // FIXME: This is not always the case, but this function is currently written in a way that assumes non-null.
+    VERIFY(thead);
+
+    if (thead->local_name() != TagNames::thead)
         return DOM::HierarchyRequestError::create("Element is not thead");
 
     // FIXME: The spec requires deleting the current thead if thead is null
@@ -110,8 +116,8 @@ DOM::ExceptionOr<void> HTMLTableElement::set_t_head(HTMLTableSectionElement& the
         if (is<HTMLTableCaptionElement>(*child))
             continue;
         if (is<HTMLTableColElement>(*child)) {
-            auto table_col_element = &downcast<HTMLTableColElement>(*child);
-            if (table_col_element->tag_name() == TagNames::colgroup)
+            auto table_col_element = &verify_cast<HTMLTableColElement>(*child);
+            if (table_col_element->local_name() == TagNames::colgroup)
                 continue;
         }
 
@@ -120,7 +126,7 @@ DOM::ExceptionOr<void> HTMLTableElement::set_t_head(HTMLTableSectionElement& the
         break;
     }
 
-    pre_insert(thead, child_to_append_after);
+    pre_insert(*thead, child_to_append_after);
 
     return {};
 }
@@ -141,8 +147,8 @@ NonnullRefPtr<HTMLTableSectionElement> HTMLTableElement::create_t_head()
         if (is<HTMLTableCaptionElement>(*child))
             continue;
         if (is<HTMLTableColElement>(*child)) {
-            auto table_col_element = &downcast<HTMLTableColElement>(*child);
-            if (table_col_element->tag_name() == TagNames::colgroup)
+            auto table_col_element = &verify_cast<HTMLTableColElement>(*child);
+            if (table_col_element->local_name() == TagNames::colgroup)
                 continue;
         }
 
@@ -153,7 +159,7 @@ NonnullRefPtr<HTMLTableSectionElement> HTMLTableElement::create_t_head()
 
     pre_insert(thead, child_to_append_after);
 
-    return thead;
+    return static_ptr_cast<HTMLTableSectionElement>(thead);
 }
 
 void HTMLTableElement::delete_t_head()
@@ -168,8 +174,8 @@ RefPtr<HTMLTableSectionElement> HTMLTableElement::t_foot()
 {
     for (auto* child = first_child(); child; child = child->next_sibling()) {
         if (is<HTMLTableSectionElement>(*child)) {
-            auto table_section_element = &downcast<HTMLTableSectionElement>(*child);
-            if (table_section_element->tag_name() == TagNames::tfoot)
+            auto table_section_element = &verify_cast<HTMLTableSectionElement>(*child);
+            if (table_section_element->local_name() == TagNames::tfoot)
                 return table_section_element;
         }
     }
@@ -177,9 +183,12 @@ RefPtr<HTMLTableSectionElement> HTMLTableElement::t_foot()
     return nullptr;
 }
 
-DOM::ExceptionOr<void> HTMLTableElement::set_t_foot(HTMLTableSectionElement& tfoot)
+DOM::ExceptionOr<void> HTMLTableElement::set_t_foot(HTMLTableSectionElement* tfoot)
 {
-    if (tfoot.tag_name() != TagNames::tfoot)
+    // FIXME: This is not always the case, but this function is currently written in a way that assumes non-null.
+    VERIFY(tfoot);
+
+    if (tfoot->local_name() != TagNames::tfoot)
         return DOM::HierarchyRequestError::create("Element is not tfoot");
 
     // FIXME: The spec requires deleting the current tfoot if tfoot is null
@@ -187,7 +196,7 @@ DOM::ExceptionOr<void> HTMLTableElement::set_t_foot(HTMLTableSectionElement& tfo
     delete_t_foot();
 
     // We insert the new tfoot at the end of the table
-    append_child(tfoot);
+    append_child(*tfoot);
 
     return {};
 }
@@ -200,7 +209,7 @@ NonnullRefPtr<HTMLTableSectionElement> HTMLTableElement::create_t_foot()
 
     auto tfoot = DOM::create_element(document(), TagNames::tfoot, Namespace::HTML);
     append_child(tfoot);
-    return tfoot;
+    return static_ptr_cast<HTMLTableSectionElement>(tfoot);
 }
 
 void HTMLTableElement::delete_t_foot()
@@ -214,7 +223,7 @@ void HTMLTableElement::delete_t_foot()
 NonnullRefPtr<DOM::HTMLCollection> HTMLTableElement::t_bodies()
 {
     return DOM::HTMLCollection::create(*this, [](DOM::Element const& element) {
-        return element.tag_name() == TagNames::tbody;
+        return element.local_name() == TagNames::tbody;
     });
 }
 
@@ -228,8 +237,8 @@ NonnullRefPtr<HTMLTableSectionElement> HTMLTableElement::create_t_body()
         if (!is<HTMLElement>(*child))
             continue;
         if (is<HTMLTableSectionElement>(*child)) {
-            auto table_section_element = &downcast<HTMLTableSectionElement>(*child);
-            if (table_section_element->tag_name() == TagNames::tbody) {
+            auto table_section_element = &verify_cast<HTMLTableSectionElement>(*child);
+            if (table_section_element->local_name() == TagNames::tbody) {
                 // We have found an element which is a <tbody> we'll insert after this
                 child_to_append_after = child->next_sibling();
                 break;
@@ -239,7 +248,7 @@ NonnullRefPtr<HTMLTableSectionElement> HTMLTableElement::create_t_body()
 
     pre_insert(tbody, child_to_append_after);
 
-    return tbody;
+    return static_ptr_cast<HTMLTableSectionElement>(tbody);
 }
 
 NonnullRefPtr<DOM::HTMLCollection> HTMLTableElement::rows()
@@ -261,7 +270,7 @@ NonnullRefPtr<DOM::HTMLCollection> HTMLTableElement::rows()
         if (element.parent_element() == table_node)
             return true;
 
-        if (element.parent_element() && (element.parent_element()->tag_name() == TagNames::thead || element.parent_element()->tag_name() == TagNames::tbody || element.parent_element()->tag_name() == TagNames::tfoot)
+        if (element.parent_element() && (element.parent_element()->local_name() == TagNames::thead || element.parent_element()->local_name() == TagNames::tbody || element.parent_element()->local_name() == TagNames::tfoot)
             && element.parent()->parent() == table_node) {
             return true;
         }
@@ -278,7 +287,7 @@ DOM::ExceptionOr<NonnullRefPtr<HTMLTableRowElement>> HTMLTableElement::insert_ro
     if (index < -1 || index >= (long)rows_length) {
         return DOM::IndexSizeError::create("Index is negative or greater than the number of rows");
     }
-    auto tr = static_cast<NonnullRefPtr<HTMLTableRowElement>>(DOM::create_element(document(), TagNames::tr, Namespace::HTML));
+    auto tr = static_ptr_cast<HTMLTableRowElement>(DOM::create_element(document(), TagNames::tr, Namespace::HTML));
     if (rows_length == 0 && !has_child_of_type<HTMLTableRowElement>()) {
         auto tbody = DOM::create_element(document(), TagNames::tbody, Namespace::HTML);
         tbody->append_child(tr);
@@ -295,22 +304,29 @@ DOM::ExceptionOr<NonnullRefPtr<HTMLTableRowElement>> HTMLTableElement::insert_ro
     return tr;
 }
 
+// https://html.spec.whatwg.org/multipage/tables.html#dom-table-deleterow
 DOM::ExceptionOr<void> HTMLTableElement::delete_row(long index)
 {
     auto rows = this->rows();
     auto rows_length = rows->length();
 
-    if (index < -1 || index >= (long)rows_length) {
+    // 1. If index is less than −1 or greater than or equal to the number of elements in the rows collection, then throw an "IndexSizeError" DOMException.
+    if (index < -1 || index >= (long)rows_length)
         return DOM::IndexSizeError::create("Index is negative or greater than the number of rows");
-    }
-    if (index == -1 && rows_length > 0) {
+
+    // 2. If index is −1, then remove the last element in the rows collection from its parent, or do nothing if the rows collection is empty.
+    if (index == -1) {
+        if (rows_length == 0)
+            return {};
+
         auto row_to_remove = rows->item(rows_length - 1);
         row_to_remove->remove(false);
-    } else {
-        auto row_to_remove = rows->item(index);
-        row_to_remove->remove(false);
+        return {};
     }
 
+    // 3. Otherwise, remove the indexth element in the rows collection from its parent.
+    auto row_to_remove = rows->item(index);
+    row_to_remove->remove(false);
     return {};
 }
 

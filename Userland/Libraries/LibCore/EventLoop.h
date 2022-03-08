@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, kleines Filmröllchen <malu.bertsch@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -11,13 +12,20 @@
 #include <AK/HashMap.h>
 #include <AK/Noncopyable.h>
 #include <AK/NonnullOwnPtr.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/Time.h>
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
+#include <LibCore/DeferredInvocationContext.h>
+#include <LibCore/Event.h>
 #include <LibCore/Forward.h>
+#include <LibThreading/MutexProtected.h>
 #include <sys/time.h>
 #include <sys/types.h>
 
 namespace Core {
+
+extern Threading::MutexProtected<EventLoop*> s_main_event_loop;
 
 class EventLoop {
 public:
@@ -26,8 +34,14 @@ public:
         Yes,
     };
 
+    enum class ShouldWake {
+        No,
+        Yes
+    };
+
     explicit EventLoop(MakeInspectable = MakeInspectable::No);
     ~EventLoop();
+    static void initialize_wake_pipes();
 
     int exec();
 
@@ -38,11 +52,20 @@ public:
 
     // processe events, generally called by exec() in a loop.
     // this should really only be used for integrating with other event loops
-    void pump(WaitMode = WaitMode::WaitForEvents);
+    size_t pump(WaitMode = WaitMode::WaitForEvents);
 
-    void post_event(Object& receiver, NonnullOwnPtr<Event>&&);
+    void spin_until(Function<bool()>);
 
-    static EventLoop& main();
+    void post_event(Object& receiver, NonnullOwnPtr<Event>&&, ShouldWake = ShouldWake::No);
+
+    template<typename Callback>
+    static decltype(auto) with_main_locked(Callback callback)
+    {
+        return s_main_event_loop.with_locked([&callback](auto*& event_loop) {
+            VERIFY(event_loop != nullptr);
+            return callback(event_loop);
+        });
+    }
     static EventLoop& current();
 
     bool was_exit_requested() const { return m_exit_requested; }
@@ -61,7 +84,8 @@ public:
         m_queued_events.extend(move(other.m_queued_events));
     }
 
-    static void wake();
+    static void wake_current();
+    void wake();
 
     static int register_signal(int signo, Function<void(int)> handler);
     static void unregister_signal(int handler_id);
@@ -73,9 +97,17 @@ public:
     };
     static void notify_forked(ForkEvent);
 
+    static bool has_been_instantiated();
+
+    void deferred_invoke(Function<void()> invokee)
+    {
+        auto context = DeferredInvocationContext::construct();
+        post_event(context, make<Core::DeferredInvocationEvent>(context, move(invokee)));
+    }
+
 private:
     void wait_for_event(WaitMode);
-    Optional<struct timeval> get_next_timer_expiration();
+    Optional<Time> get_next_timer_expiration();
     static void dispatch_signal(int);
     static void handle_signal(int);
 
@@ -97,10 +129,19 @@ private:
     bool m_exit_requested { false };
     int m_exit_code { 0 };
 
-    static int s_wake_pipe_fds[2];
+    static thread_local int s_wake_pipe_fds[2];
+    static thread_local bool s_wake_pipe_initialized;
+
+    // The wake pipe of this event loop needs to be accessible from other threads.
+    int (*m_wake_pipe_fds)[2];
 
     struct Private;
     NonnullOwnPtr<Private> m_private;
 };
+
+inline void deferred_invoke(Function<void()> invokee)
+{
+    EventLoop::current().deferred_invoke(move(invokee));
+}
 
 }

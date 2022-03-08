@@ -9,17 +9,20 @@
 #include <AK/Debug.h>
 #include <AK/Function.h>
 #include <AK/ScopeGuard.h>
+#include <AK/Span.h>
+#include <AK/String.h>
+#include <AK/Vector.h>
 
 namespace PDF {
 
 class Reader {
 public:
-    explicit Reader(ReadonlyBytes const& bytes)
+    explicit Reader(ReadonlyBytes bytes)
         : m_bytes(bytes)
     {
     }
 
-    ALWAYS_INLINE ReadonlyBytes const& bytes() const { return m_bytes; }
+    ALWAYS_INLINE ReadonlyBytes bytes() const { return m_bytes; }
     ALWAYS_INLINE size_t offset() const { return m_offset; }
 
     bool done() const

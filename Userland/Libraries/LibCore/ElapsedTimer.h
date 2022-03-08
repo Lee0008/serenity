@@ -6,12 +6,15 @@
 
 #pragma once
 
+#include <AK/Time.h>
 #include <sys/time.h>
 
 namespace Core {
 
 class ElapsedTimer {
 public:
+    static ElapsedTimer start_new();
+
     ElapsedTimer(bool precise = false)
         : m_precise(precise)
     {
@@ -19,7 +22,9 @@ public:
 
     bool is_valid() const { return m_valid; }
     void start();
+    void reset();
     int elapsed() const;
+    Time elapsed_time() const;
 
     const struct timeval& origin_time() const { return m_origin_time; }
 

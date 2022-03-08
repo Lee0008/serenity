@@ -31,9 +31,36 @@ TEST_CASE(visit)
     bool correct = false;
     Variant<int, String, float> the_value { 42.0f };
     the_value.visit(
-        [&](const int&) { correct = false; },
-        [&](const String&) { correct = false; },
-        [&](const float&) { correct = true; });
+        [&](int const&) { correct = false; },
+        [&](String const&) { correct = false; },
+        [&](float const&) { correct = true; });
+    EXPECT(correct);
+}
+
+TEST_CASE(visit_const)
+{
+    bool correct = false;
+    Variant<int, String> const the_value { "42"sv };
+
+    the_value.visit(
+        [&](String const&) { correct = true; },
+        [&](auto&) {},
+        [&](auto const&) {});
+
+    EXPECT(correct);
+
+    correct = false;
+    auto the_value_but_not_const = the_value;
+    the_value_but_not_const.visit(
+        [&](String const&) { correct = true; },
+        [&](auto&) {});
+
+    EXPECT(correct);
+
+    correct = false;
+    the_value_but_not_const.visit(
+        [&]<typename T>(T&) { correct = !IsConst<T>; });
+
     EXPECT(correct);
 }
 
@@ -57,6 +84,12 @@ TEST_CASE(destructor)
         Variant<DestructionChecker> test_variant { DestructionChecker { was_destroyed } };
     }
     EXPECT(was_destroyed);
+
+    bool was_destroyed_when_assigned_to = false;
+    Variant<DestructionChecker, int> original { DestructionChecker { was_destroyed_when_assigned_to } };
+    Variant<DestructionChecker, int> other { 42 };
+    original = other;
+    EXPECT(was_destroyed_when_assigned_to);
 }
 
 TEST_CASE(move_moves)
@@ -77,7 +110,7 @@ TEST_CASE(move_moves)
     EXPECT(second_variant.has<NoCopy>());
 }
 
-TEST_CASE(downcast)
+TEST_CASE(verify_cast)
 {
     Variant<i8, i16, i32, i64> one_integer_to_rule_them_all { static_cast<i32>(42) };
     auto fake_integer = one_integer_to_rule_them_all.downcast<i8, i32>();
@@ -133,9 +166,9 @@ TEST_CASE(return_values)
         MyVariant the_value { 42.0f };
 
         float value = the_value.visit(
-            [&](const int&) { return 1.0f; },
-            [&](const String&) { return 2.0f; },
-            [&](const float& f) { return f; });
+            [&](int const&) { return 1.0f; },
+            [&](String const&) { return 2.0f; },
+            [&](float const& f) { return f; });
         EXPECT_EQ(value, 42.0f);
     }
     {
@@ -151,22 +184,22 @@ TEST_CASE(return_values)
         const MyVariant the_value { "str" };
 
         String value = the_value.visit(
-            [&](const int&) { return String { "wrong" }; },
-            [&](const String& s) { return s; },
-            [&](const float&) { return String { "wrong" }; });
+            [&](int const&) { return String { "wrong" }; },
+            [&](String const& s) { return s; },
+            [&](float const&) { return String { "wrong" }; });
         EXPECT_EQ(value, "str");
     }
 }
 
 TEST_CASE(return_values_by_reference)
 {
-    auto ref = adopt_ref_if_nonnull(new Object());
+    auto ref = adopt_ref_if_nonnull(new (nothrow) Object());
     Variant<int, String, float> the_value { 42.0f };
 
     auto& value = the_value.visit(
-        [&](const int&) -> RefPtr<Object>& { return ref; },
-        [&](const String&) -> RefPtr<Object>& { return ref; },
-        [&](const float&) -> RefPtr<Object>& { return ref; });
+        [&](int const&) -> RefPtr<Object>& { return ref; },
+        [&](String const&) -> RefPtr<Object>& { return ref; },
+        [&](float const&) -> RefPtr<Object>& { return ref; });
 
     EXPECT_EQ(ref, value);
     EXPECT_EQ(ref->ref_count(), 1u);
@@ -212,4 +245,11 @@ TEST_CASE(copy_assign)
         VERIFY(the_value.has<String>());
         EXPECT_EQ(the_value.get<String>(), "Hello, world!");
     }
+}
+
+TEST_CASE(default_empty)
+{
+    Variant<Empty, int> my_variant;
+    EXPECT(my_variant.has<Empty>());
+    EXPECT(!my_variant.has<int>());
 }

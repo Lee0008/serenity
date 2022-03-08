@@ -15,13 +15,14 @@ namespace Debug::Dwarf::Expression {
 
 enum class Type {
     None,
-    UnsignedIntetger,
+    UnsignedInteger,
     Register,
 };
 
 struct Value {
     Type type;
     union {
+        FlatPtr as_addr;
         u32 as_u32;
     } data { 0 };
 };
@@ -31,6 +32,6 @@ enum class Operations : u8 {
     FbReg = 0x91,
 };
 
-Value evaluate(ReadonlyBytes, const PtraceRegisters&);
+Value evaluate(ReadonlyBytes, PtraceRegisters const&);
 
 }

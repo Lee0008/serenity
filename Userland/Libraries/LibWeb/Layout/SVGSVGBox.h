@@ -16,9 +16,7 @@ public:
     SVGSVGBox(DOM::Document&, SVG::SVGSVGElement&, NonnullRefPtr<CSS::StyleProperties>);
     virtual ~SVGSVGBox() override = default;
 
-    SVG::SVGSVGElement& dom_node() { return downcast<SVG::SVGSVGElement>(SVGGraphicsBox::dom_node()); }
-
-    virtual void prepare_for_replaced_layout() override;
+    SVG::SVGSVGElement& dom_node() { return verify_cast<SVG::SVGSVGElement>(SVGGraphicsBox::dom_node()); }
 
     virtual void before_children_paint(PaintContext& context, PaintPhase phase) override;
     virtual void after_children_paint(PaintContext& context, PaintPhase phase) override;

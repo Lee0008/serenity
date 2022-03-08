@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2019-2020, William McPherson <willmcpherson2@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,10 +16,6 @@ KeysWidget::KeysWidget(TrackManager& track_manager)
     : m_track_manager(track_manager)
 {
     set_fill_with_background_color(true);
-}
-
-KeysWidget::~KeysWidget()
-{
 }
 
 int KeysWidget::mouse_note() const
@@ -42,7 +39,7 @@ void KeysWidget::set_key(int key, Switch switch_key)
     }
     VERIFY(m_key_on[key] <= 2);
 
-    m_track_manager.set_note_current_octave(key, switch_key);
+    m_track_manager.set_keyboard_note(key + m_track_manager.octave_base(), switch_key);
 }
 
 bool KeysWidget::note_is_set(int note) const
@@ -270,7 +267,7 @@ int KeysWidget::note_for_event_position(const Gfx::IntPoint& a_point) const
 
 void KeysWidget::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
 
     m_mouse_down = true;
@@ -283,7 +280,7 @@ void KeysWidget::mousedown_event(GUI::MouseEvent& event)
 
 void KeysWidget::mouseup_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
 
     m_mouse_down = false;

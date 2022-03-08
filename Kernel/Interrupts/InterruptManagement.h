@@ -12,7 +12,7 @@
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/Types.h>
-#include <Kernel/ACPI/Definitions.h>
+#include <Kernel/Firmware/ACPI/Definitions.h>
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Interrupts/IOAPIC.h>
 #include <Kernel/Interrupts/IRQController.h>
@@ -54,6 +54,7 @@ public:
 
     bool smp_enabled() const { return m_smp_enabled; }
     RefPtr<IRQController> get_responsible_irq_controller(u8 interrupt_vector);
+    RefPtr<IRQController> get_responsible_irq_controller(IRQControllerType controller_type, u8 interrupt_vector);
 
     const Vector<ISAInterruptOverrideMetadata>& isa_overrides() const { return m_isa_interrupt_overrides; }
 

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/String.h>
+#include <LibGfx/Forward.h>
 #include <LibWeb/Forward.h>
 
 namespace Web::CSS {
@@ -14,8 +15,7 @@ namespace Web::CSS {
 class Length {
 public:
     enum class Type {
-        Undefined,
-        Percentage,
+        Calculated,
         Auto,
         Cm,
         In,
@@ -26,6 +26,7 @@ public:
         Pc,
         Ex,
         Em,
+        Ch,
         Rem,
         Vh,
         Vw,
@@ -33,46 +34,23 @@ public:
         Vmin,
     };
 
-    Length() { }
-    Length(int value, Type type)
-        : m_type(type)
-        , m_value(value)
-    {
-    }
-    Length(float value, Type type)
-        : m_type(type)
-        , m_value(value)
-    {
-    }
+    static Optional<Type> unit_from_name(StringView);
 
-    static Length make_auto() { return Length(0, Type::Auto); }
-    static Length make_px(float value) { return Length(value, Type::Px); }
+    // We have a RefPtr<CalculatedStyleValue> member, but can't include the header StyleValue.h as it includes
+    // this file already. To break the cyclic dependency, we must move all method definitions out.
+    Length(int value, Type type);
+    Length(float value, Type type);
 
-    Length resolved(const Length& fallback_for_undefined, const Layout::Node& layout_node, float reference_for_percent) const
-    {
-        if (is_undefined())
-            return fallback_for_undefined;
-        if (is_percentage())
-            return make_px(raw_value() / 100.0f * reference_for_percent);
-        if (is_relative())
-            return make_px(to_px(layout_node));
-        return *this;
-    }
+    static Length make_auto();
+    static Length make_px(float value);
+    static Length make_calculated(NonnullRefPtr<CalculatedStyleValue>);
+    Length percentage_of(Percentage const&) const;
 
-    Length resolved_or_auto(const Layout::Node& layout_node, float reference_for_percent) const
-    {
-        return resolved(make_auto(), layout_node, reference_for_percent);
-    }
+    Length resolved(Layout::Node const& layout_node) const;
 
-    Length resolved_or_zero(const Layout::Node& layout_node, float reference_for_percent) const
-    {
-        return resolved(make_px(0), layout_node, reference_for_percent);
-    }
-
-    bool is_undefined_or_auto() const { return m_type == Type::Undefined || m_type == Type::Auto; }
-    bool is_undefined() const { return m_type == Type::Undefined; }
-    bool is_percentage() const { return m_type == Type::Percentage; }
     bool is_auto() const { return m_type == Type::Auto; }
+    bool is_calculated() const { return m_type == Type::Calculated; }
+    bool is_px() const { return m_type == Type::Px; }
 
     bool is_absolute() const
     {
@@ -89,6 +67,7 @@ public:
     {
         return m_type == Type::Ex
             || m_type == Type::Em
+            || m_type == Type::Ch
             || m_type == Type::Rem
             || m_type == Type::Vh
             || m_type == Type::Vw
@@ -97,15 +76,25 @@ public:
     }
 
     float raw_value() const { return m_value; }
-    ALWAYS_INLINE float to_px(const Layout::Node& layout_node) const
+
+    float to_px(Layout::Node const&) const;
+
+    ALWAYS_INLINE float to_px(Gfx::IntRect const& viewport_rect, Gfx::FontMetrics const& font_metrics, float font_size, float root_font_size) const
     {
+        if (is_auto())
+            return 0;
         if (is_relative())
-            return relative_length_to_px(layout_node);
+            return relative_length_to_px(viewport_rect, font_metrics, font_size, root_font_size);
+        if (is_calculated())
+            VERIFY_NOT_REACHED(); // We can't resolve a calculated length from here. :^(
+        return absolute_length_to_px();
+    }
+
+    ALWAYS_INLINE float absolute_length_to_px() const
+    {
         constexpr float inch_pixels = 96.0f;
         constexpr float centimeter_pixels = (inch_pixels / 2.54f);
         switch (m_type) {
-        case Type::Auto:
-            return 0;
         case Type::Cm:
             return m_value * centimeter_pixels; // 1cm = 96px/2.54
         case Type::In:
@@ -120,22 +109,17 @@ public:
             return m_value * ((1.0f / 10.0f) * centimeter_pixels); // 1mm = 1/10th of 1cm
         case Type::Q:
             return m_value * ((1.0f / 40.0f) * centimeter_pixels); // 1Q = 1/40th of 1cm
-        case Type::Undefined:
-        case Type::Percentage:
         default:
             VERIFY_NOT_REACHED();
         }
     }
 
-    String to_string() const
-    {
-        if (is_auto())
-            return "[auto]";
-        return String::formatted("[{} {}]", m_value, unit_name());
-    }
+    String to_string() const;
 
     bool operator==(const Length& other) const
     {
+        if (is_calculated())
+            return m_calculated_style == other.m_calculated_style;
         return m_type == other.m_type && m_value == other.m_value;
     }
 
@@ -144,13 +128,23 @@ public:
         return !(*this == other);
     }
 
-private:
-    float relative_length_to_px(const Layout::Node&) const;
+    float relative_length_to_px(Gfx::IntRect const& viewport_rect, Gfx::FontMetrics const& font_metrics, float font_size, float root_font_size) const;
 
+private:
     const char* unit_name() const;
 
-    Type m_type { Type::Undefined };
+    Type m_type;
     float m_value { 0 };
+
+    RefPtr<CalculatedStyleValue> m_calculated_style;
 };
 
 }
+
+template<>
+struct AK::Formatter<Web::CSS::Length> : Formatter<StringView> {
+    ErrorOr<void> format(FormatBuilder& builder, Web::CSS::Length const& length)
+    {
+        return Formatter<StringView>::format(builder, length.to_string());
+    }
+};

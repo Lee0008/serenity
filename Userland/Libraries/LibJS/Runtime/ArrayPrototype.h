@@ -41,6 +41,8 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(includes);
     JS_DECLARE_NATIVE_FUNCTION(find);
     JS_DECLARE_NATIVE_FUNCTION(find_index);
+    JS_DECLARE_NATIVE_FUNCTION(find_last);
+    JS_DECLARE_NATIVE_FUNCTION(find_last_index);
     JS_DECLARE_NATIVE_FUNCTION(some);
     JS_DECLARE_NATIVE_FUNCTION(every);
     JS_DECLARE_NATIVE_FUNCTION(splice);
@@ -52,6 +54,8 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(keys);
     JS_DECLARE_NATIVE_FUNCTION(entries);
     JS_DECLARE_NATIVE_FUNCTION(copy_within);
+    JS_DECLARE_NATIVE_FUNCTION(group_by);
+    JS_DECLARE_NATIVE_FUNCTION(group_by_to_map);
 };
 
 }

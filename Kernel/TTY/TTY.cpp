@@ -1,15 +1,17 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/ScopeGuard.h>
 #include <AK/StringView.h>
+#include <Kernel/API/POSIX/errno.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Process.h>
 #include <Kernel/TTY/TTY.h>
-#include <LibC/errno_numbers.h>
 #include <LibC/signal_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 #define TTYDEFCHARS
@@ -18,7 +20,7 @@
 
 namespace Kernel {
 
-TTY::TTY(unsigned major, unsigned minor)
+TTY::TTY(MajorNumber major, MinorNumber minor)
     : CharacterDevice(major, minor)
 {
     set_default_termios();
@@ -40,21 +42,20 @@ void TTY::set_default_termios()
     memcpy(m_termios.c_cc, ttydefchars, sizeof(ttydefchars));
 }
 
-KResultOr<size_t> TTY::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
+ErrorOr<size_t> TTY::read(OpenFileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
 {
-    if (Process::current()->pgid() != pgid()) {
+    if (Process::current().pgid() != pgid()) {
         // FIXME: Should we propagate this error path somehow?
-        [[maybe_unused]] auto rc = Process::current()->send_signal(SIGTTIN, nullptr);
+        [[maybe_unused]] auto rc = Process::current().send_signal(SIGTTIN, nullptr);
         return EINTR;
     }
-
     if (m_input_buffer.size() < static_cast<size_t>(size))
         size = m_input_buffer.size();
 
     bool need_evaluate_block_conditions = false;
-    auto result = buffer.write_buffered<512>(size, [&](u8* data, size_t data_size) {
+    auto result = buffer.write_buffered<512>(size, [&](Bytes data) {
         size_t bytes_written = 0;
-        for (; bytes_written < data_size; ++bytes_written) {
+        for (; bytes_written < data.size(); ++bytes_written) {
             auto bit_index = m_input_buffer.head_index();
             bool is_special_character = m_special_character_bitmask[bit_index / 8] & (1 << (bit_index % 8));
             if (in_canonical_mode() && is_special_character) {
@@ -80,35 +81,35 @@ KResultOr<size_t> TTY::read(FileDescription&, u64, UserOrKernelBuffer& buffer, s
     return result;
 }
 
-KResultOr<size_t> TTY::write(FileDescription&, u64, const UserOrKernelBuffer& buffer, size_t size)
+ErrorOr<size_t> TTY::write(OpenFileDescription&, u64, const UserOrKernelBuffer& buffer, size_t size)
 {
-    if (m_termios.c_lflag & TOSTOP && Process::current()->pgid() != pgid()) {
-        [[maybe_unused]] auto rc = Process::current()->send_signal(SIGTTOU, nullptr);
+    if (m_termios.c_lflag & TOSTOP && Process::current().pgid() != pgid()) {
+        [[maybe_unused]] auto rc = Process::current().send_signal(SIGTTOU, nullptr);
         return EINTR;
     }
 
     constexpr size_t num_chars = 256;
-    return buffer.read_buffered<num_chars>(size, [&](u8 const* data, size_t buffer_bytes) {
+    return buffer.read_buffered<num_chars>(size, [&](ReadonlyBytes bytes) -> ErrorOr<size_t> {
         u8 modified_data[num_chars * 2];
         size_t modified_data_size = 0;
-        for (size_t i = 0; i < buffer_bytes; ++i) {
-            process_output(data[i], [this, &modified_data, &modified_data_size](u8 out_ch) {
+        for (const auto& byte : bytes) {
+            process_output(byte, [&modified_data, &modified_data_size](u8 out_ch) {
                 modified_data[modified_data_size++] = out_ch;
             });
         }
-        ssize_t bytes_written = on_tty_write(UserOrKernelBuffer::for_kernel_buffer(modified_data), modified_data_size);
-        VERIFY(bytes_written != 0);
-        if (bytes_written < 0 || !(m_termios.c_oflag & OPOST) || !(m_termios.c_oflag & ONLCR))
-            return bytes_written;
-        if ((size_t)bytes_written == modified_data_size)
-            return (ssize_t)buffer_bytes;
+        auto bytes_written_or_error = on_tty_write(UserOrKernelBuffer::for_kernel_buffer(modified_data), modified_data_size);
+        if (bytes_written_or_error.is_error() || !(m_termios.c_oflag & OPOST) || !(m_termios.c_oflag & ONLCR))
+            return bytes_written_or_error;
+        auto bytes_written = bytes_written_or_error.value();
+        if (bytes_written == modified_data_size)
+            return bytes.size();
 
         // Degenerate case where we converted some newlines and encountered a partial write
 
         // Calculate where in the input buffer the last character would have been
         size_t pos_data = 0;
-        for (ssize_t pos_modified_data = 0; pos_modified_data < bytes_written; ++pos_data) {
-            if (data[pos_data] == '\n')
+        for (size_t pos_modified_data = 0; pos_modified_data < bytes_written; ++pos_data) {
+            if (bytes[pos_data] == '\n')
                 pos_modified_data += 2;
             else
                 pos_modified_data += 1;
@@ -118,7 +119,7 @@ KResultOr<size_t> TTY::write(FileDescription&, u64, const UserOrKernelBuffer& bu
             if (pos_modified_data > bytes_written)
                 --pos_data;
         }
-        return (ssize_t)pos_data;
+        return pos_data;
     });
 }
 
@@ -139,7 +140,7 @@ void TTY::process_output(u8 ch, Functor put_char)
     }
 }
 
-bool TTY::can_read(const FileDescription&, size_t) const
+bool TTY::can_read(const OpenFileDescription&, u64) const
 {
     if (in_canonical_mode()) {
         return m_available_lines > 0;
@@ -147,7 +148,7 @@ bool TTY::can_read(const FileDescription&, size_t) const
     return !m_input_buffer.is_empty();
 }
 
-bool TTY::can_write(const FileDescription&, size_t) const
+bool TTY::can_write(const OpenFileDescription&, u64) const
 {
     return true;
 }
@@ -280,14 +281,32 @@ bool TTY::can_do_backspace() const
     return false;
 }
 
+static size_t length_with_tabs(CircularDeque<u8, TTY_BUFFER_SIZE> const& line)
+{
+    size_t length = 0;
+    for (auto& ch : line) {
+        length += (ch == '\t') ? 8 - (length % 8) : 1;
+    }
+    return length;
+}
+
 void TTY::do_backspace()
 {
     if (can_do_backspace()) {
-        m_input_buffer.dequeue_end();
-        // We deliberately don't process the output here.
-        echo(8);
-        echo(' ');
-        echo(8);
+        auto ch = m_input_buffer.dequeue_end();
+        size_t to_delete = 1;
+
+        if (ch == '\t') {
+            auto length = length_with_tabs(m_input_buffer);
+            to_delete = 8 - (length % 8);
+        }
+
+        for (size_t i = 0; i < to_delete; ++i) {
+            // We deliberately don't process the output here.
+            echo('\b');
+            echo(' ');
+            echo('\b');
+        }
 
         evaluate_block_conditions();
     }
@@ -360,9 +379,9 @@ void TTY::flush_input()
     evaluate_block_conditions();
 }
 
-int TTY::set_termios(const termios& t)
+ErrorOr<void> TTY::set_termios(const termios& t)
 {
-    int rc = 0;
+    ErrorOr<void> rc;
     m_termios = t;
 
     dbgln_if(TTY_DEBUG, "{} set_termios: ECHO={}, ISIG={}, ICANON={}, ECHOE={}, ECHOK={}, ECHONL={}, ISTRIP={}, ICRNL={}, INLCR={}, IGNCR={}, OPOST={}, ONLCR={}",
@@ -385,7 +404,7 @@ int TTY::set_termios(const termios& t)
         StringView name;
     };
 
-    static constexpr FlagDescription unimplemented_iflags[] = {
+    constexpr FlagDescription unimplemented_iflags[] = {
         { IGNBRK, "IGNBRK" },
         { BRKINT, "BRKINT" },
         { IGNPAR, "IGNPAR" },
@@ -402,11 +421,11 @@ int TTY::set_termios(const termios& t)
     for (auto flag : unimplemented_iflags) {
         if (m_termios.c_iflag & flag.value) {
             dbgln("FIXME: iflag {} unimplemented", flag.name);
-            rc = -ENOTIMPL;
+            rc = ENOTIMPL;
         }
     }
 
-    static constexpr FlagDescription unimplemented_oflags[] = {
+    constexpr FlagDescription unimplemented_oflags[] = {
         { OLCUC, "OLCUC" },
         { ONOCR, "ONOCR" },
         { ONLRET, "ONLRET" },
@@ -416,16 +435,16 @@ int TTY::set_termios(const termios& t)
     for (auto flag : unimplemented_oflags) {
         if (m_termios.c_oflag & flag.value) {
             dbgln("FIXME: oflag {} unimplemented", flag.name);
-            rc = -ENOTIMPL;
+            rc = ENOTIMPL;
         }
     }
 
-    static constexpr FlagDescription unimplemented_cflags[] = {
-        { CSIZE, "CSIZE" },
-        { CS5, "CS5" },
-        { CS6, "CS6" },
-        { CS7, "CS7" },
-        { CS8, "CS8" },
+    if ((m_termios.c_cflag & CSIZE) != CS8) {
+        dbgln("FIXME: Character sizes other than 8 bits are not supported");
+        rc = ENOTIMPL;
+    }
+
+    constexpr FlagDescription unimplemented_cflags[] = {
         { CSTOPB, "CSTOPB" },
         { CREAD, "CREAD" },
         { PARENB, "PARENB" },
@@ -436,127 +455,127 @@ int TTY::set_termios(const termios& t)
     for (auto flag : unimplemented_cflags) {
         if (m_termios.c_cflag & flag.value) {
             dbgln("FIXME: cflag {} unimplemented", flag.name);
-            rc = -ENOTIMPL;
+            rc = ENOTIMPL;
         }
     }
 
-    static constexpr FlagDescription unimplemented_lflags[] = {
+    constexpr FlagDescription unimplemented_lflags[] = {
         { TOSTOP, "TOSTOP" },
         { IEXTEN, "IEXTEN" }
     };
     for (auto flag : unimplemented_lflags) {
         if (m_termios.c_lflag & flag.value) {
             dbgln("FIXME: lflag {} unimplemented", flag.name);
-            rc = -ENOTIMPL;
+            rc = ENOTIMPL;
         }
     }
 
     return rc;
 }
 
-int TTY::ioctl(FileDescription&, unsigned request, FlatPtr arg)
+ErrorOr<void> TTY::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
 {
-    REQUIRE_PROMISE(tty);
-    auto& current_process = *Process::current();
-    termios* user_termios;
-    winsize* user_winsize;
-
+    auto& current_process = Process::current();
+    TRY(current_process.require_promise(Pledge::tty));
 #if 0
     // FIXME: When should we block things?
     //        How do we make this work together with MasterPTY forwarding to us?
     if (current_process.tty() && current_process.tty() != this) {
-        return -ENOTTY;
+        return ENOTTY;
     }
 #endif
     switch (request) {
-    case TIOCGPGRP:
-        return this->pgid().value();
+    case TIOCGPGRP: {
+        auto user_pgid = static_ptr_cast<pid_t*>(arg);
+        auto pgid = this->pgid().value();
+        return copy_to_user(user_pgid, &pgid);
+    }
     case TIOCSPGRP: {
-        ProcessGroupID pgid = static_cast<pid_t>(arg);
+        ProcessGroupID pgid = static_cast<pid_t>(arg.ptr());
         if (pgid <= 0)
-            return -EINVAL;
+            return EINVAL;
         InterruptDisabler disabler;
         auto process_group = ProcessGroup::from_pgid(pgid);
         // Disallow setting a nonexistent PGID.
         if (!process_group)
-            return -EINVAL;
+            return EINVAL;
 
         auto process = Process::from_pid(ProcessID(pgid.value()));
         SessionID new_sid = process ? process->sid() : Process::get_sid_from_pgid(pgid);
         if (!new_sid || new_sid != current_process.sid())
-            return -EPERM;
+            return EPERM;
         if (process && pgid != process->pgid())
-            return -EPERM;
+            return EPERM;
         m_pg = process_group;
 
         if (process) {
             if (auto parent = Process::from_pid(process->ppid())) {
                 m_original_process_parent = *parent;
-                return 0;
+                return {};
             }
         }
 
         m_original_process_parent = nullptr;
-        return 0;
+        return {};
     }
     case TCGETS: {
-        user_termios = reinterpret_cast<termios*>(arg);
-        if (!copy_to_user(user_termios, &m_termios))
-            return -EFAULT;
-        return 0;
+        auto user_termios = static_ptr_cast<termios*>(arg);
+        return copy_to_user(user_termios, &m_termios);
     }
     case TCSETS:
     case TCSETSF:
     case TCSETSW: {
-        user_termios = reinterpret_cast<termios*>(arg);
-        termios termios;
-        if (!copy_from_user(&termios, user_termios))
-            return -EFAULT;
-        int rc = set_termios(termios);
+        auto user_termios = static_ptr_cast<termios const*>(arg);
+        auto termios = TRY(copy_typed_from_user(user_termios));
+        auto rc = set_termios(termios);
         if (request == TCSETSF)
             flush_input();
         return rc;
     }
-    case TCFLSH:
+    case TCFLSH: {
         // Serenity's TTY implementation does not use an output buffer, so ignore TCOFLUSH.
-        if (arg == TCIFLUSH || arg == TCIOFLUSH) {
+        auto operation = static_cast<u8>(arg.ptr());
+        if (operation == TCIFLUSH || operation == TCIOFLUSH) {
             flush_input();
-        } else if (arg != TCOFLUSH) {
-            return -EINVAL;
+        } else if (operation != TCOFLUSH) {
+            return EINVAL;
         }
-        return 0;
-    case TIOCGWINSZ:
-        user_winsize = reinterpret_cast<winsize*>(arg);
-        winsize ws;
+        return {};
+    }
+    case TIOCGWINSZ: {
+        auto user_winsize = static_ptr_cast<winsize*>(arg);
+        winsize ws {};
         ws.ws_row = m_rows;
         ws.ws_col = m_columns;
         ws.ws_xpixel = 0;
         ws.ws_ypixel = 0;
-        if (!copy_to_user(user_winsize, &ws))
-            return -EFAULT;
-        return 0;
+        return copy_to_user(user_winsize, &ws);
+    }
     case TIOCSWINSZ: {
-        user_winsize = reinterpret_cast<winsize*>(arg);
-        winsize ws;
-        if (!copy_from_user(&ws, user_winsize))
-            return -EFAULT;
+        auto user_winsize = static_ptr_cast<winsize const*>(arg);
+        auto ws = TRY(copy_typed_from_user(user_winsize));
         if (ws.ws_col == m_columns && ws.ws_row == m_rows)
-            return 0;
+            return {};
         m_rows = ws.ws_row;
         m_columns = ws.ws_col;
         generate_signal(SIGWINCH);
-        return 0;
+        return {};
     }
     case TIOCSCTTY:
         current_process.set_tty(this);
-        return 0;
+        return {};
     case TIOCSTI:
-        return -EIO;
+        return EIO;
     case TIOCNOTTY:
         current_process.set_tty(nullptr);
-        return 0;
+        return {};
     }
-    return -EINVAL;
+    return EINVAL;
+}
+
+ErrorOr<NonnullOwnPtr<KString>> TTY::pseudo_path(const OpenFileDescription&) const
+{
+    return tty_name().try_clone();
 }
 
 void TTY::set_size(unsigned short columns, unsigned short rows)

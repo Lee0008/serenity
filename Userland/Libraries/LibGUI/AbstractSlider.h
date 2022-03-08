@@ -26,14 +26,24 @@ public:
     int page_step() const { return m_page_step; }
     bool jump_to_cursor() const { return m_jump_to_cursor; }
 
+    bool is_min() const { return m_value == m_min; }
+    bool is_max() const { return m_value == m_max; }
+
     void set_range(int min, int max);
-    void set_value(int);
+    virtual void set_value(int, AllowCallback = AllowCallback::Yes);
 
     void set_min(int min) { set_range(min, max()); }
     void set_max(int max) { set_range(min(), max); }
     void set_step(int step) { m_step = step; }
     void set_page_step(int page_step);
     void set_jump_to_cursor(bool b) { m_jump_to_cursor = b; }
+
+    virtual void increase_slider_by(int delta) { set_value(value() + delta); }
+    virtual void decrease_slider_by(int delta) { set_value(value() - delta); }
+    virtual void increase_slider_by_page_steps(int page_steps) { set_value(value() + page_step() * page_steps); }
+    virtual void decrease_slider_by_page_steps(int page_steps) { set_value(value() - page_step() * page_steps); }
+    virtual void increase_slider_by_steps(int steps) { set_value(value() + step() * steps); }
+    virtual void decrease_slider_by_steps(int steps) { set_value(value() - step() * steps); }
 
     Function<void(int)> on_change;
 

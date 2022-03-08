@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Vector.h>
+#include <LibDebug/ProcessInspector.h>
 #include <LibGUI/ListView.h>
 #include <LibGUI/Model.h>
 #include <sys/arch/i386/regs.h>
@@ -21,7 +22,7 @@ namespace HackStudio {
 
 class BacktraceModel final : public GUI::Model {
 public:
-    static NonnullRefPtr<BacktraceModel> create(const Debug::DebugSession&, const PtraceRegisters& regs);
+    static NonnullRefPtr<BacktraceModel> create(Debug::ProcessInspector const&, PtraceRegisters const& regs);
 
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return m_frames.size(); }
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return 1; }
@@ -33,13 +34,13 @@ public:
 
     virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
 
-    virtual void update() override { }
     virtual GUI::ModelIndex index(int row, int column, const GUI::ModelIndex&) const override;
 
     struct FrameInfo {
         String function_name;
-        u32 instruction_address;
-        u32 frame_base;
+        FlatPtr instruction_address { 0 };
+        FlatPtr frame_base { 0 };
+        Optional<Debug::DebugInfo::SourcePosition> m_source_position;
     };
 
     const Vector<FrameInfo>& frames() const { return m_frames; }
@@ -50,7 +51,7 @@ private:
     {
     }
 
-    static Vector<FrameInfo> create_backtrace(const Debug::DebugSession&, const PtraceRegisters&);
+    static Vector<FrameInfo> create_backtrace(Debug::ProcessInspector const&, PtraceRegisters const&);
 
     Vector<FrameInfo> m_frames;
 };

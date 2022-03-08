@@ -11,54 +11,16 @@
 namespace TextCodec {
 
 namespace {
-Latin1Decoder& latin1_decoder()
-{
-    static Latin1Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new Latin1Decoder;
-    return *decoder;
-}
-
-UTF8Decoder& utf8_decoder()
-{
-    static UTF8Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new UTF8Decoder;
-    return *decoder;
-}
-
-UTF16BEDecoder& utf16be_decoder()
-{
-    static UTF16BEDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new UTF16BEDecoder;
-    return *decoder;
-}
-
-Latin2Decoder& latin2_decoder()
-{
-    static Latin2Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new Latin2Decoder;
-    return *decoder;
-}
-
-HebrewDecoder& hebrew_decoder()
-{
-    static HebrewDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new HebrewDecoder;
-    return *decoder;
-}
-
-CyrillicDecoder& cyrillic_decoder()
-{
-    static CyrillicDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new CyrillicDecoder;
-    return *decoder;
-}
-
+Latin1Decoder s_latin1_decoder;
+UTF8Decoder s_utf8_decoder;
+UTF16BEDecoder s_utf16be_decoder;
+Latin2Decoder s_latin2_decoder;
+HebrewDecoder s_hebrew_decoder;
+CyrillicDecoder s_cyrillic_decoder;
+Koi8RDecoder s_koi8r_decoder;
+Latin9Decoder s_latin9_decoder;
+TurkishDecoder s_turkish_decoder;
+XUserDefinedDecoder s_x_user_defined_decoder;
 }
 
 Decoder* decoder_for(const String& a_encoding)
@@ -66,17 +28,25 @@ Decoder* decoder_for(const String& a_encoding)
     auto encoding = get_standardized_encoding(a_encoding);
     if (encoding.has_value()) {
         if (encoding.value().equals_ignoring_case("windows-1252"))
-            return &latin1_decoder();
+            return &s_latin1_decoder;
         if (encoding.value().equals_ignoring_case("utf-8"))
-            return &utf8_decoder();
+            return &s_utf8_decoder;
         if (encoding.value().equals_ignoring_case("utf-16be"))
-            return &utf16be_decoder();
+            return &s_utf16be_decoder;
         if (encoding.value().equals_ignoring_case("iso-8859-2"))
-            return &latin2_decoder();
+            return &s_latin2_decoder;
         if (encoding.value().equals_ignoring_case("windows-1255"))
-            return &hebrew_decoder();
+            return &s_hebrew_decoder;
         if (encoding.value().equals_ignoring_case("windows-1251"))
-            return &cyrillic_decoder();
+            return &s_cyrillic_decoder;
+        if (encoding.value().equals_ignoring_case("koi8-r"))
+            return &s_koi8r_decoder;
+        if (encoding.value().equals_ignoring_case("iso-8859-15"))
+            return &s_latin9_decoder;
+        if (encoding.value().equals_ignoring_case("windows-1254"))
+            return &s_turkish_decoder;
+        if (encoding.value().equals_ignoring_case("x-user-defined"))
+            return &s_x_user_defined_decoder;
     }
     dbgln("TextCodec: No decoder implemented for encoding '{}'", a_encoding);
     return nullptr;
@@ -145,6 +115,8 @@ Optional<String> get_standardized_encoding(const String& encoding)
         return "windows-1258";
     if (trimmed_lowercase_encoding.is_one_of("x-mac-cyrillic", "x-mac-ukrainian"))
         return "x-mac-cyrillic";
+    if (trimmed_lowercase_encoding.is_one_of("koi8-r", "koi8r"))
+        return "koi8-r";
     if (trimmed_lowercase_encoding.is_one_of("chinese", "csgb2312", "csiso58gb231280", "gb2312", "gb_2312", "gb_2312-80", "gbk", "iso-ir-58", "x-gbk"))
         return "GBK";
     if (trimmed_lowercase_encoding == "gb18030")
@@ -172,37 +144,119 @@ Optional<String> get_standardized_encoding(const String& encoding)
     return {};
 }
 
-bool is_standardized_encoding(const String& encoding)
+// https://encoding.spec.whatwg.org/#bom-sniff
+Decoder* bom_sniff_to_decoder(StringView input)
 {
-    auto standardized_encoding = get_standardized_encoding(encoding);
-    return standardized_encoding.has_value() && encoding.equals_ignoring_case(standardized_encoding.value());
+    // 1. Let BOM be the result of peeking 3 bytes from ioQueue, converted to a byte sequence.
+    // 2. For each of the rows in the table below, starting with the first one and going down,
+    //    if BOM starts with the bytes given in the first column, then return the encoding given
+    //    in the cell in the second column of that row. Otherwise, return null.
+
+    // Byte Order Mark | Encoding
+    // --------------------------
+    // 0xEF 0xBB 0xBF  | UTF-8
+    // 0xFE 0xFF       | UTF-16BE
+    // 0xFF 0xFE       | UTF-16LE
+
+    auto bytes = input.bytes();
+    if (bytes.size() < 2)
+        return nullptr;
+
+    auto first_byte = bytes[0];
+
+    switch (first_byte) {
+    case 0xEF: // UTF-8
+        if (bytes.size() < 3)
+            return nullptr;
+        return bytes[1] == 0xBB && bytes[2] == 0xBF ? &s_utf8_decoder : nullptr;
+    case 0xFE: // UTF-16BE
+        return bytes[1] == 0xFF ? &s_utf16be_decoder : nullptr;
+    case 0xFF: // UTF-16LE
+        // FIXME: There is currently no UTF-16LE decoder.
+        TODO();
+    }
+
+    return nullptr;
 }
 
-String UTF8Decoder::to_utf8(const StringView& input)
+// https://encoding.spec.whatwg.org/#decode
+String convert_input_to_utf8_using_given_decoder_unless_there_is_a_byte_order_mark(Decoder& fallback_decoder, StringView input)
 {
-    return input;
+    Decoder* actual_decoder = &fallback_decoder;
+
+    // 1. Let BOMEncoding be the result of BOM sniffing ioQueue.
+    // 2. If BOMEncoding is non-null:
+    if (auto* unicode_decoder = bom_sniff_to_decoder(input); unicode_decoder) {
+        // 1. Set encoding to BOMEncoding.
+        actual_decoder = unicode_decoder;
+
+        // 2. Read three bytes from ioQueue, if BOMEncoding is UTF-8; otherwise read two bytes. (Do nothing with those bytes.)
+        // FIXME: I imagine this will be pretty slow for large inputs, as it's regenerating the input without the first 2/3 bytes.
+        input = input.substring_view(unicode_decoder == &s_utf8_decoder ? 3 : 2);
+    }
+
+    VERIFY(actual_decoder);
+
+    // FIXME: 3. Process a queue with an instance of encoding’s decoder, ioQueue, output, and "replacement".
+    //        This isn't the exact same as the spec, especially the error mode of "replacement", which we don't have the concept of yet.
+    // 4. Return output.
+    return actual_decoder->to_utf8(input);
 }
 
-String UTF16BEDecoder::to_utf8(const StringView& input)
+String Decoder::to_utf8(StringView input)
 {
-    StringBuilder builder(input.length() / 2);
+    StringBuilder builder(input.length());
+    process(input, [&builder](u32 c) { builder.append_code_point(c); });
+    return builder.to_string();
+}
+
+void UTF8Decoder::process(StringView input, Function<void(u32)> on_code_point)
+{
+    for (auto c : input) {
+        on_code_point(c);
+    }
+}
+
+String UTF8Decoder::to_utf8(StringView input)
+{
+    // Discard the BOM
+    auto bomless_input = input;
+    if (auto bytes = input.bytes(); bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        bomless_input = input.substring_view(3);
+    }
+
+    return bomless_input;
+}
+
+void UTF16BEDecoder::process(StringView input, Function<void(u32)> on_code_point)
+{
     size_t utf16_length = input.length() - (input.length() % 2);
     for (size_t i = 0; i < utf16_length; i += 2) {
         u16 code_point = (input[i] << 8) | input[i + 1];
-        builder.append_code_point(code_point);
+        on_code_point(code_point);
     }
+}
+
+String UTF16BEDecoder::to_utf8(StringView input)
+{
+    // Discard the BOM
+    auto bomless_input = input;
+    if (auto bytes = input.bytes(); bytes.size() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+        bomless_input = input.substring_view(2);
+    }
+
+    StringBuilder builder(bomless_input.length() / 2);
+    process(bomless_input, [&builder](u32 c) { builder.append_code_point(c); });
     return builder.to_string();
 }
 
-String Latin1Decoder::to_utf8(const StringView& input)
+void Latin1Decoder::process(StringView input, Function<void(u32)> on_code_point)
 {
-    StringBuilder builder(input.length());
     for (size_t i = 0; i < input.length(); ++i) {
         u8 ch = input[i];
         // Latin1 is the same as the first 256 Unicode code_points, so no mapping is needed, just utf-8 encoding.
-        builder.append_code_point(ch);
+        on_code_point(ch);
     }
-    return builder.to_string();
 }
 
 namespace {
@@ -284,17 +338,14 @@ u32 convert_latin2_to_utf8(u8 in)
 }
 }
 
-String Latin2Decoder::to_utf8(const StringView& input)
+void Latin2Decoder::process(StringView input, Function<void(u32)> on_code_point)
 {
-    StringBuilder builder(input.length());
     for (auto c : input) {
-        builder.append_code_point(convert_latin2_to_utf8(c));
+        on_code_point(convert_latin2_to_utf8(c));
     }
-
-    return builder.to_string();
 }
 
-String HebrewDecoder::to_utf8(const StringView& input)
+void HebrewDecoder::process(StringView input, Function<void(u32)> on_code_point)
 {
     static constexpr Array<u32, 128> translation_table = {
         0x20AC, 0xFFFD, 0x201A, 0x192, 0x201E, 0x2026, 0x2020, 0x2021, 0x2C6, 0x2030, 0xFFFD, 0x2039, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD,
@@ -306,18 +357,16 @@ String HebrewDecoder::to_utf8(const StringView& input)
         0x5D0, 0x5D1, 0x5D2, 0x5D3, 0x5D4, 0x5D5, 0x5D6, 0x5D7, 0x5D8, 0x5D9, 0x5DA, 0x5DB, 0x5DC, 0x5DD, 0x5DE, 0x5DF,
         0x5E0, 0x5E1, 0x5E2, 0x5E3, 0x5E4, 0x5E5, 0x5E6, 0x5E7, 0x5E8, 0x5E9, 0x5EA, 0xFFFD, 0xFFFD, 0x200E, 0x200F, 0xFFFD
     };
-    StringBuilder builder(input.length());
     for (unsigned char ch : input) {
         if (ch < 0x80) { // Superset of ASCII
-            builder.append(ch);
+            on_code_point(ch);
         } else {
-            builder.append_code_point(translation_table[ch - 0x80]);
+            on_code_point(translation_table[ch - 0x80]);
         }
     }
-    return builder.to_string();
 }
 
-String CyrillicDecoder::to_utf8(const StringView& input)
+void CyrillicDecoder::process(StringView input, Function<void(u32)> on_code_point)
 {
     static constexpr Array<u32, 128> translation_table = {
         0x402, 0x403, 0x201A, 0x453, 0x201E, 0x2026, 0x2020, 0x2021, 0x20AC, 0x2030, 0x409, 0x2039, 0x40A, 0x40C, 0x40B, 0x40F,
@@ -329,15 +378,117 @@ String CyrillicDecoder::to_utf8(const StringView& input)
         0x430, 0x431, 0x432, 0x433, 0x434, 0x435, 0x436, 0x437, 0x438, 0x439, 0x43A, 0x43B, 0x43C, 0x43D, 0x43E, 0x43F,
         0x440, 0x441, 0x442, 0x443, 0x444, 0x445, 0x446, 0x447, 0x448, 0x449, 0x44A, 0x44B, 0x44C, 0x44D, 0x44E, 0x44F
     };
-    StringBuilder builder(input.length());
     for (unsigned char ch : input) {
         if (ch < 0x80) { // Superset of ASCII
-            builder.append(ch);
+            on_code_point(ch);
         } else {
-            builder.append_code_point(translation_table[ch - 0x80]);
+            on_code_point(translation_table[ch - 0x80]);
         }
     }
-    return builder.to_string();
+}
+
+void Koi8RDecoder::process(StringView input, Function<void(u32)> on_code_point)
+{
+    // clang-format off
+    static constexpr Array<u32, 128> translation_table = {
+        0x2500,0x2502,0x250c,0x2510,0x2514,0x2518,0x251c,0x2524,0x252c,0x2534,0x253c,0x2580,0x2584,0x2588,0x258c,0x2590,
+        0x2591,0x2592,0x2593,0x2320,0x25a0,0x2219,0x221a,0x2248,0x2264,0x2265,0xA0,0x2321,0xb0,0xb2,0xb7,0xf7,
+        0x2550,0x2551,0x2552,0xd191,0x2553,0x2554,0x2555,0x2556,0x2557,0x2558,0x2559,0x255a,0x255b,0x255c,0x255d,0x255e,
+        0x255f,0x2560,0x2561,0xd081,0x2562,0x2563,0x2564,0x2565,0x2566,0x2567,0x2568,0x2569,0x256a,0x256b,0x256c,0xa9,
+        0x44e,0x430,0x431,0x446,0x434,0x435,0x444,0x433,0x445,0x438,0x439,0x43a,0x43b,0x43c,0x43d,0x43e,
+        0x43f,0x44f,0x440,0x441,0x442,0x443,0x436,0x432,0x44c,0x44b,0x437,0x448,0x44d,0x449,0x447,0x44a,
+        0x42e,0x410,0x441,0x426,0x414,0x415,0x424,0x413,0x425,0x418,0x419,0x41a,0x41b,0x41c,0x41d,0x41e,
+        0x41f,0x42f,0x420,0x421,0x422,0x423,0x416,0x412,0x42c,0x42b,0x417,0x428,0x42d,0x429,0x427,0x42a,
+    };
+    // clang-format on
+
+    for (unsigned char ch : input) {
+        if (ch < 0x80) { // Superset of ASCII
+            on_code_point(ch);
+        } else {
+            on_code_point(translation_table[ch - 0x80]);
+        }
+    }
+}
+
+void Latin9Decoder::process(StringView input, Function<void(u32)> on_code_point)
+{
+    auto convert_latin9_to_utf8 = [](u8 ch) -> u32 {
+        // Latin9 is the same as the first 256 Unicode code points, except for 8 characters.
+        switch (ch) {
+        case 0xA4:
+            return 0x20AC;
+        case 0xA6:
+            return 0x160;
+        case 0xA8:
+            return 0x161;
+        case 0xB4:
+            return 0x17D;
+        case 0xB8:
+            return 0x17E;
+        case 0xBC:
+            return 0x152;
+        case 0xBD:
+            return 0x153;
+        case 0xBE:
+            return 0x178;
+        default:
+            return ch;
+        }
+    };
+
+    for (auto ch : input) {
+        on_code_point(convert_latin9_to_utf8(ch));
+    }
+}
+
+void TurkishDecoder::process(StringView input, Function<void(u32)> on_code_point)
+{
+    auto convert_turkish_to_utf8 = [](u8 ch) -> u32 {
+        // Turkish (aka ISO-8859-9, Windows-1254) is the same as the first 256 Unicode code points, except for 6 characters.
+        switch (ch) {
+        case 0xD0:
+            return 0x11E;
+        case 0xDD:
+            return 0x130;
+        case 0xDE:
+            return 0x15E;
+        case 0xF0:
+            return 0x11F;
+        case 0xFD:
+            return 0x131;
+        case 0xFE:
+            return 0x15F;
+        default:
+            return ch;
+        }
+    };
+
+    for (auto ch : input) {
+        on_code_point(convert_turkish_to_utf8(ch));
+    }
+}
+
+// https://encoding.spec.whatwg.org/#x-user-defined-decoder
+void XUserDefinedDecoder::process(StringView input, Function<void(u32)> on_code_point)
+{
+    auto convert_x_user_defined_to_utf8 = [](u8 ch) -> u32 {
+        // 2. If byte is an ASCII byte, return a code point whose value is byte.
+        // https://infra.spec.whatwg.org/#ascii-byte
+        // An ASCII byte is a byte in the range 0x00 (NUL) to 0x7F (DEL), inclusive.
+        // NOTE: This doesn't check for ch >= 0x00, as that would always be true due to being unsigned.
+        if (ch <= 0x7f)
+            return ch;
+
+        // 3. Return a code point whose value is 0xF780 + byte − 0x80.
+        return 0xF780 + ch - 0x80;
+    };
+
+    for (auto ch : input) {
+        on_code_point(convert_x_user_defined_to_utf8(ch));
+    }
+
+    // 1. If byte is end-of-queue, return finished.
 }
 
 }

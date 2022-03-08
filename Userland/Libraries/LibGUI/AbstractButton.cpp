@@ -44,7 +44,7 @@ void AbstractButton::set_text(String text)
     update();
 }
 
-void AbstractButton::set_checked(bool checked)
+void AbstractButton::set_checked(bool checked, AllowCallback allow_callback)
 {
     if (m_checked == checked)
         return;
@@ -70,8 +70,17 @@ void AbstractButton::set_checked(bool checked)
             set_focus(true);
     }
 
+    if (is_exclusive() && parent_widget()) {
+        // In a group of exclusive checkable buttons, only the currently checked button is focusable.
+        parent_widget()->for_each_child_of_type<GUI::AbstractButton>([&](auto& button) {
+            if (button.is_exclusive() && button.is_checkable())
+                button.set_focus_policy(button.is_checked() ? GUI::FocusPolicy::StrongFocus : GUI::FocusPolicy::NoFocus);
+            return IterationDecision::Continue;
+        });
+    }
+
     update();
-    if (on_checked)
+    if (on_checked && allow_callback == AllowCallback::Yes)
         on_checked(checked);
 }
 
@@ -87,7 +96,7 @@ void AbstractButton::mousemove_event(MouseEvent& event)
 {
     bool is_over = rect().contains(event.position());
     m_hovered = is_over;
-    if (event.buttons() & MouseButton::Left) {
+    if (event.buttons() & MouseButton::Primary) {
         bool being_pressed = is_over;
         if (being_pressed != m_being_pressed) {
             m_being_pressed = being_pressed;
@@ -105,26 +114,27 @@ void AbstractButton::mousemove_event(MouseEvent& event)
 
 void AbstractButton::mousedown_event(MouseEvent& event)
 {
-    if (event.button() == MouseButton::Left) {
+    if (event.button() == MouseButton::Primary) {
         m_being_pressed = true;
-        update();
+        repaint();
 
         if (m_auto_repeat_interval) {
             click();
             m_auto_repeat_timer->start(m_auto_repeat_interval);
         }
+        event.accept();
     }
     Widget::mousedown_event(event);
 }
 
 void AbstractButton::mouseup_event(MouseEvent& event)
 {
-    if (event.button() == MouseButton::Left) {
+    if (event.button() == MouseButton::Primary && m_being_pressed) {
         bool was_auto_repeating = m_auto_repeat_timer->is_active();
         m_auto_repeat_timer->stop();
         bool was_being_pressed = m_being_pressed;
         m_being_pressed = false;
-        update();
+        repaint();
         if (was_being_pressed && !was_auto_repeating)
             click(event.modifiers());
     }
@@ -137,23 +147,62 @@ void AbstractButton::enter_event(Core::Event&)
     update();
 }
 
-void AbstractButton::leave_event(Core::Event&)
+void AbstractButton::leave_event(Core::Event& event)
 {
     m_hovered = false;
+    if (m_being_keyboard_pressed)
+        m_being_keyboard_pressed = m_being_pressed = false;
     update();
+    event.accept();
+    Widget::leave_event(event);
+}
+
+void AbstractButton::focusout_event(GUI::FocusEvent& event)
+{
+    if (m_being_keyboard_pressed) {
+        m_being_pressed = m_being_keyboard_pressed = false;
+        event.accept();
+        update();
+    }
+    Widget::focusout_event(event);
 }
 
 void AbstractButton::keydown_event(KeyEvent& event)
 {
     if (event.key() == KeyCode::Key_Return || event.key() == KeyCode::Key_Space) {
-        m_being_pressed = true;
+        m_being_pressed = m_being_keyboard_pressed = true;
         update();
         event.accept();
         return;
     } else if (m_being_pressed && event.key() == KeyCode::Key_Escape) {
-        m_being_pressed = false;
+        m_being_pressed = m_being_keyboard_pressed = false;
         update();
         event.accept();
+        return;
+    }
+
+    // Arrow keys switch the currently checked option within an exclusive group of checkable buttons.
+    if (event.is_arrow_key() && !event.modifiers() && is_exclusive() && is_checkable() && parent_widget()) {
+        event.accept();
+        Vector<GUI::AbstractButton&> exclusive_siblings;
+        size_t this_index = 0;
+        parent_widget()->for_each_child_of_type<GUI::AbstractButton>([&](auto& sibling) {
+            if (&sibling == this) {
+                VERIFY(is_enabled());
+                this_index = exclusive_siblings.size();
+            }
+            if (sibling.is_exclusive() && sibling.is_checkable() && sibling.is_enabled())
+                exclusive_siblings.append(sibling);
+            return IterationDecision::Continue;
+        });
+        if (exclusive_siblings.size() <= 1)
+            return;
+        size_t new_checked_index;
+        if (event.key() == KeyCode::Key_Left || event.key() == KeyCode::Key_Up)
+            new_checked_index = this_index == 0 ? exclusive_siblings.size() - 1 : this_index - 1;
+        else
+            new_checked_index = this_index == exclusive_siblings.size() - 1 ? 0 : this_index + 1;
+        exclusive_siblings[new_checked_index].set_checked(true);
         return;
     }
     Widget::keydown_event(event);
@@ -161,27 +210,30 @@ void AbstractButton::keydown_event(KeyEvent& event)
 
 void AbstractButton::keyup_event(KeyEvent& event)
 {
-    if (m_being_pressed && (event.key() == KeyCode::Key_Return || event.key() == KeyCode::Key_Space)) {
+    bool was_being_pressed = m_being_pressed;
+    if (was_being_pressed && (event.key() == KeyCode::Key_Return || event.key() == KeyCode::Key_Space)) {
+        m_being_pressed = m_being_keyboard_pressed = false;
         click(event.modifiers());
+        update();
         event.accept();
         return;
     }
     Widget::keyup_event(event);
 }
 
-void AbstractButton::paint_text(Painter& painter, const Gfx::IntRect& rect, const Gfx::Font& font, Gfx::TextAlignment text_alignment)
+void AbstractButton::paint_text(Painter& painter, const Gfx::IntRect& rect, const Gfx::Font& font, Gfx::TextAlignment text_alignment, Gfx::TextWrapping text_wrapping)
 {
     auto clipped_rect = rect.intersected(this->rect());
 
     if (!is_enabled()) {
-        painter.draw_text(clipped_rect.translated(1, 1), text(), font, text_alignment, Color::White, Gfx::TextElision::Right);
-        painter.draw_text(clipped_rect, text(), font, text_alignment, Color::from_rgb(0x808080), Gfx::TextElision::Right);
+        painter.draw_text(clipped_rect.translated(1, 1), text(), font, text_alignment, palette().disabled_text_back(), Gfx::TextElision::Right, text_wrapping);
+        painter.draw_text(clipped_rect, text(), font, text_alignment, palette().disabled_text_front(), Gfx::TextElision::Right, text_wrapping);
         return;
     }
 
     if (text().is_empty())
         return;
-    painter.draw_text(clipped_rect, text(), font, text_alignment, palette().color(foreground_role()), Gfx::TextElision::Right);
+    painter.draw_text(clipped_rect, text(), font, text_alignment, palette().color(foreground_role()), Gfx::TextElision::Right, text_wrapping);
 }
 
 void AbstractButton::change_event(Event& event)

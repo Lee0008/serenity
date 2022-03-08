@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,6 +7,35 @@
 #pragma once
 
 namespace SQL {
+class BTree;
+class BTreeIterator;
+class ColumnDef;
+class Database;
+class HashBucket;
+class HashDirectoryNode;
+class HashIndex;
+class HashIndexIterator;
+class Heap;
+class Index;
+class IndexNode;
+class IndexDef;
+class Key;
+class KeyPartDef;
+class Relation;
+class Result;
+class ResultSet;
+class Row;
+class SchemaDef;
+class Serializer;
+class TableDef;
+class TreeNode;
+class Tuple;
+class TupleDescriptor;
+struct TupleElementDescriptor;
+class Value;
+}
+
+namespace SQL::AST {
 class AddColumn;
 class AlterTable;
 class ASTNode;

@@ -42,6 +42,7 @@ void WindowSwitcher::set_visible(bool visible)
         m_switcher_window->set_visible(visible);
     if (!m_visible)
         return;
+    clear_hovered_index();
     refresh();
 }
 
@@ -54,6 +55,11 @@ Window* WindowSwitcher::selected_window()
 
 void WindowSwitcher::event(Core::Event& event)
 {
+    if (event.type() == Event::WindowLeft) {
+        clear_hovered_index();
+        return;
+    }
+
     if (!static_cast<Event&>(event).is_mouse_event())
         return;
 
@@ -86,7 +92,7 @@ void WindowSwitcher::event(Core::Event& event)
 void WindowSwitcher::on_key_event(const KeyEvent& event)
 {
     if (event.type() == Event::KeyUp) {
-        if (event.key() == Key_Super) {
+        if (event.key() == (m_mode == Mode::ShowAllWindows ? Key_Super : Key_Alt)) {
             if (auto* window = selected_window()) {
                 window->set_minimized(false);
                 WindowManager::the().move_to_front_and_make_active(*window);
@@ -135,7 +141,12 @@ void WindowSwitcher::select_window_at_index(int index)
     m_selected_index = index;
     auto* highlight_window = m_windows.at(index).ptr();
     VERIFY(highlight_window);
-    WindowManager::the().set_highlight_window(highlight_window);
+    auto& wm = WindowManager::the();
+    if (m_mode == Mode::ShowAllWindows) {
+        if (auto& window_stack = highlight_window->window_stack(); &window_stack != &wm.current_window_stack())
+            wm.switch_to_window_stack(window_stack, nullptr, false);
+    }
+    wm.set_highlight_window(highlight_window);
     redraw();
 }
 
@@ -158,10 +169,23 @@ Gfx::IntRect WindowSwitcher::item_rect(int index) const
 void WindowSwitcher::draw()
 {
     auto palette = WindowManager::the().palette();
+
+    Gfx::IntRect rect = { {}, m_rect.size() };
     Gfx::Painter painter(*m_switcher_window->backing_store());
-    painter.fill_rect({ {}, m_rect.size() }, palette.window());
-    painter.draw_rect({ {}, m_rect.size() }, palette.threed_shadow2());
+    painter.clear_rect(rect, Color::Transparent);
+
+    // FIXME: Perhaps the WindowSwitcher could render as an overlay instead.
+    //        That would require adding support for event handling to overlays.
+    if (auto* shadow_bitmap = WindowManager::the().overlay_rect_shadow()) {
+        // FIXME: Support other scale factors.
+        int scale_factor = 1;
+        Gfx::StylePainter::paint_simple_rect_shadow(painter, rect, shadow_bitmap->bitmap(scale_factor), true, true);
+    }
+
     for (size_t index = 0; index < m_windows.size(); ++index) {
+        // FIXME: Ideally we wouldn't be in draw() without having pruned destroyed windows from the list already.
+        if (m_windows.at(index) == nullptr)
+            continue;
         auto& window = *m_windows.at(index);
         auto item_rect = this->item_rect(index);
         Color text_color;
@@ -169,24 +193,23 @@ void WindowSwitcher::draw()
         if (static_cast<int>(index) == m_selected_index) {
             painter.fill_rect(item_rect, palette.selection());
             text_color = palette.selection_text();
-            rect_text_color = palette.threed_shadow1();
+            rect_text_color = palette.selection_text().with_alpha(0xcc);
         } else {
             if (static_cast<int>(index) == m_hovered_index)
-                Gfx::StylePainter::paint_button(painter, item_rect, palette, Gfx::ButtonStyle::Coolbar, false, true);
-            text_color = palette.window_text();
-            rect_text_color = palette.threed_shadow2();
+                Gfx::StylePainter::paint_frame(painter, item_rect, palette, Gfx::FrameShape::Panel, Gfx::FrameShadow::Raised, 2);
+            text_color = Color::White;
+            rect_text_color = Color(Color::White).with_alpha(0xcc);
         }
         item_rect.shrink(item_padding(), 0);
         Gfx::IntRect thumbnail_rect = { item_rect.location().translated(0, 5), { thumbnail_width(), thumbnail_height() } };
-        if (window.backing_store()) {
-            painter.draw_scaled_bitmap(thumbnail_rect, *window.backing_store(), window.backing_store()->rect());
-            Gfx::StylePainter::paint_frame(painter, thumbnail_rect.inflated(4, 4), palette, Gfx::FrameShape::Container, Gfx::FrameShadow::Sunken, 2);
-        }
+        if (window.backing_store())
+            painter.draw_scaled_bitmap(thumbnail_rect, *window.backing_store(), window.backing_store()->rect(), 1.0f, Gfx::Painter::ScalingMode::BilinearBlend);
         Gfx::IntRect icon_rect = { thumbnail_rect.bottom_right().translated(-window.icon().width(), -window.icon().height()), { window.icon().width(), window.icon().height() } };
-        painter.fill_rect(icon_rect, palette.window());
         painter.blit(icon_rect.location(), window.icon(), window.icon().rect());
+        painter.draw_text(item_rect.translated(thumbnail_width() + 12, 0).translated(1, 1), window.computed_title(), WindowManager::the().window_title_font(), Gfx::TextAlignment::CenterLeft, text_color.inverted());
         painter.draw_text(item_rect.translated(thumbnail_width() + 12, 0), window.computed_title(), WindowManager::the().window_title_font(), Gfx::TextAlignment::CenterLeft, text_color);
-        painter.draw_text(item_rect, window.rect().to_string(), Gfx::TextAlignment::CenterRight, rect_text_color);
+        auto window_details = m_windows_on_multiple_stacks ? String::formatted("{} on {}:{}", window.rect().to_string(), window.window_stack().row() + 1, window.window_stack().column() + 1) : window.rect().to_string();
+        painter.draw_text(item_rect, window_details, Gfx::TextAlignment::CenterRight, rect_text_color);
     }
 }
 
@@ -199,31 +222,54 @@ void WindowSwitcher::refresh()
     if (!selected_window)
         selected_window = wm.highlight_window() ? wm.highlight_window() : wm.active_window();
     m_windows.clear();
+    m_windows_on_multiple_stacks = false;
     m_selected_index = 0;
     int window_count = 0;
     int longest_title_width = 0;
-    wm.for_each_window_of_type_from_front_to_back(
-        WindowType::Normal, [&](Window& window) {
-            if (window.is_frameless())
+
+    WindowStack* last_added_on_window_stack = nullptr;
+    auto add_window_stack_windows = [&](WindowStack& window_stack) {
+        window_stack.for_each_window_of_type_from_front_to_back(
+            WindowType::Normal, [&](Window& window) {
+                if (window.is_frameless())
+                    return IterationDecision::Continue;
+                ++window_count;
+                longest_title_width = max(longest_title_width, wm.font().width(window.computed_title()));
+                if (selected_window == &window)
+                    m_selected_index = m_windows.size();
+                m_windows.append(window);
+                auto& window_stack = window.window_stack();
+                if (!last_added_on_window_stack) {
+                    last_added_on_window_stack = &window_stack;
+                } else if (last_added_on_window_stack != &window_stack) {
+                    last_added_on_window_stack = &window_stack;
+                    m_windows_on_multiple_stacks = true;
+                }
                 return IterationDecision::Continue;
-            ++window_count;
-            longest_title_width = max(longest_title_width, wm.font().width(window.computed_title()));
-            if (selected_window == &window)
-                m_selected_index = m_windows.size();
-            m_windows.append(window);
+            },
+            true);
+    };
+    if (m_mode == Mode::ShowAllWindows) {
+        wm.for_each_window_stack([&](auto& window_stack) {
+            add_window_stack_windows(window_stack);
             return IterationDecision::Continue;
-        },
-        true);
+        });
+    } else {
+        add_window_stack_windows(wm.current_window_stack());
+    }
+
     if (m_windows.is_empty()) {
         hide();
         return;
     }
-    int space_for_window_rect = 180;
-    m_rect.set_width(thumbnail_width() + longest_title_width + space_for_window_rect + padding() * 2 + item_padding() * 2);
+    int space_for_window_details = 200;
+    m_rect.set_width(thumbnail_width() + longest_title_width + space_for_window_details + padding() * 2 + item_padding() * 2);
     m_rect.set_height(window_count * item_height() + padding() * 2);
-    m_rect.center_within(Screen::the().rect());
-    if (!m_switcher_window)
+    m_rect.center_within(Screen::main().rect());
+    if (!m_switcher_window) {
         m_switcher_window = Window::construct(*this, WindowType::WindowSwitcher);
+        m_switcher_window->set_has_alpha_channel(true);
+    }
     m_switcher_window->set_rect(m_rect);
     redraw();
 }
@@ -232,6 +278,14 @@ void WindowSwitcher::refresh_if_needed()
 {
     if (m_visible)
         refresh();
+}
+
+void WindowSwitcher::clear_hovered_index()
+{
+    if (m_hovered_index == -1)
+        return;
+    m_hovered_index = -1;
+    redraw();
 }
 
 }

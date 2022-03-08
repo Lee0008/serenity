@@ -29,15 +29,11 @@ describe("normal behavior", () => {
     test("prevents changing attributes of existing properties", () => {
         const o = { foo: "bar" };
         Object.seal(o);
-        // FIXME: These don't change anything and should not throw!
-        // expect(Object.defineProperty(o, "foo", {})).toBe(o);
-        // expect(Object.defineProperty(o, "foo", { configurable: false })).toBe(o);
+        expect(Object.defineProperty(o, "foo", {})).toBe(o);
+        expect(Object.defineProperty(o, "foo", { configurable: false })).toBe(o);
         expect(() => {
             Object.defineProperty(o, "foo", { configurable: true });
-        }).toThrowWithMessage(
-            TypeError,
-            "Cannot change attributes of non-configurable property 'foo'"
-        );
+        }).toThrowWithMessage(TypeError, "Object's [[DefineOwnProperty]] method returned false");
     });
 
     test("doesn't prevent changing value of existing properties", () => {

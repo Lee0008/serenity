@@ -3,12 +3,6 @@ test("length is 1", () => {
 });
 
 describe("errors", () => {
-    test("requires at least one argument", () => {
-        expect(() => {
-            [].reduce();
-        }).toThrowWithMessage(TypeError, "Array.prototype.reduce() requires at least one argument");
-    });
-
     test("callback must be a function", () => {
         expect(() => {
             [].reduce(undefined);
@@ -31,6 +25,11 @@ describe("errors", () => {
 describe("normal behavior", () => {
     test("basic functionality", () => {
         [1, 2].reduce(function () {
+            expect(this).toBe(globalThis);
+        });
+
+        [1, 2].reduce(function () {
+            "use strict";
             expect(this).toBeUndefined();
         });
 

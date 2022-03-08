@@ -1,52 +1,60 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "ProcessGroup.h"
+#include <AK/Singleton.h>
+#include <Kernel/ProcessGroup.h>
 
 namespace Kernel {
 
-RecursiveSpinLock g_process_groups_lock;
-ProcessGroup::List* g_process_groups;
+static Singleton<SpinlockProtected<ProcessGroup::List>> s_process_groups;
+
+SpinlockProtected<ProcessGroup::List>& process_groups()
+{
+    return *s_process_groups;
+}
 
 ProcessGroup::~ProcessGroup()
 {
-    ScopedSpinLock lock(g_process_groups_lock);
-    g_process_groups->remove(*this);
+    process_groups().with([&](auto& groups) {
+        groups.remove(*this);
+    });
 }
 
-RefPtr<ProcessGroup> ProcessGroup::create(ProcessGroupID pgid)
+ErrorOr<NonnullRefPtr<ProcessGroup>> ProcessGroup::try_create(ProcessGroupID pgid)
 {
-    auto process_group = adopt_ref_if_nonnull(new ProcessGroup(pgid));
-    if (process_group) {
-        ScopedSpinLock lock(g_process_groups_lock);
-        g_process_groups->prepend(*process_group);
-    }
-
+    auto process_group = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) ProcessGroup(pgid)));
+    process_groups().with([&](auto& groups) {
+        groups.prepend(*process_group);
+    });
     return process_group;
 }
 
-RefPtr<ProcessGroup> ProcessGroup::find_or_create(ProcessGroupID pgid)
+ErrorOr<NonnullRefPtr<ProcessGroup>> ProcessGroup::try_find_or_create(ProcessGroupID pgid)
 {
-    ScopedSpinLock lock(g_process_groups_lock);
-
-    if (auto existing = from_pgid(pgid))
-        return existing.release_nonnull();
-
-    return create(pgid);
+    return process_groups().with([&](auto& groups) -> ErrorOr<NonnullRefPtr<ProcessGroup>> {
+        for (auto& group : groups) {
+            if (group.pgid() == pgid)
+                return group;
+        }
+        auto process_group = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) ProcessGroup(pgid)));
+        groups.prepend(*process_group);
+        return process_group;
+    });
 }
 
 RefPtr<ProcessGroup> ProcessGroup::from_pgid(ProcessGroupID pgid)
 {
-    ScopedSpinLock lock(g_process_groups_lock);
-
-    for (auto& group : *g_process_groups) {
-        if (group.pgid() == pgid)
-            return &group;
-    }
-    return nullptr;
+    return process_groups().with([&](auto& groups) -> RefPtr<ProcessGroup> {
+        for (auto& group : groups) {
+            if (group.pgid() == pgid)
+                return &group;
+        }
+        return nullptr;
+    });
 }
 
 }

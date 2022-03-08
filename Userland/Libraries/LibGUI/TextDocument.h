@@ -17,6 +17,7 @@
 #include <LibGUI/Forward.h>
 #include <LibGUI/TextRange.h>
 #include <LibGUI/UndoStack.h>
+#include <LibGUI/Widget.h>
 #include <LibGfx/Color.h>
 #include <LibGfx/TextAttributes.h>
 #include <LibRegex/Regex.h>
@@ -44,8 +45,8 @@ public:
         virtual void document_did_insert_line(size_t) = 0;
         virtual void document_did_remove_line(size_t) = 0;
         virtual void document_did_remove_all_lines() = 0;
-        virtual void document_did_change() = 0;
-        virtual void document_did_set_text() = 0;
+        virtual void document_did_change(AllowCallback = AllowCallback::Yes) = 0;
+        virtual void document_did_set_text(AllowCallback = AllowCallback::Yes) = 0;
         virtual void document_did_set_cursor(const TextPosition&) = 0;
         virtual void document_did_update_undo_stack() = 0;
 
@@ -62,7 +63,7 @@ public:
 
     void set_spans(Vector<TextDocumentSpan> spans) { m_spans = move(spans); }
 
-    bool set_text(const StringView&);
+    bool set_text(StringView, AllowCallback = AllowCallback::Yes);
 
     const NonnullOwnPtrVector<TextDocumentLine>& lines() const { return m_lines; }
     NonnullOwnPtrVector<TextDocumentLine>& lines() { return m_lines; }
@@ -87,11 +88,11 @@ public:
     String text() const;
     String text_in_range(const TextRange&) const;
 
-    Vector<TextRange> find_all(const StringView& needle, bool regmatch = false);
+    Vector<TextRange> find_all(StringView needle, bool regmatch = false);
 
-    void update_regex_matches(const StringView&);
-    TextRange find_next(const StringView&, const TextPosition& start = {}, SearchShouldWrap = SearchShouldWrap::Yes, bool regmatch = false, bool match_case = true);
-    TextRange find_previous(const StringView&, const TextPosition& start = {}, SearchShouldWrap = SearchShouldWrap::Yes, bool regmatch = false, bool match_case = true);
+    void update_regex_matches(StringView);
+    TextRange find_next(StringView, const TextPosition& start = {}, SearchShouldWrap = SearchShouldWrap::Yes, bool regmatch = false, bool match_case = true);
+    TextRange find_previous(StringView, const TextPosition& start = {}, SearchShouldWrap = SearchShouldWrap::Yes, bool regmatch = false, bool match_case = true);
 
     TextPosition next_position_after(const TextPosition&, SearchShouldWrap = SearchShouldWrap::Yes) const;
     TextPosition previous_position_before(const TextPosition&, SearchShouldWrap = SearchShouldWrap::Yes) const;
@@ -106,6 +107,8 @@ public:
     TextPosition first_word_break_before(const TextPosition&, bool start_at_column_before) const;
     TextPosition first_word_break_after(const TextPosition&) const;
 
+    TextPosition first_word_before(const TextPosition&, bool start_at_column_before) const;
+
     void add_to_undo_stack(NonnullOwnPtr<TextDocumentUndoCommand>);
 
     bool can_undo() const { return m_undo_stack.can_undo(); }
@@ -119,7 +122,7 @@ public:
     void set_all_cursors(const TextPosition&);
 
     TextPosition insert_at(const TextPosition&, u32, const Client* = nullptr);
-    TextPosition insert_at(const TextPosition&, const StringView&, const Client* = nullptr);
+    TextPosition insert_at(const TextPosition&, StringView, const Client* = nullptr);
     void remove(const TextRange&);
 
     virtual bool is_code_document() const { return false; }
@@ -151,14 +154,14 @@ private:
 class TextDocumentLine {
 public:
     explicit TextDocumentLine(TextDocument&);
-    explicit TextDocumentLine(TextDocument&, const StringView&);
+    explicit TextDocumentLine(TextDocument&, StringView);
 
     String to_utf8() const;
 
     Utf32View view() const { return { code_points(), length() }; }
     const u32* code_points() const { return m_text.data(); }
     size_t length() const { return m_text.size(); }
-    bool set_text(TextDocument&, const StringView&);
+    bool set_text(TextDocument&, StringView);
     void set_text(TextDocument&, Vector<u32>);
     void append(TextDocument&, u32);
     void prepend(TextDocument&, u32);

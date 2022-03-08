@@ -41,7 +41,7 @@ void FunctionDeclaration::dump(FILE* output, size_t indent) const
     m_return_type->dump(output, indent + 1);
     if (!m_name.is_null()) {
         print_indent(output, indent + 1);
-        outln(output, "{}", m_name);
+        outln(output, "{}", m_name->full_name());
     }
     print_indent(output, indent + 1);
     outln(output, "(");
@@ -75,14 +75,14 @@ void Type::dump(FILE* output, size_t indent) const
     outln(output, "{}", to_string());
 }
 
-String Type::to_string() const
+String NamedType::to_string() const
 {
     String qualifiers_string;
-    if (!m_qualifiers.is_empty())
-        qualifiers_string = String::formatted("[{}] ", String::join(" ", m_qualifiers));
+    if (!qualifiers().is_empty())
+        qualifiers_string = String::formatted("[{}] ", String::join(" ", qualifiers()));
 
     String name;
-    if (m_is_auto)
+    if (is_auto())
         name = "auto";
     else
         name = m_name.is_null() ? "" : m_name->full_name();
@@ -100,6 +100,41 @@ String Pointer::to_string() const
     return builder.to_string();
 }
 
+String Reference::to_string() const
+{
+    if (!m_referenced_type)
+        return {};
+    StringBuilder builder;
+    builder.append(m_referenced_type->to_string());
+    if (m_kind == Kind::Lvalue)
+        builder.append("&");
+    else
+        builder.append("&&");
+    return builder.to_string();
+}
+
+String FunctionType::to_string() const
+{
+    StringBuilder builder;
+    builder.append(m_return_type->to_string());
+    builder.append("(");
+    bool first = true;
+    for (auto& parameter : m_parameters) {
+        if (first)
+            first = false;
+        else
+            builder.append(", ");
+        if (parameter.type())
+            builder.append(parameter.type()->to_string());
+        if (parameter.name() && !parameter.full_name().is_empty()) {
+            builder.append(" ");
+            builder.append(parameter.full_name());
+        }
+    }
+    builder.append(")");
+    return builder.to_string();
+}
+
 void Parameter::dump(FILE* output, size_t indent) const
 {
     ASTNode::dump(output, indent);
@@ -109,7 +144,7 @@ void Parameter::dump(FILE* output, size_t indent) const
     }
     if (!m_name.is_null()) {
         print_indent(output, indent);
-        outln(output, "{}", m_name);
+        outln(output, "{}", m_name->full_name());
     }
     if (m_type)
         m_type->dump(output, indent + 1);
@@ -142,7 +177,7 @@ void VariableDeclaration::dump(FILE* output, size_t indent) const
     if (m_type)
         m_type->dump(output, indent + 1);
     print_indent(output, indent + 1);
-    outln(output, "{}", m_name);
+    outln(output, "{}", full_name());
     if (m_initial_value)
         m_initial_value->dump(output, indent + 1);
 }
@@ -284,10 +319,12 @@ void EnumDeclaration::dump(FILE* output, size_t indent) const
 {
     ASTNode::dump(output, indent);
     print_indent(output, indent);
-    outln(output, "{}", m_name);
+    outln(output, "{}", full_name());
     for (auto& entry : m_entries) {
         print_indent(output, indent + 1);
-        outln(output, "{}", entry);
+        outln(output, "{}", entry.name);
+        if (entry.value)
+            entry.value->dump(output, indent + 2);
     }
 }
 
@@ -295,7 +332,7 @@ void StructOrClassDeclaration::dump(FILE* output, size_t indent) const
 {
     ASTNode::dump(output, indent);
     print_indent(output, indent);
-    outln(output, "{}", m_name);
+    outln(output, "{}", full_name());
     for (auto& member : m_members) {
         member.dump(output, indent + 1);
     }
@@ -355,6 +392,29 @@ void Pointer::dump(FILE* output, size_t indent) const
     if (!m_pointee.is_null()) {
         m_pointee->dump(output, indent + 1);
     }
+}
+
+void Reference::dump(FILE* output, size_t indent) const
+{
+    ASTNode::dump(output, indent);
+    print_indent(output, indent + 1);
+    outln(output, "{}", m_kind == Kind::Lvalue ? "&" : "&&");
+    if (!m_referenced_type.is_null()) {
+        m_referenced_type->dump(output, indent + 1);
+    }
+}
+
+void FunctionType::dump(FILE* output, size_t indent) const
+{
+    ASTNode::dump(output, indent);
+    if (m_return_type)
+        m_return_type->dump(output, indent + 1);
+    print_indent(output, indent + 1);
+    outln("(");
+    for (auto& parameter : m_parameters)
+        parameter.dump(output, indent + 2);
+    print_indent(output, indent + 1);
+    outln(")");
 }
 
 void MemberExpression::dump(FILE* output, size_t indent) const
@@ -451,7 +511,7 @@ void NamespaceDeclaration::dump(FILE* output, size_t indent) const
 {
     ASTNode::dump(output, indent);
     print_indent(output, indent + 1);
-    outln(output, "{}", m_name);
+    outln(output, "{}", full_name());
     for (auto& decl : m_declarations)
         decl.dump(output, indent + 1);
 }
@@ -468,19 +528,26 @@ void Name::dump(FILE* output, size_t indent) const
     outln(output, "{}", full_name());
 }
 
-String Name::full_name() const
+StringView Name::full_name() const
 {
+    if (m_full_name.has_value())
+        return *m_full_name;
+
     StringBuilder builder;
     if (!m_scope.is_empty()) {
         for (auto& scope : m_scope) {
-            builder.appendff("{}::", scope.m_name);
+            builder.appendff("{}::", scope.name());
         }
     }
-    return String::formatted("{}{}", builder.to_string(), m_name.is_null() ? "" : m_name->m_name);
+    m_full_name = String::formatted("{}{}", builder.to_string(), m_name.is_null() ? "" : m_name->name());
+    return *m_full_name;
 }
 
-String TemplatizedName::full_name() const
+StringView TemplatizedName::full_name() const
 {
+    if (m_full_name.has_value())
+        return *m_full_name;
+
     StringBuilder name;
     name.append(Name::full_name());
     name.append('<');
@@ -488,7 +555,8 @@ String TemplatizedName::full_name() const
         name.append(type.to_string());
     }
     name.append('>');
-    return name.to_string();
+    m_full_name = name.to_string();
+    return *m_full_name;
 }
 
 void CppCastExpression::dump(FILE* output, size_t indent) const
@@ -539,13 +607,13 @@ void Constructor::dump(FILE* output, size_t indent) const
     outln(output, "C'tor");
     print_indent(output, indent + 1);
     outln(output, "(");
-    for (const auto& arg : m_parameters) {
+    for (const auto& arg : parameters()) {
         arg.dump(output, indent + 1);
     }
     print_indent(output, indent + 1);
     outln(output, ")");
-    if (!m_definition.is_null()) {
-        m_definition->dump(output, indent + 1);
+    if (definition()) {
+        definition()->dump(output, indent + 1);
     }
 }
 
@@ -555,14 +623,26 @@ void Destructor::dump(FILE* output, size_t indent) const
     outln(output, "D'tor");
     print_indent(output, indent + 1);
     outln(output, "(");
-    for (const auto& arg : m_parameters) {
+    for (const auto& arg : parameters()) {
         arg.dump(output, indent + 1);
     }
     print_indent(output, indent + 1);
     outln(output, ")");
-    if (!m_definition.is_null()) {
-        m_definition->dump(output, indent + 1);
+    if (definition()) {
+        definition()->dump(output, indent + 1);
     }
+}
+
+StringView Declaration::full_name() const
+{
+    if (!m_full_name.has_value()) {
+        if (m_name)
+            m_full_name = m_name->full_name();
+        else
+            m_full_name = String::empty();
+    }
+
+    return *m_full_name;
 }
 
 }

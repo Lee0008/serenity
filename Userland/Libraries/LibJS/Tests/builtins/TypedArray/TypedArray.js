@@ -1,6 +1,6 @@
-// Update when more typed arrays get added
 const TYPED_ARRAYS = [
     Uint8Array,
+    Uint8ClampedArray,
     Uint16Array,
     Uint32Array,
     Int8Array,
@@ -10,6 +10,8 @@ const TYPED_ARRAYS = [
     Float64Array,
 ];
 
+const BIGINT_TYPED_ARRAYS = [BigUint64Array, BigInt64Array];
+
 const getTypedArrayConstructor = () => Object.getPrototypeOf(TYPED_ARRAYS[0]);
 
 test("basic functionality", () => {
@@ -18,6 +20,9 @@ test("basic functionality", () => {
     expect(TypedArray.name).toBe("TypedArray");
     expect(TypedArray.prototype.constructor).toBe(TypedArray);
     TYPED_ARRAYS.forEach(T => {
+        expect(T.prototype.constructor).toBe(T);
+    });
+    BIGINT_TYPED_ARRAYS.forEach(T => {
         expect(T.prototype.constructor).toBe(T);
     });
     const FunctionPrototype = Object.getPrototypeOf(() => {});
@@ -30,11 +35,19 @@ test("typed array constructors must be invoked with 'new'", () => {
             T();
         }).toThrowWithMessage(TypeError, `${T.name} constructor must be called with 'new'`);
     });
+    BIGINT_TYPED_ARRAYS.forEach(T => {
+        expect(() => {
+            T();
+        }).toThrowWithMessage(TypeError, `${T.name} constructor must be called with 'new'`);
+    });
 });
 
 test("typed array constructors have TypedArray as prototype", () => {
     const TypedArray = getTypedArrayConstructor();
     TYPED_ARRAYS.forEach(T => {
+        expect(Object.getPrototypeOf(T)).toBe(TypedArray);
+    });
+    BIGINT_TYPED_ARRAYS.forEach(T => {
         expect(Object.getPrototypeOf(T)).toBe(TypedArray);
     });
 });
@@ -45,11 +58,18 @@ test("typed array prototypes have TypedArray.prototype as prototype", () => {
         const TPrototype = Object.getPrototypeOf(new T());
         expect(Object.getPrototypeOf(TPrototype)).toBe(TypedArray.prototype);
     });
+    BIGINT_TYPED_ARRAYS.forEach(T => {
+        const TPrototype = Object.getPrototypeOf(new T());
+        expect(Object.getPrototypeOf(TPrototype)).toBe(TypedArray.prototype);
+    });
 });
 
 test("typed arrays inherit from TypedArray", () => {
     const TypedArray = getTypedArrayConstructor();
     TYPED_ARRAYS.forEach(T => {
+        expect(new T()).toBeInstanceOf(TypedArray);
+    });
+    BIGINT_TYPED_ARRAYS.forEach(T => {
         expect(new T()).toBeInstanceOf(TypedArray);
     });
 });
@@ -130,6 +150,22 @@ test("typed array from TypedArray", () => {
         expect(newTypedArray[1]).toBe(2);
         expect(newTypedArray[2]).toBe(3);
     });
+
+    const bigU64Array = new BigUint64Array(3);
+    bigU64Array[0] = 1n;
+    bigU64Array[1] = 2n;
+    bigU64Array[2] = 3n;
+
+    BIGINT_TYPED_ARRAYS.forEach(T => {
+        expect(() => {
+            const newTypedArray = new T(u8Array);
+        }).toThrowWithMessage(TypeError, `Can't create ${T.name} from Uint8Array`);
+
+        const newBigIntTypedArray = new T(bigU64Array);
+        expect(newBigIntTypedArray[0]).toBe(1n);
+        expect(newBigIntTypedArray[1]).toBe(2n);
+        expect(newBigIntTypedArray[2]).toBe(3n);
+    });
 });
 
 test("typed array from TypedArray element cast", () => {
@@ -141,6 +177,7 @@ test("typed array from TypedArray element cast", () => {
 
     const u32Expected = [
         [0, 0xff],
+        [0xff, 0xff],
         [0x100, 0xff],
         [0x100, 0xff],
         [0, -1],
@@ -149,7 +186,7 @@ test("typed array from TypedArray element cast", () => {
         [0x100, 0xff],
         [0x100, 0xff],
     ];
-    const u8Expected = [0xff, 0xff, 0xff, -1, 0xff, 0xff, 0xff, 0xff];
+    const u8Expected = [0xff, 0xff, 0xff, 0xff, -1, 0xff, 0xff, 0xff, 0xff];
 
     TYPED_ARRAYS.forEach((T, i) => {
         const newArrFromU32 = new T(u32Array);
@@ -193,6 +230,16 @@ test("typed array from Array-Like", () => {
         }
         func(1, 2, 3);
     });
+
+    BIGINT_TYPED_ARRAYS.forEach(T => {
+        function func() {
+            const newTypedArray = new T(arguments);
+            expect(newTypedArray[0]).toBe(1n);
+            expect(newTypedArray[1]).toBe(2n);
+            expect(newTypedArray[2]).toBe(3n);
+        }
+        func(1n, 2n, 3n);
+    });
 });
 
 test("typed array from Iterable", () => {
@@ -203,6 +250,13 @@ test("typed array from Iterable", () => {
         expect(newTypedArray[0]).toBe(1);
         expect(newTypedArray[1]).toBe(2);
         expect(newTypedArray[2]).toBe(3);
+    });
+
+    BIGINT_TYPED_ARRAYS.forEach(T => {
+        const newTypedArray = new T(from);
+        expect(newTypedArray[0]).toBe(1n);
+        expect(newTypedArray[1]).toBe(2n);
+        expect(newTypedArray[2]).toBe(3n);
     });
 });
 
@@ -218,4 +272,90 @@ test("TypedArray is abstract", () => {
     expect(() => {
         new TypedArray();
     }).toThrowWithMessage(TypeError, "Abstract class TypedArray cannot be constructed directly");
+});
+
+TYPED_ARRAYS.forEach(T => {
+    test(`all numeric indices are valid on ${T.name}`, () => {
+        const newTypedArray = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 0]);
+        expect(newTypedArray).toHaveLength(10);
+
+        function PoisonError() {}
+
+        const poisonedObject = {
+            valueOf() {
+                throw new PoisonError();
+            },
+            extraValue: 4,
+        };
+
+        // valueOf should only be called if the string is a valid numeric index
+        expect(() => (newTypedArray["0"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["-0"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["Infinity"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["-Infinity"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["NaN"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["1"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["1.1"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["0.3"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["-1"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["-1.1"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray["-0.3"] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[0] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[-0] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[Infinity] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[-Infinity] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[NaN] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[1] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[1.1] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[0.3] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[-1] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[-1.1] = poisonedObject)).toThrow(PoisonError);
+        expect(() => (newTypedArray[-0.3] = poisonedObject)).toThrow(PoisonError);
+
+        function expectValueSet(property) {
+            newTypedArray[property] = poisonedObject;
+            expect(newTypedArray).toHaveLength(10);
+            expect(newTypedArray[property].extraValue).toBe(4);
+            expect(delete newTypedArray[property]).toBeTrue();
+        }
+
+        expectValueSet("a");
+        expectValueSet(" 1");
+        expectValueSet("a");
+        expectValueSet("a");
+        expectValueSet(" 1");
+        expectValueSet("+Infinity");
+        expectValueSet("00");
+        expectValueSet("01");
+        expectValueSet("-01");
+        expectValueSet("-");
+        expectValueSet(".");
+        expectValueSet("-.");
+        expectValueSet("1e");
+        expectValueSet("1e");
+        expectValueSet("1e0");
+        expectValueSet("5.");
+        expectValueSet(".5");
+        expectValueSet("-.5");
+        expectValueSet("1e1");
+        expectValueSet("1e+1");
+        expectValueSet("0.0000001"); // ToString = "1e-7"
+
+        // Things that can round trip as numbers get consumed
+        function expectValueNotSet(property) {
+            expect(() => {
+                newTypedArray[property] = poisonedObject;
+            }).toThrow(PoisonError);
+            expect(newTypedArray[property]).toBeUndefined();
+            expect(delete newTypedArray[property]).toBeTrue();
+        }
+        expectValueNotSet("-2");
+        expectValueNotSet(1.5);
+        expectValueNotSet("-0");
+        expectValueNotSet(-1.5);
+        expectValueNotSet("-Infinity");
+        expectValueNotSet("Infinity");
+        expectValueNotSet("NaN");
+        expectValueNotSet("1e-10");
+    });
 });

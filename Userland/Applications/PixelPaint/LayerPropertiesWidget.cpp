@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -25,7 +26,7 @@ LayerPropertiesWidget::LayerPropertiesWidget()
     auto& group_box = add<GUI::GroupBox>("Layer properties");
     auto& layout = group_box.set_layout<GUI::VerticalBoxLayout>();
 
-    layout.set_margins({ 10, 20, 10, 10 });
+    layout.set_margins({ 8 });
 
     auto& name_container = group_box.add<GUI::Widget>();
     name_container.set_fixed_height(20);
@@ -65,17 +66,13 @@ LayerPropertiesWidget::LayerPropertiesWidget()
     };
 }
 
-LayerPropertiesWidget::~LayerPropertiesWidget()
-{
-}
-
 void LayerPropertiesWidget::set_layer(Layer* layer)
 {
     if (m_layer == layer)
         return;
 
     if (layer) {
-        m_layer = layer->make_weak_ptr();
+        m_layer = layer;
         m_name_textbox->set_text(layer->name());
         m_opacity_slider->set_value(layer->opacity_percent());
         m_visibility_checkbox->set_checked(layer->is_visible());

@@ -22,18 +22,18 @@ public:
     };
 
 public:
-    static NonnullRefPtr<VGAConsole> initialize(const VGACompatibleAdapter&, Mode, size_t width, size_t height);
+    static NonnullRefPtr<VGAConsole> initialize(Mode, size_t width, size_t height);
 
     virtual bool is_hardware_paged_capable() const override { return false; }
     virtual bool has_hardware_cursor() const override { return false; }
+    virtual void flush(size_t, size_t, size_t, size_t) override { }
 
     virtual ~VGAConsole() = default;
 
 protected:
-    VGAConsole(const VGACompatibleAdapter&, Mode, size_t width, size_t height);
+    VGAConsole(Mode, size_t width, size_t height);
 
-    NonnullOwnPtr<Region> m_vga_region;
-    NonnullRefPtr<VGACompatibleAdapter> m_adapter;
+    NonnullOwnPtr<Memory::Region> m_vga_region;
     const Mode m_mode;
 };
 }

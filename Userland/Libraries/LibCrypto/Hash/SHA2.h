@@ -6,9 +6,12 @@
 
 #pragma once
 
-#include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <LibCrypto/Hash/HashFunction.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#endif
 
 namespace Crypto {
 namespace Hash {
@@ -72,16 +75,8 @@ constexpr static u64 InitializationHashes[8] = {
 };
 }
 
-template<size_t Bytes>
-struct SHA2Digest {
-    u8 data[Bytes];
-    constexpr static size_t Size = Bytes;
-    const u8* immutable_data() const { return data; }
-    size_t data_length() const { return Bytes; }
-};
-
 // FIXME: I want template<size_t BlockSize> but the compiler gets confused
-class SHA256 final : public HashFunction<512, SHA2Digest<256 / 8>> {
+class SHA256 final : public HashFunction<512, 256> {
 public:
     using HashFunction::update;
 
@@ -103,12 +98,14 @@ public:
     }
 
     inline static DigestType hash(const ByteBuffer& buffer) { return hash(buffer.data(), buffer.size()); }
-    inline static DigestType hash(const StringView& buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
+    inline static DigestType hash(StringView buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         return String::formatted("SHA{}", DigestSize * 8);
     }
+#endif
 
     inline virtual void reset() override
     {
@@ -131,7 +128,7 @@ private:
     constexpr static auto Rounds = 64;
 };
 
-class SHA384 final : public HashFunction<1024, SHA2Digest<384 / 8>> {
+class SHA384 final : public HashFunction<1024, 384> {
 public:
     using HashFunction::update;
 
@@ -153,12 +150,14 @@ public:
     }
 
     inline static DigestType hash(const ByteBuffer& buffer) { return hash(buffer.data(), buffer.size()); }
-    inline static DigestType hash(const StringView& buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
+    inline static DigestType hash(StringView buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         return String::formatted("SHA{}", DigestSize * 8);
     }
+#endif
 
     inline virtual void reset() override
     {
@@ -181,7 +180,7 @@ private:
     constexpr static auto Rounds = 80;
 };
 
-class SHA512 final : public HashFunction<1024, SHA2Digest<512 / 8>> {
+class SHA512 final : public HashFunction<1024, 512> {
 public:
     using HashFunction::update;
 
@@ -203,12 +202,14 @@ public:
     }
 
     inline static DigestType hash(const ByteBuffer& buffer) { return hash(buffer.data(), buffer.size()); }
-    inline static DigestType hash(const StringView& buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
+    inline static DigestType hash(StringView buffer) { return hash((const u8*)buffer.characters_without_null_termination(), buffer.length()); }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         return String::formatted("SHA{}", DigestSize * 8);
     }
+#endif
 
     inline virtual void reset() override
     {

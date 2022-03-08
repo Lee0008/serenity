@@ -10,6 +10,10 @@
 #include <Kernel/Interrupts/IRQController.h>
 
 namespace Kernel {
+
+static constexpr size_t pic_disabled_vector_base = 0x20;
+static constexpr size_t pic_disabled_vector_end = 0x2f;
+
 class PIC final : public IRQController {
 public:
     PIC();
@@ -23,8 +27,8 @@ public:
     virtual u16 get_isr() const override;
     virtual u16 get_irr() const override;
     virtual u32 gsi_base() const override { return 0; }
-    virtual size_t interrupt_vectors_count() const { return 16; }
-    virtual const char* model() const override { return "Dual i8259"; }
+    virtual size_t interrupt_vectors_count() const override { return 16; }
+    virtual StringView model() const override { return "Dual i8259"sv; }
     virtual IRQControllerType type() const override { return IRQControllerType::i8259; }
 
 private:

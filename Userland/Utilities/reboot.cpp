@@ -1,17 +1,20 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <stdio.h>
-#include <unistd.h>
+#include <LibCore/Stream.h>
+#include <LibMain/Main.h>
 
-int main(int, char**)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    if (reboot() < 0) {
-        perror("reboot");
-        return 1;
-    }
+    auto file = TRY(Core::Stream::File::open("/sys/firmware/power_state", Core::Stream::OpenMode::Write));
+
+    const String file_contents = "1";
+    TRY(file->write(file_contents.bytes()));
+    file->close();
+
     return 0;
 }

@@ -17,7 +17,14 @@ public:
     {
     }
 
-    Optional<Label> nth_label(size_t);
+    Optional<Label> nth_label(size_t label)
+    {
+        auto index = nth_label_index(label);
+        if (index.has_value())
+            return m_stack.entries()[index.value()].get<Label>();
+        return {};
+    }
+    Optional<size_t> nth_label_index(size_t);
     void set_frame(Frame&& frame)
     {
         m_current_frame_index = m_stack.size();
@@ -61,6 +68,9 @@ public:
     Result call(Interpreter&, FunctionAddress, Vector<Value> arguments);
     Result execute(Interpreter&);
 
+    void enable_instruction_count_limit() { m_should_limit_instruction_count = true; }
+    bool should_limit_instruction_count() const { return m_should_limit_instruction_count; }
+
     void dump_stack();
 
 private:
@@ -69,6 +79,7 @@ private:
     Stack m_stack;
     size_t m_depth { 0 };
     InstructionPointer m_ip;
+    bool m_should_limit_instruction_count { false };
 };
 
 }

@@ -33,31 +33,29 @@ public:
     }
 
     template<typename T>
-    void print_bytecode(const Regex<T>& regex) const
+    void print_bytecode(Regex<T> const& regex) const
+    {
+        print_bytecode(regex.parser_result.bytecode);
+    }
+
+    void print_bytecode(ByteCode const& bytecode) const
     {
         MatchState state;
-        auto& bytecode = regex.parser_result.bytecode;
-
         for (;;) {
-            auto* opcode = bytecode.get_opcode(state);
-            if (!opcode) {
-                dbgln("Wrong opcode... failed!");
-                return;
-            }
-
-            print_opcode("PrintBytecode", *opcode, state);
+            auto& opcode = bytecode.get_opcode(state);
+            print_opcode("PrintBytecode", opcode, state);
             out(m_file, "{}", m_debug_stripline);
 
-            if (is<OpCode_Exit>(*opcode))
+            if (is<OpCode_Exit>(opcode))
                 break;
 
-            state.instruction_position += opcode->size();
+            state.instruction_position += opcode.size();
         }
 
         fflush(m_file);
     }
 
-    void print_opcode(const String& system, OpCode& opcode, MatchState& state, size_t recursion = 0, bool newline = true) const
+    void print_opcode(String const& system, OpCode& opcode, MatchState& state, size_t recursion = 0, bool newline = true) const
     {
         out(m_file, "{:15} | {:5} | {:9} | {:35} | {:30} | {:20}",
             system.characters(),
@@ -74,7 +72,7 @@ public:
         }
     }
 
-    void print_result(const OpCode& opcode, const ByteCode& bytecode, const MatchInput& input, MatchState& state, ExecutionResult result) const
+    void print_result(OpCode const& opcode, ByteCode const& bytecode, MatchInput const& input, MatchState& state, ExecutionResult result) const
     {
         StringBuilder builder;
         builder.append(execution_result_name(result));
@@ -87,7 +85,7 @@ public:
             builder.appendff(", next ip: {}", state.instruction_position + opcode.size());
         }
 
-        out(m_file, " | {:20}", builder.to_string());
+        outln(m_file, " | {:20}", builder.to_string());
 
         if (is<OpCode_Compare>(opcode)) {
             for (auto& line : to<OpCode_Compare>(opcode).variable_arguments_to_string(input)) {

@@ -6,8 +6,11 @@
 
 #include "History.h"
 
-void History::push(const StringView& history_item)
+void History::push(StringView history_item)
 {
+    if (!m_items.is_empty() && m_items[m_current_history_item] == history_item)
+        return;
+
     m_items.shrink(m_current_history_item + 1);
     m_items.append(history_item);
     m_current_history_item++;

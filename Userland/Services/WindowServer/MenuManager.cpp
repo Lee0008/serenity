@@ -6,7 +6,7 @@
  */
 
 #include <AK/Badge.h>
-#include <WindowServer/ClientConnection.h>
+#include <WindowServer/ConnectionFromClient.h>
 #include <WindowServer/MenuManager.h>
 #include <WindowServer/Screen.h>
 #include <WindowServer/WindowManager.h>
@@ -41,7 +41,7 @@ bool MenuManager::is_open(const Menu& menu) const
 
 void MenuManager::refresh()
 {
-    ClientConnection::for_each_client([&](ClientConnection& client) {
+    ConnectionFromClient::for_each_client([&](ConnectionFromClient& client) {
         client.for_each_menu([&](Menu& menu) {
             menu.redraw();
             return IterationDecision::Continue;
@@ -101,7 +101,7 @@ void MenuManager::event(Core::Event& event)
                     else {
                         auto* target_menu = previous_menu(m_current_menu);
                         if (target_menu) {
-                            target_menu->ensure_menu_window().move_to(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
+                            target_menu->ensure_menu_window(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
                             open_menu(*target_menu);
                             wm.window_with_active_menu()->invalidate_menubar();
                         }
@@ -118,7 +118,7 @@ void MenuManager::event(Core::Event& event)
                 else if (m_open_menu_stack.size() <= 1 && wm.window_with_active_menu()) {
                     auto* target_menu = next_menu(m_current_menu);
                     if (target_menu) {
-                        target_menu->ensure_menu_window().move_to(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
+                        target_menu->ensure_menu_window(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
                         open_menu(*target_menu);
                         wm.window_with_active_menu()->invalidate_menubar();
                         close_everyone_not_in_lineage(*target_menu);
@@ -137,6 +137,17 @@ void MenuManager::event(Core::Event& event)
                     m_current_menu->open_hovered_item(key_event.modifiers() & KeyModifier::Mod_Ctrl);
                 return;
             }
+
+            if (key_event.key() == Key_Space) {
+                auto* hovered_item = m_current_menu->hovered_item();
+                if (!hovered_item || !hovered_item->is_enabled())
+                    return;
+                if (!hovered_item->is_checkable())
+                    return;
+
+                m_current_menu->open_hovered_item(true);
+            }
+
             m_current_menu->dispatch_event(event);
         }
     }
@@ -160,8 +171,7 @@ void MenuManager::handle_mouse_event(MouseEvent& mouse_event)
     bool event_is_inside_current_menu = window->rect().contains(mouse_event.position());
     if (event_is_inside_current_menu) {
         WindowManager::the().set_hovered_window(window);
-        auto translated_event = mouse_event.translated(-window->position());
-        WindowManager::the().deliver_mouse_event(*window, translated_event, true);
+        WindowManager::the().deliver_mouse_event(*window, mouse_event, true);
         return;
     }
 
@@ -197,14 +207,13 @@ void MenuManager::handle_mouse_event(MouseEvent& mouse_event)
             if (!menu->menu_window()->rect().contains(mouse_event.position()))
                 continue;
             WindowManager::the().set_hovered_window(menu->menu_window());
-            auto translated_event = mouse_event.translated(-menu->menu_window()->position());
-            WindowManager::the().deliver_mouse_event(*menu->menu_window(), translated_event, true);
+            WindowManager::the().deliver_mouse_event(*menu->menu_window(), mouse_event, true);
             break;
         }
     }
 }
 
-void MenuManager::close_all_menus_from_client(Badge<ClientConnection>, ClientConnection& client)
+void MenuManager::close_all_menus_from_client(Badge<ConnectionFromClient>, ConnectionFromClient& client)
 {
     if (!has_open_menu())
         return;
@@ -222,7 +231,6 @@ void MenuManager::close_everyone()
     }
     m_open_menu_stack.clear();
     clear_current_menu();
-    refresh();
 }
 
 void MenuManager::close_everyone_not_in_lineage(Menu& menu)
@@ -238,7 +246,7 @@ void MenuManager::close_everyone_not_in_lineage(Menu& menu)
     close_menus(menus_to_close);
 }
 
-void MenuManager::close_menus(const Vector<Menu&>& menus)
+void MenuManager::close_menus(Vector<Menu&>& menus)
 {
     for (auto& menu : menus) {
         if (&menu == m_current_menu)
@@ -249,7 +257,6 @@ void MenuManager::close_menus(const Vector<Menu&>& menus)
             return entry == &menu;
         });
     }
-    refresh();
 }
 
 static void collect_menu_subtree(Menu& menu, Vector<Menu&>& menus)
@@ -300,23 +307,22 @@ void MenuManager::open_menu(Menu& menu, bool as_current_menu)
         return;
     }
 
+    m_open_menu_stack.append(menu);
+
+    menu.set_visible(true);
+
     if (!menu.is_empty()) {
         menu.redraw_if_theme_changed();
-        if (!menu.menu_window())
-            menu.ensure_menu_window();
-        menu.set_visible(true);
+        auto* window = menu.menu_window();
+        VERIFY(window);
+        window->set_visible(true);
     }
-
-    if (m_open_menu_stack.find_if([&menu](auto& other) { return &menu == other.ptr(); }).is_end())
-        m_open_menu_stack.append(menu);
 
     if (as_current_menu || !current_menu()) {
         // Only make this menu the current menu if requested, or if no
         // other menu is current
         set_current_menu(&menu);
     }
-
-    refresh();
 }
 
 void MenuManager::clear_current_menu()
@@ -368,7 +374,7 @@ Menu* MenuManager::previous_menu(Menu* current)
         return nullptr;
     Menu* found = nullptr;
     Menu* previous = nullptr;
-    wm.window_with_active_menu()->menubar()->for_each_menu([&](Menu& menu) {
+    wm.window_with_active_menu()->menubar().for_each_menu([&](Menu& menu) {
         if (current == &menu) {
             found = previous;
             return IterationDecision::Break;
@@ -386,7 +392,7 @@ Menu* MenuManager::next_menu(Menu* current)
     auto& wm = WindowManager::the();
     if (!wm.window_with_active_menu())
         return nullptr;
-    wm.window_with_active_menu()->menubar()->for_each_menu([&](Menu& menu) {
+    wm.window_with_active_menu()->menubar().for_each_menu([&](Menu& menu) {
         if (is_next) {
             found = &menu;
             return IterationDecision::Break;

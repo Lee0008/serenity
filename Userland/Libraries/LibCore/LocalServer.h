@@ -8,6 +8,7 @@
 
 #include <LibCore/Notifier.h>
 #include <LibCore/Object.h>
+#include <LibCore/Stream.h>
 
 namespace Core {
 
@@ -16,13 +17,13 @@ class LocalServer : public Object {
 public:
     virtual ~LocalServer() override;
 
-    bool take_over_from_system_server(String const& path = String());
+    ErrorOr<void> take_over_from_system_server(String const& path = String());
     bool is_listening() const { return m_listening; }
     bool listen(const String& address);
 
-    RefPtr<LocalSocket> accept();
+    ErrorOr<NonnullOwnPtr<Stream::LocalSocket>> accept();
 
-    Function<void()> on_ready_to_accept;
+    Function<void(NonnullOwnPtr<Stream::LocalSocket>)> on_accept;
 
 private:
     explicit LocalServer(Object* parent = nullptr);

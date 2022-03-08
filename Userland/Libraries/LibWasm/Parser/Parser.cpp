@@ -54,7 +54,7 @@ static auto parse_vector(InputStream& stream)
                     return ParseResult<Vector<T>> { with_eof_check(stream, ParseError::ExpectedSize) };
                 entries.append(value);
             } else if constexpr (IsSame<T, u8>) {
-                if (count > 64 * KiB)
+                if (count > Constants::max_allowed_vector_size)
                     return ParseResult<Vector<T>> { ParseError::HugeAllocationRequested };
                 entries.resize(count);
                 if (!stream.read_or_error({ entries.data(), entries.size() }))
@@ -158,7 +158,7 @@ ParseResult<FunctionType> FunctionType::parse(InputStream& stream)
         return with_eof_check(stream, ParseError::ExpectedKindTag);
 
     if (tag != Constants::function_signature_tag) {
-        dbgln("Expected 0x60, but found 0x{:x}", tag);
+        dbgln("Expected 0x60, but found {:#x}", tag);
         return with_eof_check(stream, ParseError::InvalidTag);
     }
 
@@ -738,13 +738,17 @@ ParseResult<CustomSection> CustomSection::parse(InputStream& stream)
     if (name.is_error())
         return name.error();
 
-    auto data_buffer = ByteBuffer::create_uninitialized(64);
+    ByteBuffer data_buffer;
+    if (data_buffer.try_resize(64).is_error())
+        return ParseError::OutOfMemory;
+
     while (!stream.has_any_error() && !stream.unreliable_eof()) {
         char buf[16];
         auto size = stream.read({ buf, 16 });
         if (size == 0)
             break;
-        data_buffer.append(buf, size);
+        if (data_buffer.try_append(buf, size).is_error())
+            return with_eof_check(stream, ParseError::HugeAllocationRequested);
     }
 
     return CustomSection(name.release_value(), move(data_buffer));
@@ -845,10 +849,10 @@ ParseResult<MemorySection::Memory> MemorySection::Memory::parse(InputStream& str
 ParseResult<MemorySection> MemorySection::parse(InputStream& stream)
 {
     ScopeLogger<WASM_BINPARSER_DEBUG> logger("MemorySection");
-    auto memorys = parse_vector<Memory>(stream);
-    if (memorys.is_error())
-        return memorys.error();
-    return MemorySection { memorys.release_value() };
+    auto memories = parse_vector<Memory>(stream);
+    if (memories.is_error())
+        return memories.error();
+    return MemorySection { memories.release_value() };
 }
 
 ParseResult<Expression> Expression::parse(InputStream& stream)
@@ -1091,7 +1095,10 @@ ParseResult<Locals> Locals::parse(InputStream& stream)
     size_t count;
     if (!LEB128::read_unsigned(stream, count))
         return with_eof_check(stream, ParseError::InvalidSize);
-    // TODO: Disallow too many entries.
+
+    if (count > Constants::max_allowed_function_locals_per_type)
+        return with_eof_check(stream, ParseError::HugeAllocationRequested);
+
     auto type = ValueType::parse(stream);
     if (type.is_error())
         return type.error();
@@ -1356,16 +1363,22 @@ ParseResult<Module> Module::parse(InputStream& stream)
     return Module { move(sections) };
 }
 
-void Module::populate_sections()
+bool Module::populate_sections()
 {
+    auto is_ok = true;
     FunctionSection const* function_section { nullptr };
     for_each_section_of_type<FunctionSection>([&](FunctionSection const& section) { function_section = &section; });
     for_each_section_of_type<CodeSection>([&](CodeSection const& section) {
-        // FIXME: This should be considered invalid once validation is implemented.
-        if (!function_section)
+        if (!function_section) {
+            is_ok = false;
             return;
+        }
         size_t index = 0;
         for (auto& entry : section.functions()) {
+            if (function_section->types().size() <= index) {
+                is_ok = false;
+                return;
+            }
             auto& type_index = function_section->types()[index];
             Vector<ValueType> locals;
             for (auto& local : entry.func().locals()) {
@@ -1376,6 +1389,7 @@ void Module::populate_sections()
             ++index;
         }
     });
+    return is_ok;
 }
 
 String parse_error_to_string(ParseError error)
@@ -1409,6 +1423,8 @@ String parse_error_to_string(ParseError error)
         return "The parser encountered an unimplemented feature";
     case ParseError::HugeAllocationRequested:
         return "Parsing caused an attempt to allocate a very big chunk of memory, likely malformed data";
+    case ParseError::OutOfMemory:
+        return "The parser hit an OOM condition";
     case ParseError::ExpectedFloatingImmediate:
         return "Expected a floating point immediate";
     case ParseError::ExpectedSignedImmediate:

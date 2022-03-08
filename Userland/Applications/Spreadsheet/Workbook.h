@@ -15,10 +15,11 @@ namespace Spreadsheet {
 
 class Workbook {
 public:
-    Workbook(NonnullRefPtrVector<Sheet>&& sheets);
+    Workbook(NonnullRefPtrVector<Sheet>&& sheets, GUI::Window& parent_window);
 
-    Result<bool, String> save(const StringView& filename);
-    Result<bool, String> load(const StringView& filename);
+    Result<bool, String> save(StringView filename);
+    Result<bool, String> load(StringView filename);
+    Result<bool, String> open_file(Core::File&);
 
     const String& current_filename() const { return m_current_filename; }
     bool set_filename(const String& filename);
@@ -30,26 +31,25 @@ public:
     const NonnullRefPtrVector<Sheet>& sheets() const { return m_sheets; }
     NonnullRefPtrVector<Sheet> sheets() { return m_sheets; }
 
-    Sheet& add_sheet(const StringView& name)
+    Sheet& add_sheet(StringView name)
     {
         auto sheet = Sheet::construct(name, *this);
         m_sheets.append(sheet);
         return *sheet;
     }
 
-    JS::Interpreter& interpreter() { return *m_interpreter; }
-    const JS::Interpreter& interpreter() const { return *m_interpreter; }
-
-    JS::GlobalObject& global_object() { return m_interpreter->global_object(); }
-    const JS::GlobalObject& global_object() const { return m_interpreter->global_object(); }
-
     WorkbookObject* workbook_object() { return m_workbook_object; }
+    JS::VM& vm() { return *m_vm; }
+    JS::VM const& vm() const { return *m_vm; }
 
 private:
     NonnullRefPtrVector<Sheet> m_sheets;
+    NonnullRefPtr<JS::VM> m_vm;
     NonnullOwnPtr<JS::Interpreter> m_interpreter;
     JS::VM::InterpreterExecutionScope m_interpreter_scope;
     WorkbookObject* m_workbook_object { nullptr };
+    JS::ExecutionContext m_main_execution_context;
+    GUI::Window& m_parent_window;
 
     String m_current_filename;
     bool m_dirty { false };

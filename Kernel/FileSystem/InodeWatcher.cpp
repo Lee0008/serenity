@@ -12,12 +12,9 @@
 
 namespace Kernel {
 
-KResultOr<NonnullRefPtr<InodeWatcher>> InodeWatcher::create()
+ErrorOr<NonnullRefPtr<InodeWatcher>> InodeWatcher::try_create()
 {
-    auto watcher = adopt_ref_if_nonnull(new InodeWatcher);
-    if (watcher)
-        return watcher.release_nonnull();
-    return ENOMEM;
+    return adopt_nonnull_ref_or_enomem(new (nothrow) InodeWatcher);
 }
 
 InodeWatcher::~InodeWatcher()
@@ -25,54 +22,54 @@ InodeWatcher::~InodeWatcher()
     (void)close();
 }
 
-bool InodeWatcher::can_read(const FileDescription&, size_t) const
+bool InodeWatcher::can_read(const OpenFileDescription&, u64) const
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
     return !m_queue.is_empty();
 }
 
-KResultOr<size_t> InodeWatcher::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t buffer_size)
+ErrorOr<size_t> InodeWatcher::read(OpenFileDescription&, u64, UserOrKernelBuffer& buffer, size_t buffer_size)
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
     if (m_queue.is_empty())
         // can_read will catch the blocking case.
         return EAGAIN;
 
     auto event = m_queue.dequeue();
 
-    size_t name_length = event.path.length() + 1;
     size_t bytes_to_write = sizeof(InodeWatcherEvent);
-    if (!event.path.is_null())
-        bytes_to_write += name_length;
+    if (event.path)
+        bytes_to_write += event.path->length() + 1;
 
     if (buffer_size < bytes_to_write)
         return EINVAL;
 
-    auto result = buffer.write_buffered<MAXIMUM_EVENT_SIZE>(bytes_to_write, [&](u8* data, size_t data_bytes) {
+    auto result = buffer.write_buffered<MAXIMUM_EVENT_SIZE>(bytes_to_write, [&](Bytes bytes) {
         size_t offset = 0;
 
-        memcpy(data + offset, &event.wd, sizeof(InodeWatcherEvent::watch_descriptor));
+        memcpy(bytes.offset(offset), &event.wd, sizeof(InodeWatcherEvent::watch_descriptor));
         offset += sizeof(InodeWatcherEvent::watch_descriptor);
-        memcpy(data + offset, &event.type, sizeof(InodeWatcherEvent::type));
+        memcpy(bytes.offset(offset), &event.type, sizeof(InodeWatcherEvent::type));
         offset += sizeof(InodeWatcherEvent::type);
 
-        if (!event.path.is_null()) {
-            memcpy(data + offset, &name_length, sizeof(InodeWatcherEvent::name_length));
+        if (event.path) {
+            size_t name_length = event.path->length() + 1;
+            memcpy(bytes.offset(offset), &name_length, sizeof(InodeWatcherEvent::name_length));
             offset += sizeof(InodeWatcherEvent::name_length);
-            memcpy(data + offset, event.path.characters(), name_length);
+            memcpy(bytes.offset(offset), event.path->characters(), name_length);
         } else {
-            memset(data + offset, 0, sizeof(InodeWatcherEvent::name_length));
+            memset(bytes.offset(offset), 0, sizeof(InodeWatcherEvent::name_length));
         }
 
-        return data_bytes;
+        return bytes.size();
     });
     evaluate_block_conditions();
     return result;
 }
 
-KResult InodeWatcher::close()
+ErrorOr<void> InodeWatcher::close()
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
 
     for (auto& entry : m_wd_to_watches) {
         auto& inode = const_cast<Inode&>(entry.value->inode);
@@ -81,17 +78,17 @@ KResult InodeWatcher::close()
 
     m_wd_to_watches.clear();
     m_inode_to_watches.clear();
-    return KSuccess;
+    return {};
 }
 
-String InodeWatcher::absolute_path(const FileDescription&) const
+ErrorOr<NonnullOwnPtr<KString>> InodeWatcher::pseudo_path(const OpenFileDescription&) const
 {
-    return String::formatted("InodeWatcher:({})", m_wd_to_watches.size());
+    return KString::formatted("InodeWatcher:({})", m_wd_to_watches.size());
 }
 
-void InodeWatcher::notify_inode_event(Badge<Inode>, InodeIdentifier inode_id, InodeWatcherEvent::Type event_type, String const& name)
+void InodeWatcher::notify_inode_event(Badge<Inode>, InodeIdentifier inode_id, InodeWatcherEvent::Type event_type, StringView name)
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
 
     auto it = m_inode_to_watches.find(inode_id);
     if (it == m_inode_to_watches.end())
@@ -101,13 +98,16 @@ void InodeWatcher::notify_inode_event(Badge<Inode>, InodeIdentifier inode_id, In
     if (!(watcher.event_mask & static_cast<unsigned>(event_type)))
         return;
 
-    m_queue.enqueue({ watcher.wd, event_type, name });
+    OwnPtr<KString> path;
+    if (!name.is_null())
+        path = KString::try_create(name).release_value_but_fixme_should_propagate_errors();
+    m_queue.enqueue({ watcher.wd, event_type, move(path) });
     evaluate_block_conditions();
 }
 
-KResultOr<int> InodeWatcher::register_inode(Inode& inode, unsigned event_mask)
+ErrorOr<int> InodeWatcher::register_inode(Inode& inode, unsigned event_mask)
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
 
     if (m_inode_to_watches.find(inode.identifier()) != m_inode_to_watches.end())
         return EEXIST;
@@ -121,21 +121,28 @@ KResultOr<int> InodeWatcher::register_inode(Inode& inode, unsigned event_mask)
             m_wd_counter = 1;
     } while (m_wd_to_watches.find(wd) != m_wd_to_watches.end());
 
-    auto description_or_error = WatchDescription::create(wd, inode, event_mask);
-    if (description_or_error.is_error())
-        return description_or_error.error();
+    auto description = TRY(WatchDescription::create(wd, inode, event_mask));
 
-    auto description = description_or_error.release_value();
-    m_inode_to_watches.set(inode.identifier(), description.ptr());
-    m_wd_to_watches.set(wd, move(description));
+    TRY(m_inode_to_watches.try_set(inode.identifier(), description.ptr()));
+    auto set_result = m_wd_to_watches.try_set(wd, move(description));
+    if (set_result.is_error()) {
+        m_inode_to_watches.remove(inode.identifier());
+        return set_result.release_error();
+    }
 
-    inode.register_watcher({}, *this);
+    auto register_result = inode.register_watcher({}, *this);
+    if (register_result.is_error()) {
+        m_inode_to_watches.remove(inode.identifier());
+        m_wd_to_watches.remove(wd);
+        return register_result.release_error();
+    }
+
     return wd;
 }
 
-KResult InodeWatcher::unregister_by_wd(int wd)
+ErrorOr<void> InodeWatcher::unregister_by_wd(int wd)
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
 
     auto it = m_wd_to_watches.find(wd);
     if (it == m_wd_to_watches.end())
@@ -147,12 +154,12 @@ KResult InodeWatcher::unregister_by_wd(int wd)
     m_inode_to_watches.remove(inode.identifier());
     m_wd_to_watches.remove(it);
 
-    return KSuccess;
+    return {};
 }
 
 void InodeWatcher::unregister_by_inode(Badge<Inode>, InodeIdentifier identifier)
 {
-    Locker locker(m_lock);
+    MutexLocker locker(m_lock);
 
     auto it = m_inode_to_watches.find(identifier);
     if (it == m_inode_to_watches.end())

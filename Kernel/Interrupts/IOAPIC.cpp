@@ -5,12 +5,12 @@
  */
 
 #include <AK/Optional.h>
-#include <Kernel/ACPI/MultiProcessorParser.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/IOAPIC.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
+#include <Kernel/Sections.h>
 
 #define IOAPIC_REDIRECTION_ENTRY_OFFSET 0x10
 namespace Kernel {
@@ -25,7 +25,7 @@ enum DeliveryMode {
 
 UNMAP_AFTER_INIT IOAPIC::IOAPIC(PhysicalAddress address, u32 gsi_base)
     : m_address(address)
-    , m_regs(map_typed_writable<ioapic_mmio_regs>(m_address))
+    , m_regs(Memory::map_typed_writable<ioapic_mmio_regs>(m_address).release_value_but_fixme_should_propagate_errors())
     , m_gsi_base(gsi_base)
     , m_id((read_register(0x0) >> 24) & 0xFF)
     , m_version(read_register(0x1) & 0xFF)

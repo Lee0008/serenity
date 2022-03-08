@@ -7,6 +7,7 @@
 
 #include <AK/Debug.h>
 #include <LibJS/SyntaxHighlighter.h>
+#include <LibWeb/CSS/SyntaxHighlighter/SyntaxHighlighter.h>
 #include <LibWeb/HTML/Parser/HTMLTokenizer.h>
 #include <LibWeb/HTML/SyntaxHighlighter/SyntaxHighlighter.h>
 
@@ -102,7 +103,21 @@ void SyntaxHighlighter::rehighlight(Palette const& palette)
                     spans.extend(proxy_client.corrected_spans());
                     substring_builder.clear();
                 } else if (state == State::CSS) {
-                    // FIXME: Highlight CSS code here instead.
+                    Syntax::ProxyHighlighterClient proxy_client {
+                        *m_client,
+                        substring_start_position,
+                        static_cast<u64>(AugmentedTokenKind::__Count) + first_free_token_kind_serial_value(),
+                        substring_builder.string_view()
+                    };
+                    {
+                        CSS::SyntaxHighlighter highlighter;
+                        highlighter.attach(proxy_client);
+                        highlighter.rehighlight(palette);
+                        highlighter.detach();
+                        register_nested_token_pairs(proxy_client.corrected_token_pairs(highlighter.matching_token_pairs()));
+                    }
+
+                    spans.extend(proxy_client.corrected_spans());
                     substring_builder.clear();
                 }
                 state = State::HTML;
@@ -132,7 +147,7 @@ void SyntaxHighlighter::rehighlight(Palette const& palette)
                 { palette.syntax_keyword(), {}, false, true },
                 token->is_start_tag() ? AugmentedTokenKind::OpenTag : AugmentedTokenKind::CloseTag);
 
-            for (auto& attribute : token->attributes()) {
+            token->for_each_attribute([&](auto& attribute) {
                 highlight(
                     attribute.name_start_position.line,
                     attribute.name_start_position.column + token_start_offset,
@@ -147,7 +162,8 @@ void SyntaxHighlighter::rehighlight(Palette const& palette)
                     attribute.value_end_position.column + token_start_offset,
                     { palette.syntax_string(), {} },
                     AugmentedTokenKind::AttributeValue);
-            }
+                return IterationDecision::Continue;
+            });
         } else if (token->is_doctype()) {
             highlight(
                 token->start_position().line,

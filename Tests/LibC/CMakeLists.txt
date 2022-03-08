@@ -1,25 +1,33 @@
 set(TEST_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/snprintf-correctness.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/strlcpy-correctness.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TestLibCTime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TestLibCMkTemp.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TestLibCExec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TestLibCDirEnt.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TestLibCInodeWatcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TestLibCString.cpp
+    TestAbort.cpp
+    TestAssert.cpp
+    TestIo.cpp
+    TestLibCExec.cpp
+    TestLibCDirEnt.cpp
+    TestLibCInodeWatcher.cpp
+    TestLibCMkTemp.cpp
+    TestLibCSetjmp.cpp
+    TestLibCString.cpp
+    TestLibCTime.cpp
+    TestMalloc.cpp
+    TestMemmem.cpp
+    TestMkDir.cpp
+    TestQsort.cpp
+    TestRaise.cpp
+    TestRealpath.cpp
+    TestScanf.cpp
+    TestSearch.cpp
+    TestSnprintf.cpp
+    TestStackSmash.cpp
+    TestStdio.cpp
+    TestStrlcpy.cpp
+    TestStrtodAccuracy.cpp
+    TestWchar.cpp
+    TestWctype.cpp
 )
 
-file(GLOB CMD_SOURCES  CONFIGURE_DEPENDS "*.cpp")
-list(REMOVE_ITEM CMD_SOURCES ${TEST_SOURCES})
+set_source_files_properties(TestStrtodAccuracy.cpp PROPERTIES COMPILE_FLAGS "-fno-builtin-strtod")
 
-# FIXME: These tests do not use LibTest
-foreach(CMD_SRC ${CMD_SOURCES})
-    get_filename_component(CMD_NAME ${CMD_SRC} NAME_WE)
-    add_executable(${CMD_NAME} ${CMD_SRC})
-    target_link_libraries(${CMD_NAME} LibCore)
-    install(TARGETS ${CMD_NAME} RUNTIME DESTINATION usr/Tests/LibC)
-endforeach()
-
-foreach(source ${TEST_SOURCES})
-    serenity_test(${source} LibC)
+foreach(source IN LISTS TEST_SOURCES)
+    serenity_test("${source}" LibC)
 endforeach()

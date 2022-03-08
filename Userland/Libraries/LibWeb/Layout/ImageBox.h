@@ -6,15 +6,15 @@
 
 #pragma once
 
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/Layout/ReplacedBox.h>
-#include <LibWeb/Page/BrowsingContext.h>
 
 namespace Web::Layout {
 
 class ImageBox
     : public ReplacedBox
-    , public BrowsingContext::ViewportClient {
+    , public HTML::BrowsingContext::ViewportClient {
 public:
     ImageBox(DOM::Document&, DOM::Element&, NonnullRefPtr<CSS::StyleProperties>, const ImageLoader&);
     virtual ~ImageBox() override;
@@ -27,7 +27,8 @@ public:
     bool renders_as_alt_text() const;
 
 private:
-    virtual void frame_did_set_viewport_rect(const Gfx::IntRect&) final;
+    // ^BrowsingContext::ViewportClient
+    virtual void browsing_context_did_set_viewport_rect(Gfx::IntRect const&) final;
 
     int preferred_width() const;
     int preferred_height() const;

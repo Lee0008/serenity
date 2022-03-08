@@ -8,6 +8,9 @@
 
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
+#include <AK/Vector.h>
+#include <math.h>
+#include <unistd.h>
 
 TEST_CASE(is_integral_works_properly)
 {
@@ -39,9 +42,9 @@ TEST_CASE(reorder_format_arguments)
     EXPECT_EQ(String::formatted("{1}{0}", "a", "b"), "ba");
     EXPECT_EQ(String::formatted("{0}{1}", "a", "b"), "ab");
     // Compiletime check bypass: ignoring a passed argument.
-    EXPECT_EQ(String::formatted(StringView { "{0}{0}{0}" }, "a", "b"), "aaa");
+    EXPECT_EQ(String::formatted("{0}{0}{0}"sv, "a", "b"), "aaa");
     // Compiletime check bypass: ignoring a passed argument.
-    EXPECT_EQ(String::formatted(StringView { "{1}{}{0}" }, "a", "b", "c"), "baa");
+    EXPECT_EQ(String::formatted("{1}{}{0}"sv, "a", "b", "c"), "baa");
 }
 
 TEST_CASE(escape_braces)
@@ -108,7 +111,7 @@ TEST_CASE(replacement_field)
     EXPECT_EQ(String::formatted("{:*>{1}}", 13, static_cast<size_t>(10)), "********13");
     EXPECT_EQ(String::formatted("{:*<{1}}", 7, 4), "7***");
     // Compiletime check bypass: intentionally ignoring extra arguments
-    EXPECT_EQ(String::formatted(StringView { "{:{2}}" }, -5, 8, 16), "              -5");
+    EXPECT_EQ(String::formatted("{:{2}}"sv, -5, 8, 16), "              -5");
     EXPECT_EQ(String::formatted("{{{:*^{1}}}}", 1, 3), "{*1*}");
     EXPECT_EQ(String::formatted("{:0{}}", 1, 3), "001");
 }
@@ -116,7 +119,7 @@ TEST_CASE(replacement_field)
 TEST_CASE(replacement_field_regression)
 {
     // FIXME: Compiletime check bypass: cannot parse '}}' correctly.
-    EXPECT_EQ(String::formatted(StringView { "{:{}}" }, "", static_cast<unsigned long>(6)), "      ");
+    EXPECT_EQ(String::formatted("{:{}}"sv, "", static_cast<unsigned long>(6)), "      ");
 }
 
 TEST_CASE(complex_string_specifiers)
@@ -125,6 +128,9 @@ TEST_CASE(complex_string_specifiers)
     EXPECT_EQ(String::formatted("{:9}", "abcd"), "abcd     ");
     EXPECT_EQ(String::formatted("{:>9}", "abcd"), "     abcd");
     EXPECT_EQ(String::formatted("{:^9}", "abcd"), "  abcd   ");
+    EXPECT_EQ(String::formatted("{:4.6}", "a"), "a   ");
+    EXPECT_EQ(String::formatted("{:4.6}", "abcdef"), "abcdef");
+    EXPECT_EQ(String::formatted("{:4.6}", "abcdefghi"), "abcdef");
 }
 
 TEST_CASE(cast_integer_to_character)
@@ -196,9 +202,9 @@ struct B {
 };
 template<>
 struct AK::Formatter<B> : Formatter<StringView> {
-    void format(FormatBuilder& builder, B)
+    ErrorOr<void> format(FormatBuilder& builder, B)
     {
-        Formatter<StringView>::format(builder, "B");
+        return Formatter<StringView>::format(builder, "B");
     }
 };
 
@@ -224,9 +230,11 @@ TEST_CASE(file_descriptor)
     Array<u8, 256> buffer;
     const auto nread = fread(buffer.data(), 1, buffer.size(), file);
 
-    EXPECT_EQ(StringView { "Hello, World!\nfoobar\n" }, StringView { buffer.span().trim(nread) });
+    EXPECT_EQ("Hello, World!\nfoobar\n"sv, StringView { buffer.span().trim(nread) });
 
     fclose(file);
+
+    unlink(filename);
 }
 
 TEST_CASE(floating_point_numbers)
@@ -236,6 +244,10 @@ TEST_CASE(floating_point_numbers)
     EXPECT_EQ(String::formatted("{:.3}", 1.12), "1.12");
     EXPECT_EQ(String::formatted("{:.1}", 1.12), "1.1");
     EXPECT_EQ(String::formatted("{}", -1.12), "-1.12");
+
+    EXPECT_EQ(String::formatted("{}", NAN), "nan");
+    EXPECT_EQ(String::formatted("{}", INFINITY), "inf");
+    EXPECT_EQ(String::formatted("{}", -INFINITY), "-inf");
 
     // FIXME: There is always the question what we mean with the width field. Do we mean significant digits?
     //        Do we mean the whole width? This is what was the simplest to implement:
@@ -250,6 +262,12 @@ TEST_CASE(no_precision_no_trailing_number)
 TEST_CASE(yay_this_implementation_sucks)
 {
     EXPECT_EQ(String::formatted("{:.0}", .99999999999), "0");
+}
+
+TEST_CASE(precision_with_trailing_zeros)
+{
+    EXPECT_EQ(String::formatted("{:0.3}", 1.12), "1.120");
+    EXPECT_EQ(String::formatted("{:0.1}", 1.12), "1.1");
 }
 
 TEST_CASE(magnitude_less_than_zero)
@@ -268,7 +286,7 @@ struct C {
 };
 template<>
 struct AK::Formatter<C> : AK::Formatter<FormatString> {
-    void format(FormatBuilder& builder, C c)
+    ErrorOr<void> format(FormatBuilder& builder, C c)
     {
         return AK::Formatter<FormatString>::format(builder, "C(i={})", c.i);
     }
@@ -285,7 +303,45 @@ TEST_CASE(long_long_regression)
 
     StringBuilder builder;
     AK::FormatBuilder fmtbuilder { builder };
-    fmtbuilder.put_i64(0x0123456789abcdefLL);
+    MUST(fmtbuilder.put_i64(0x0123456789abcdefLL));
 
     EXPECT_EQ(builder.string_view(), "81985529216486895");
+}
+
+TEST_CASE(hex_dump)
+{
+    EXPECT_EQ(String::formatted("{:hex-dump}", "0000"), "30303030");
+    EXPECT_EQ(String::formatted("{:>4hex-dump}", "0000"), "30303030    0000");
+    EXPECT_EQ(String::formatted("{:>2hex-dump}", "0000"), "3030    00\n3030    00");
+    EXPECT_EQ(String::formatted("{:*>4hex-dump}", "0000"), "30303030****0000");
+}
+
+TEST_CASE(vector_format)
+{
+    {
+        Vector<int> v { 1, 2, 3, 4 };
+        EXPECT_EQ(String::formatted("{}", v), "[ 1, 2, 3, 4 ]");
+    }
+    {
+        Vector<StringView> v { "1"sv, "2"sv, "3"sv, "4"sv };
+        EXPECT_EQ(String::formatted("{}", v), "[ 1, 2, 3, 4 ]");
+    }
+    {
+        Vector<Vector<String>> v { { "1"sv, "2"sv }, { "3"sv, "4"sv } };
+        EXPECT_EQ(String::formatted("{}", v), "[ [ 1, 2 ], [ 3, 4 ] ]");
+    }
+}
+
+TEST_CASE(format_wchar)
+{
+    EXPECT_EQ(String::formatted("{}", L'a'), "a");
+    EXPECT_EQ(String::formatted("{}", L'\U0001F41E'), "\xF0\x9F\x90\x9E");
+    EXPECT_EQ(String::formatted("{:x}", L'a'), "61");
+    EXPECT_EQ(String::formatted("{:x}", L'\U0001F41E'), "1f41e");
+    EXPECT_EQ(String::formatted("{:d}", L'a'), "97");
+    EXPECT_EQ(String::formatted("{:d}", L'\U0001F41E'), "128030");
+
+    EXPECT_EQ(String::formatted("{:6}", L'a'), "a     ");
+    EXPECT_EQ(String::formatted("{:6d}", L'a'), "    97");
+    EXPECT_EQ(String::formatted("{:#x}", L'\U0001F41E'), "0x1f41e");
 }

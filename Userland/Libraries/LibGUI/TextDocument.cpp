@@ -11,7 +11,6 @@
 #include <AK/Utf8View.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/TextDocument.h>
-#include <LibGUI/TextEditor.h>
 #include <LibRegex/Regex.h>
 
 namespace GUI {
@@ -40,7 +39,7 @@ TextDocument::~TextDocument()
 {
 }
 
-bool TextDocument::set_text(const StringView& text)
+bool TextDocument::set_text(StringView text, AllowCallback allow_callback)
 {
     m_client_notifications_enabled = false;
     m_undo_stack.clear();
@@ -86,12 +85,12 @@ bool TextDocument::set_text(const StringView& text)
 
     // Don't show the file's trailing newline as an actual new line.
     if (line_count() > 1 && line(line_count() - 1).is_empty())
-        m_lines.take_last();
+        (void)m_lines.take_last();
 
     m_client_notifications_enabled = true;
 
     for (auto* client : m_clients)
-        client->document_did_set_text();
+        client->document_did_set_text(allow_callback);
 
     clear_text_guard.disarm();
 
@@ -162,7 +161,7 @@ TextDocumentLine::TextDocumentLine(TextDocument& document)
     clear(document);
 }
 
-TextDocumentLine::TextDocumentLine(TextDocument& document, const StringView& text)
+TextDocumentLine::TextDocumentLine(TextDocument& document, StringView text)
 {
     set_text(document, text);
 }
@@ -179,7 +178,7 @@ void TextDocumentLine::set_text(TextDocument& document, const Vector<u32> text)
     document.update_views({});
 }
 
-bool TextDocumentLine::set_text(TextDocument& document, const StringView& text)
+bool TextDocumentLine::set_text(TextDocument& document, StringView text)
 {
     if (text.is_empty()) {
         clear(document);
@@ -350,7 +349,14 @@ String TextDocument::text_in_range(const TextRange& a_range) const
         auto& line = this->line(i);
         size_t selection_start_column_on_line = range.start().line() == i ? range.start().column() : 0;
         size_t selection_end_column_on_line = range.end().line() == i ? range.end().column() : line.length();
-        builder.append(Utf32View(line.code_points() + selection_start_column_on_line, selection_end_column_on_line - selection_start_column_on_line));
+
+        if (!line.is_empty()) {
+            builder.append(
+                Utf32View(
+                    line.code_points() + selection_start_column_on_line,
+                    selection_end_column_on_line - selection_start_column_on_line));
+        }
+
         if (i != range.end().line())
             builder.append('\n');
     }
@@ -397,7 +403,7 @@ TextPosition TextDocument::previous_position_before(const TextPosition& position
     return { position.line(), position.column() - 1 };
 }
 
-void TextDocument::update_regex_matches(const StringView& needle)
+void TextDocument::update_regex_matches(StringView needle)
 {
     if (m_regex_needs_update || needle != m_regex_needle) {
         Regex<PosixExtended> re(needle);
@@ -415,7 +421,7 @@ void TextDocument::update_regex_matches(const StringView& needle)
     }
 }
 
-TextRange TextDocument::find_next(const StringView& needle, const TextPosition& start, SearchShouldWrap should_wrap, bool regmatch, bool match_case)
+TextRange TextDocument::find_next(StringView needle, const TextPosition& start, SearchShouldWrap should_wrap, bool regmatch, bool match_case)
 {
     if (needle.is_empty())
         return {};
@@ -495,7 +501,7 @@ TextRange TextDocument::find_next(const StringView& needle, const TextPosition& 
     return {};
 }
 
-TextRange TextDocument::find_previous(const StringView& needle, const TextPosition& start, SearchShouldWrap should_wrap, bool regmatch, bool match_case)
+TextRange TextDocument::find_previous(StringView needle, const TextPosition& start, SearchShouldWrap should_wrap, bool regmatch, bool match_case)
 {
     if (needle.is_empty())
         return {};
@@ -579,7 +585,7 @@ TextRange TextDocument::find_previous(const StringView& needle, const TextPositi
     return {};
 }
 
-Vector<TextRange> TextDocument::find_all(const StringView& needle, bool regmatch)
+Vector<TextRange> TextDocument::find_all(StringView needle, bool regmatch)
 {
     Vector<TextRange> ranges;
 
@@ -610,15 +616,25 @@ Optional<TextDocumentSpan> TextDocument::first_non_skippable_span_before(const T
 
 Optional<TextDocumentSpan> TextDocument::first_non_skippable_span_after(const TextPosition& position) const
 {
-    for (size_t i = 0; i < m_spans.size(); ++i) {
-        if (!m_spans[i].range.contains(position))
-            continue;
-        while ((i + 1) < m_spans.size() && m_spans[i + 1].is_skippable)
-            ++i;
-        if (i >= (m_spans.size() - 1))
-            return {};
-        return m_spans[i + 1];
+    size_t i = 0;
+    // Find the first span containing the cursor
+    for (; i < m_spans.size(); ++i) {
+        if (m_spans[i].range.contains(position))
+            break;
     }
+    // Find the first span *after* the cursor
+    // TODO: For a large number of spans, binary search would be faster.
+    for (; i < m_spans.size(); ++i) {
+        if (!m_spans[i].range.contains(position))
+            break;
+    }
+    // Skip skippable spans
+    for (; i < m_spans.size(); ++i) {
+        if (!m_spans[i].is_skippable)
+            break;
+    }
+    if (i < m_spans.size())
+        return m_spans[i];
     return {};
 }
 
@@ -638,6 +654,8 @@ TextPosition TextDocument::first_word_break_before(const TextPosition& position,
     if (target.column() == line.length())
         modifier = 1;
 
+    while (target.column() > 0 && is_ascii_blank(line.code_points()[target.column() - modifier]))
+        target.set_column(target.column() - 1);
     auto is_start_alphanumeric = is_ascii_alphanumeric(line.code_points()[target.column() - modifier]);
 
     while (target.column() > 0) {
@@ -662,6 +680,8 @@ TextPosition TextDocument::first_word_break_after(const TextPosition& position) 
         return TextPosition(position.line() + 1, 0);
     }
 
+    while (target.column() < line.length() && is_ascii_space(line.code_points()[target.column()]))
+        target.set_column(target.column() + 1);
     auto is_start_alphanumeric = is_ascii_alphanumeric(line.code_points()[target.column()]);
 
     while (target.column() < line.length()) {
@@ -669,6 +689,39 @@ TextPosition TextDocument::first_word_break_after(const TextPosition& position) 
         if ((is_start_alphanumeric && !is_ascii_alphanumeric(next_code_point)) || (!is_start_alphanumeric && is_ascii_alphanumeric(next_code_point)))
             break;
         target.set_column(target.column() + 1);
+    }
+
+    return target;
+}
+
+TextPosition TextDocument::first_word_before(const TextPosition& position, bool start_at_column_before) const
+{
+    if (position.column() == 0) {
+        if (position.line() == 0) {
+            return TextPosition(0, 0);
+        }
+        auto previous_line = this->line(position.line() - 1);
+        return TextPosition(position.line() - 1, previous_line.length());
+    }
+
+    auto target = position;
+    auto line = this->line(target.line());
+    if (target.column() == line.length())
+        start_at_column_before = 1;
+
+    auto nonblank_passed = !is_ascii_blank(line.code_points()[target.column() - start_at_column_before]);
+    while (target.column() > 0) {
+        auto prev_code_point = line.code_points()[target.column() - 1];
+        nonblank_passed |= !is_ascii_blank(prev_code_point);
+
+        if (nonblank_passed && is_ascii_blank(prev_code_point)) {
+            break;
+        } else if (is_ascii_punctuation(prev_code_point)) {
+            target.set_column(target.column() - 1);
+            break;
+        }
+
+        target.set_column(target.column() - 1);
     }
 
     return target;
@@ -746,6 +799,10 @@ void InsertTextCommand::perform_formatting(const TextDocument::Client& client)
 
     for (auto input_char : m_text) {
         if (input_char == '\n') {
+            size_t spaces_at_end = 0;
+            if (column < line_indentation)
+                spaces_at_end = line_indentation - column;
+            line_indentation -= spaces_at_end;
             builder.append('\n');
             column = 0;
             if (should_auto_indent) {
@@ -822,8 +879,6 @@ bool RemoveTextCommand::merge_with(GUI::Command const& other)
     m_text = builder.to_string();
     m_range.set_start(typed_other.m_range.start());
     return true;
-
-    return false;
 }
 
 void RemoveTextCommand::redo()
@@ -838,7 +893,7 @@ void RemoveTextCommand::undo()
     m_document.set_all_cursors(new_cursor);
 }
 
-TextPosition TextDocument::insert_at(const TextPosition& position, const StringView& text, const Client* client)
+TextPosition TextDocument::insert_at(const TextPosition& position, StringView text, const Client* client)
 {
     TextPosition cursor = position;
     Utf8View utf8_view(text);
@@ -892,12 +947,16 @@ void TextDocument::remove(const TextRange& unnormalized_range)
     } else {
         // Delete across a newline, merging lines.
         VERIFY(range.start().line() == range.end().line() - 1);
+
         auto& first_line = line(range.start().line());
         auto& second_line = line(range.end().line());
+
         Vector<u32> code_points;
         code_points.append(first_line.code_points(), range.start().column());
-        code_points.append(second_line.code_points() + range.end().column(), second_line.length() - range.end().column());
+        if (!second_line.is_empty())
+            code_points.append(second_line.code_points() + range.end().column(), second_line.length() - range.end().column());
         first_line.set_text(*this, move(code_points));
+
         remove_line(range.end().line());
     }
 

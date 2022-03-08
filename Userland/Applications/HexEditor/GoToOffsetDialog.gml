@@ -3,16 +3,15 @@
     fixed_width: 300
     fixed_height: 80
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
         spacing: 2
-        margins: [0, 0, 0, 0]
+        margins: [0]
     }
 
     @GUI::Widget {
         layout: @GUI::HorizontalBoxLayout {
             spacing: 2
-            margins: [2, 2, 2, 2]
+            margins: [2]
         }
 
         @GUI::Label {
@@ -41,7 +40,7 @@
     @GUI::Widget {
         layout: @GUI::HorizontalBoxLayout {
             spacing: 2
-            margins: [2, 2, 2, 2]
+            margins: [2]
         }
 
         @GUI::Label {
@@ -58,6 +57,6 @@
 
     @GUI::Statusbar {
         name: "statusbar"
-        label_count: 2
+        segment_count: 2
     }
 }

@@ -4,9 +4,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "CustomGameDialog.h"
 #include "Field.h"
-#include <LibCore/ConfigFile.h>
+#include <AK/URL.h>
+#include <LibConfig/Client.h>
+#include <LibCore/System.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/Action.h>
+#include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
@@ -16,133 +21,144 @@
 #include <LibGUI/Menubar.h>
 #include <LibGUI/SeparatorWidget.h>
 #include <LibGUI/Window.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath wpath cpath recvfd sendfd unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath recvfd sendfd unix"));
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    if (pledge("stdio rpath wpath cpath recvfd sendfd", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    Config::pledge_domain("Minesweeper");
 
-    auto config = Core::ConfigFile::get_for_app("Minesweeper");
+    TRY(Desktop::Launcher::add_allowed_handler_with_only_specific_urls("/bin/Help", { URL::create_with_file_protocol("/usr/share/man/man6/Minesweeper.md") }));
+    TRY(Desktop::Launcher::seal_allowlist());
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath recvfd sendfd"));
 
-    if (unveil(config->filename().characters(), "crw") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/tmp/portal/launch", "rw"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-minesweeper"));
 
-    auto app_icon = GUI::Icon::default_icon("app-minesweeper");
-
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_resizable(false);
     window->set_title("Minesweeper");
     window->resize(139, 175);
 
-    auto& widget = window->set_main_widget<GUI::Widget>();
-    widget.set_layout<GUI::VerticalBoxLayout>();
-    widget.layout()->set_spacing(0);
+    auto widget = TRY(window->try_set_main_widget<GUI::Widget>());
+    (void)TRY(widget->try_set_layout<GUI::VerticalBoxLayout>());
+    widget->layout()->set_spacing(0);
 
-    auto& top_line = widget.add<GUI::SeparatorWidget>(Gfx::Orientation::Horizontal);
-    top_line.set_fixed_height(2);
+    auto top_line = TRY(widget->try_add<GUI::SeparatorWidget>(Gfx::Orientation::Horizontal));
+    top_line->set_fixed_height(2);
 
-    auto& container = widget.add<GUI::Widget>();
-    container.set_fill_with_background_color(true);
-    container.set_fixed_height(36);
-    container.set_layout<GUI::HorizontalBoxLayout>();
+    auto container = TRY(widget->try_add<GUI::Widget>());
+    container->set_fill_with_background_color(true);
+    container->set_fixed_height(36);
+    (void)TRY(container->try_set_layout<GUI::HorizontalBoxLayout>());
 
-    container.layout()->add_spacer();
+    container->layout()->add_spacer();
 
-    auto& flag_image = container.add<GUI::Label>();
-    flag_image.set_icon(Gfx::Bitmap::load_from_file("/res/icons/minesweeper/flag.png"));
-    flag_image.set_fixed_width(16);
+    auto flag_image = TRY(container->try_add<GUI::Label>());
+    flag_image->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png").release_value_but_fixme_should_propagate_errors());
+    flag_image->set_fixed_width(16);
 
-    auto& flag_label = container.add<GUI::Label>();
-    flag_label.set_autosize(true);
-    flag_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
+    auto flag_label = TRY(container->try_add<GUI::Label>());
+    flag_label->set_autosize(true);
+    flag_label->set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
-    container.layout()->add_spacer();
+    container->layout()->add_spacer();
 
-    auto& face_button = container.add<GUI::Button>();
-    face_button.set_focus_policy(GUI::FocusPolicy::TabFocus);
-    face_button.set_button_style(Gfx::ButtonStyle::Coolbar);
-    face_button.set_fixed_size(36, 36);
+    auto face_button = TRY(container->try_add<GUI::Button>());
+    face_button->set_focus_policy(GUI::FocusPolicy::TabFocus);
+    face_button->set_button_style(Gfx::ButtonStyle::Coolbar);
+    face_button->set_fixed_size(36, 36);
 
-    container.layout()->add_spacer();
+    container->layout()->add_spacer();
 
-    auto& time_image = container.add<GUI::Label>();
-    time_image.set_fixed_width(16);
-    time_image.set_icon(Gfx::Bitmap::load_from_file("/res/icons/minesweeper/timer.png"));
+    auto time_image = TRY(container->try_add<GUI::Label>());
+    time_image->set_fixed_width(16);
+    time_image->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/timer.png").release_value_but_fixme_should_propagate_errors());
 
-    auto& time_label = container.add<GUI::Label>();
-    time_label.set_autosize(true);
-    time_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
+    auto time_label = TRY(container->try_add<GUI::Label>());
+    time_label->set_fixed_width(50);
+    time_label->set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
-    container.layout()->add_spacer();
+    container->layout()->add_spacer();
 
-    auto& field = widget.add<Field>(flag_label, time_label, face_button, [&](auto size) {
-        size.set_height(size.height() + container.min_size().height());
+    auto field = TRY(widget->try_add<Field>(flag_label, time_label, face_button, [&](auto size) {
+        size.set_height(size.height() + container->min_size().height());
         window->resize(size);
-    });
-
-    auto menubar = GUI::Menubar::construct();
-
-    auto& game_menu = menubar->add_menu("&Game");
-
-    game_menu.add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
-        field.reset();
     }));
 
-    game_menu.add_separator();
+    auto game_menu = TRY(window->try_add_menu("&Game"));
+
+    TRY(game_menu->try_add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
+        field->reset();
+    })));
+
+    TRY(game_menu->try_add_separator());
 
     auto chord_toggler_action = GUI::Action::create_checkable("Single-click chording", [&](auto& action) {
-        field.set_single_chording(action.is_checked());
+        field->set_single_chording(action.is_checked());
     });
-    chord_toggler_action->set_checked(field.is_single_chording());
+    chord_toggler_action->set_checked(field->is_single_chording());
 
-    game_menu.add_action(*chord_toggler_action);
-    game_menu.add_separator();
+    TRY(game_menu->try_add_action(*chord_toggler_action));
+    TRY(game_menu->try_add_separator());
 
-    game_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
+    TRY(game_menu->try_add_action(GUI::CommonActions::make_quit_action([](auto&) {
         GUI::Application::the()->quit();
-    }));
+    })));
 
-    auto& difficulty_menu = menubar->add_menu("&Difficulty");
-    difficulty_menu.add_action(GUI::Action::create("&Beginner", { Mod_Ctrl, Key_B }, [&](auto&) {
-        field.set_field_size(9, 9, 10);
-    }));
-    difficulty_menu.add_action(GUI::Action::create("&Intermediate", { Mod_Ctrl, Key_I }, [&](auto&) {
-        field.set_field_size(16, 16, 40);
-    }));
-    difficulty_menu.add_action(GUI::Action::create("&Expert", { Mod_Ctrl, Key_E }, [&](auto&) {
-        field.set_field_size(16, 30, 99);
-    }));
-    difficulty_menu.add_action(GUI::Action::create("&Madwoman", { Mod_Ctrl, Key_M }, [&](auto&) {
-        field.set_field_size(32, 60, 350);
-    }));
+    auto difficulty_menu = TRY(window->try_add_menu("&Difficulty"));
+    GUI::ActionGroup difficulty_actions;
+    difficulty_actions.set_exclusive(true);
 
-    auto& help_menu = menubar->add_menu("&Help");
-    help_menu.add_action(GUI::CommonActions::make_about_action("Minesweeper", app_icon, window));
+    auto action = GUI::Action::create_checkable("&Beginner", { Mod_Ctrl, Key_B }, [&](auto&) {
+        field->set_field_difficulty(Field::Difficulty::Beginner);
+    });
+    action->set_checked(field->difficulty() == Field::Difficulty::Beginner);
+    TRY(difficulty_menu->try_add_action(action));
+    difficulty_actions.add_action(action);
 
-    window->set_menubar(move(menubar));
+    action = GUI::Action::create_checkable("&Intermediate", { Mod_Ctrl, Key_I }, [&](auto&) {
+        field->set_field_difficulty(Field::Difficulty::Intermediate);
+    });
+    action->set_checked(field->difficulty() == Field::Difficulty::Intermediate);
+    TRY(difficulty_menu->try_add_action(action));
+    difficulty_actions.add_action(action);
+
+    action = GUI::Action::create_checkable("&Expert", { Mod_Ctrl, Key_E }, [&](auto&) {
+        field->set_field_difficulty(Field::Difficulty::Expert);
+    });
+    action->set_checked(field->difficulty() == Field::Difficulty::Expert);
+    TRY(difficulty_menu->try_add_action(action));
+    difficulty_actions.add_action(action);
+
+    action = GUI::Action::create_checkable("&Madwoman", { Mod_Ctrl, Key_M }, [&](auto&) {
+        field->set_field_difficulty(Field::Difficulty::Madwoman);
+    });
+    action->set_checked(field->difficulty() == Field::Difficulty::Madwoman);
+    TRY(difficulty_menu->try_add_action(action));
+    difficulty_actions.add_action(action);
+
+    TRY(difficulty_menu->try_add_separator());
+    action = GUI::Action::create_checkable("&Custom game...", { Mod_Ctrl, Key_C }, [&](auto&) {
+        CustomGameDialog::show(window, field);
+    });
+    action->set_checked(field->difficulty() == Field::Difficulty::Custom);
+    TRY(difficulty_menu->try_add_action(action));
+    difficulty_actions.add_action(action);
+
+    auto help_menu = TRY(window->try_add_menu("&Help"));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_help_action([](auto&) {
+        Desktop::Launcher::open(URL::create_with_file_protocol("/usr/share/man/man6/Minesweeper.md"), "/bin/Help");
+    })));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_about_action("Minesweeper", app_icon, window)));
 
     window->show();
 

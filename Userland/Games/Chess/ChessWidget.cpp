@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,10 +20,6 @@
 ChessWidget::ChessWidget()
 {
     set_piece_set("stelar7");
-}
-
-ChessWidget::~ChessWidget()
-{
 }
 
 void ChessWidget::paint_event(GUI::PaintEvent& event)
@@ -176,7 +172,7 @@ void ChessWidget::mousedown_event(GUI::MouseEvent& event)
     if (!frame_inner_rect().contains(event.position()))
         return;
 
-    if (event.button() == GUI::MouseButton::Right) {
+    if (event.button() == GUI::MouseButton::Secondary) {
         if (m_dragging_piece) {
             m_dragging_piece = false;
             set_override_cursor(Gfx::StandardCursor::None);
@@ -212,7 +208,7 @@ void ChessWidget::mouseup_event(GUI::MouseEvent& event)
     if (!frame_inner_rect().contains(event.position()))
         return;
 
-    if (event.button() == GUI::MouseButton::Right) {
+    if (event.button() == GUI::MouseButton::Secondary) {
         m_current_marking.secondary_color = event.shift();
         m_current_marking.alternate_color = event.ctrl();
         m_current_marking.to = mouse_to_square(event);
@@ -366,17 +362,17 @@ void ChessWidget::keydown_event(GUI::KeyEvent& event)
 
 static String set_path = String("/res/icons/chess/sets/");
 
-static RefPtr<Gfx::Bitmap> get_piece(const StringView& set, const StringView& image)
+static RefPtr<Gfx::Bitmap> get_piece(StringView set, StringView image)
 {
     StringBuilder builder;
     builder.append(set_path);
     builder.append(set);
     builder.append('/');
     builder.append(image);
-    return Gfx::Bitmap::load_from_file(builder.build());
+    return Gfx::Bitmap::try_load_from_file(builder.build()).release_value_but_fixme_should_propagate_errors();
 }
 
-void ChessWidget::set_piece_set(const StringView& set)
+void ChessWidget::set_piece_set(StringView set)
 {
     m_piece_set = set;
     m_pieces.set({ Chess::Color::White, Chess::Type::Pawn }, get_piece(set, "white-pawn.png"));
@@ -427,7 +423,7 @@ void ChessWidget::reset()
     update();
 }
 
-void ChessWidget::set_board_theme(const StringView& name)
+void ChessWidget::set_board_theme(StringView name)
 {
     // FIXME: Add some kind of themes.json
     // The following Colors have been taken from lichess.org, but i'm pretty sure they took them from chess.com.
@@ -520,7 +516,7 @@ String ChessWidget::get_fen() const
     return m_playback ? m_board_playback.to_fen() : m_board.to_fen();
 }
 
-bool ChessWidget::import_pgn(const StringView& import_path)
+bool ChessWidget::import_pgn(StringView import_path)
 {
     auto file_or_error = Core::File::open(import_path, Core::OpenMode::ReadOnly);
     if (file_or_error.is_error()) {
@@ -625,7 +621,7 @@ bool ChessWidget::import_pgn(const StringView& import_path)
     return true;
 }
 
-bool ChessWidget::export_pgn(const StringView& export_path) const
+bool ChessWidget::export_pgn(StringView export_path) const
 {
     auto file_or_error = Core::File::open(export_path, Core::OpenMode::WriteOnly);
     if (file_or_error.is_error()) {

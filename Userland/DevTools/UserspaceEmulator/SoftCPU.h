@@ -6,8 +6,12 @@
 
 #pragma once
 
+#include "AK/Debug.h"
+#include "Emulator.h"
 #include "Region.h"
+#include "SoftFPU.h"
 #include "ValueWithShadow.h"
+#include <AK/ByteReader.h>
 #include <LibX86/Instruction.h>
 #include <LibX86/Interpreter.h>
 
@@ -34,6 +38,8 @@ union PartAddressableRegister {
 class SoftCPU final
     : public X86::Interpreter
     , public X86::InstructionStream {
+    friend SoftFPU;
+
 public:
     using ValueWithShadowType8 = ValueWithShadow<u8>;
     using ValueWithShadowType16 = ValueWithShadow<u16>;
@@ -74,7 +80,7 @@ public:
     void push16(ValueWithShadow<u16>);
     ValueWithShadow<u16> pop16();
 
-    void push_string(const StringView&);
+    void push_string(StringView);
     void push_buffer(const u8* data, size_t);
 
     u16 segment(X86::SegmentRegister seg) const { return m_segment[(int)seg]; }
@@ -84,21 +90,21 @@ public:
     {
         switch (reg) {
         case X86::RegisterAL:
-            return { m_gpr[X86::RegisterEAX].low_u8, m_gpr_shadow[X86::RegisterEAX].low_u8 };
+            return m_gpr[X86::RegisterEAX].reference_to<&PartAddressableRegister::low_u8>();
         case X86::RegisterAH:
-            return { m_gpr[X86::RegisterEAX].high_u8, m_gpr_shadow[X86::RegisterEAX].high_u8 };
+            return m_gpr[X86::RegisterEAX].reference_to<&PartAddressableRegister::high_u8>();
         case X86::RegisterBL:
-            return { m_gpr[X86::RegisterEBX].low_u8, m_gpr_shadow[X86::RegisterEBX].low_u8 };
+            return m_gpr[X86::RegisterEBX].reference_to<&PartAddressableRegister::low_u8>();
         case X86::RegisterBH:
-            return { m_gpr[X86::RegisterEBX].high_u8, m_gpr_shadow[X86::RegisterEBX].high_u8 };
+            return m_gpr[X86::RegisterEBX].reference_to<&PartAddressableRegister::high_u8>();
         case X86::RegisterCL:
-            return { m_gpr[X86::RegisterECX].low_u8, m_gpr_shadow[X86::RegisterECX].low_u8 };
+            return m_gpr[X86::RegisterECX].reference_to<&PartAddressableRegister::low_u8>();
         case X86::RegisterCH:
-            return { m_gpr[X86::RegisterECX].high_u8, m_gpr_shadow[X86::RegisterECX].high_u8 };
+            return m_gpr[X86::RegisterECX].reference_to<&PartAddressableRegister::high_u8>();
         case X86::RegisterDL:
-            return { m_gpr[X86::RegisterEDX].low_u8, m_gpr_shadow[X86::RegisterEDX].low_u8 };
+            return m_gpr[X86::RegisterEDX].reference_to<&PartAddressableRegister::low_u8>();
         case X86::RegisterDH:
-            return { m_gpr[X86::RegisterEDX].high_u8, m_gpr_shadow[X86::RegisterEDX].high_u8 };
+            return m_gpr[X86::RegisterEDX].reference_to<&PartAddressableRegister::high_u8>();
         }
         VERIFY_NOT_REACHED();
     }
@@ -107,43 +113,43 @@ public:
     {
         switch (reg) {
         case X86::RegisterAL:
-            return { m_gpr[X86::RegisterEAX].low_u8, m_gpr_shadow[X86::RegisterEAX].low_u8 };
+            return m_gpr[X86::RegisterEAX].slice<&PartAddressableRegister::low_u8>();
         case X86::RegisterAH:
-            return { m_gpr[X86::RegisterEAX].high_u8, m_gpr_shadow[X86::RegisterEAX].high_u8 };
+            return m_gpr[X86::RegisterEAX].slice<&PartAddressableRegister::high_u8>();
         case X86::RegisterBL:
-            return { m_gpr[X86::RegisterEBX].low_u8, m_gpr_shadow[X86::RegisterEBX].low_u8 };
+            return m_gpr[X86::RegisterEBX].slice<&PartAddressableRegister::low_u8>();
         case X86::RegisterBH:
-            return { m_gpr[X86::RegisterEBX].high_u8, m_gpr_shadow[X86::RegisterEBX].high_u8 };
+            return m_gpr[X86::RegisterEBX].slice<&PartAddressableRegister::high_u8>();
         case X86::RegisterCL:
-            return { m_gpr[X86::RegisterECX].low_u8, m_gpr_shadow[X86::RegisterECX].low_u8 };
+            return m_gpr[X86::RegisterECX].slice<&PartAddressableRegister::low_u8>();
         case X86::RegisterCH:
-            return { m_gpr[X86::RegisterECX].high_u8, m_gpr_shadow[X86::RegisterECX].high_u8 };
+            return m_gpr[X86::RegisterECX].slice<&PartAddressableRegister::high_u8>();
         case X86::RegisterDL:
-            return { m_gpr[X86::RegisterEDX].low_u8, m_gpr_shadow[X86::RegisterEDX].low_u8 };
+            return m_gpr[X86::RegisterEDX].slice<&PartAddressableRegister::low_u8>();
         case X86::RegisterDH:
-            return { m_gpr[X86::RegisterEDX].high_u8, m_gpr_shadow[X86::RegisterEDX].high_u8 };
+            return m_gpr[X86::RegisterEDX].slice<&PartAddressableRegister::high_u8>();
         }
         VERIFY_NOT_REACHED();
     }
 
     ValueWithShadow<u16> const_gpr16(X86::RegisterIndex16 reg) const
     {
-        return { m_gpr[reg].low_u16, m_gpr_shadow[reg].low_u16 };
+        return m_gpr[reg].slice<&PartAddressableRegister::low_u16>();
     }
 
     ValueAndShadowReference<u16> gpr16(X86::RegisterIndex16 reg)
     {
-        return { m_gpr[reg].low_u16, m_gpr_shadow[reg].low_u16 };
+        return m_gpr[reg].reference_to<&PartAddressableRegister::low_u16>();
     }
 
     ValueWithShadow<u32> const_gpr32(X86::RegisterIndex32 reg) const
     {
-        return { m_gpr[reg].full_u32, m_gpr_shadow[reg].full_u32 };
+        return m_gpr[reg].slice<&PartAddressableRegister::full_u32>();
     }
 
     ValueAndShadowReference<u32> gpr32(X86::RegisterIndex32 reg)
     {
-        return { m_gpr[reg].full_u32, m_gpr_shadow[reg].full_u32 };
+        return m_gpr[reg].reference_to<&PartAddressableRegister::full_u32>();
     }
 
     template<typename T>
@@ -172,21 +178,21 @@ public:
     {
         if (a32)
             return esi();
-        return { si().value(), (u32)si().shadow() & 0xffff };
+        return { si().value(), (u32)si().shadow_as_value() & 0xffff };
     }
 
     ValueWithShadow<u32> destination_index(bool a32) const
     {
         if (a32)
             return edi();
-        return { di().value(), (u32)di().shadow() & 0xffff };
+        return { di().value(), (u32)di().shadow_as_value() & 0xffff };
     }
 
     ValueWithShadow<u32> loop_index(bool a32) const
     {
         if (a32)
             return ecx();
-        return { cx().value(), (u32)cx().shadow() & 0xffff };
+        return { cx().value(), (u32)cx().shadow_as_value() & 0xffff };
     }
 
     bool decrement_loop_index(bool a32)
@@ -263,6 +269,10 @@ public:
     ValueWithShadow<u8> dl() const { return const_gpr8(X86::RegisterDL); }
     ValueWithShadow<u8> dh() const { return const_gpr8(X86::RegisterDH); }
 
+    long double fpu_get(u8 index) { return m_fpu.fpu_get(index); }
+    long double fpu_pop() { return m_fpu.fpu_pop(); }
+    MMX mmx_get(u8 index) const { return m_fpu.mmx_get(index); };
+
     void set_eax(ValueWithShadow<u32> value) { gpr32(X86::RegisterEAX) = value; }
     void set_ebx(ValueWithShadow<u32> value) { gpr32(X86::RegisterEBX) = value; }
     void set_ecx(ValueWithShadow<u32> value) { gpr32(X86::RegisterECX) = value; }
@@ -289,6 +299,10 @@ public:
     void set_ch(ValueWithShadow<u8> value) { gpr8(X86::RegisterCH) = value; }
     void set_dl(ValueWithShadow<u8> value) { gpr8(X86::RegisterDL) = value; }
     void set_dh(ValueWithShadow<u8> value) { gpr8(X86::RegisterDH) = value; }
+
+    void fpu_push(long double value) { m_fpu.fpu_push(value); }
+    void fpu_set(u8 index, long double value) { m_fpu.fpu_set(index, value); }
+    void mmx_set(u8 index, MMX value) { m_fpu.mmx_set(index, value); }
 
     bool of() const { return m_eflags & Flags::OF; }
     bool sf() const { return m_eflags & Flags::SF; }
@@ -355,18 +369,12 @@ public:
     template<typename T>
     ValueWithShadow<T> read_memory(X86::LogicalAddress address)
     {
-        if constexpr (sizeof(T) == 1)
-            return read_memory8(address);
-        if constexpr (sizeof(T) == 2)
-            return read_memory16(address);
-        if constexpr (sizeof(T) == 4)
-            return read_memory32(address);
-        if constexpr (sizeof(T) == 8)
-            return read_memory64(address);
-        if constexpr (sizeof(T) == 16)
-            return read_memory128(address);
-        if constexpr (sizeof(T) == 32)
-            return read_memory256(address);
+        auto value = m_emulator.mmu().read<T>(address);
+        if constexpr (AK::HasFormatter<T>)
+            outln_if(MEMORY_DEBUG, "\033[36;1mread_memory: @{:#04x}:{:p} -> {:#064x} ({:hex-dump})\033[0m", address.selector(), address.offset(), value.value(), value.shadow().span());
+        else
+            outln_if(MEMORY_DEBUG, "\033[36;1mread_memory: @{:#04x}:{:p} -> ??? ({:hex-dump})\033[0m", address.selector(), address.offset(), value.shadow().span());
+        return value;
     }
 
     void write_memory8(X86::LogicalAddress, ValueWithShadow<u8>);
@@ -728,6 +736,7 @@ private:
     virtual void INSB(const X86::Instruction&) override;
     virtual void INSD(const X86::Instruction&) override;
     virtual void INSW(const X86::Instruction&) override;
+    virtual void INT1(const X86::Instruction&) override;
     virtual void INT3(const X86::Instruction&) override;
     virtual void INTO(const X86::Instruction&) override;
     virtual void INT_imm8(const X86::Instruction&) override;
@@ -1092,8 +1101,92 @@ private:
     virtual void XOR_reg32_RM32(const X86::Instruction&) override;
     virtual void XOR_reg8_RM8(const X86::Instruction&) override;
     virtual void MOVQ_mm1_mm2m64(const X86::Instruction&) override;
+    virtual void MOVQ_mm1m64_mm2(const X86::Instruction&) override;
+    virtual void MOVD_mm1_rm32(const X86::Instruction&) override;
+    virtual void MOVQ_mm1_rm64(const X86::Instruction&) override; // long mode
+    virtual void MOVD_rm32_mm2(const X86::Instruction&) override;
+    virtual void MOVQ_rm64_mm2(const X86::Instruction&) override; // long mode
     virtual void EMMS(const X86::Instruction&) override;
-    virtual void MOVQ_mm1_m64_mm2(const X86::Instruction&) override;
+
+    virtual void PREFETCHTNTA(X86::Instruction const&) override;
+    virtual void PREFETCHT0(X86::Instruction const&) override;
+    virtual void PREFETCHT1(X86::Instruction const&) override;
+    virtual void PREFETCHT2(X86::Instruction const&) override;
+    virtual void LDMXCSR(X86::Instruction const&) override;
+    virtual void STMXCSR(X86::Instruction const&) override;
+    virtual void MOVUPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MOVSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void MOVUPS_xmm1m128_xmm2(X86::Instruction const&) override;
+    virtual void MOVSS_xmm1m32_xmm2(X86::Instruction const&) override;
+    virtual void MOVLPS_xmm1_xmm2m64(X86::Instruction const&) override;
+    virtual void MOVLPS_m64_xmm2(X86::Instruction const&) override;
+    virtual void UNPCKLPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void UNPCKHPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MOVHPS_xmm1_xmm2m64(X86::Instruction const&) override;
+    virtual void MOVHPS_m64_xmm2(X86::Instruction const&) override;
+    virtual void MOVAPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MOVAPS_xmm1m128_xmm2(X86::Instruction const&) override;
+    virtual void CVTPI2PS_xmm1_mm2m64(X86::Instruction const&) override;
+    virtual void CVTSI2SS_xmm1_rm32(X86::Instruction const&) override;
+    virtual void MOVNTPS_xmm1m128_xmm2(X86::Instruction const&) override;
+    virtual void CVTTPS2PI_mm1_xmm2m64(X86::Instruction const&) override;
+    virtual void CVTTPS2PI_r32_xmm2m32(X86::Instruction const&) override;
+    virtual void CVTPS2PI_xmm1_mm2m64(X86::Instruction const&) override;
+    virtual void CVTSS2SI_xmm1_rm32(X86::Instruction const&) override;
+    virtual void UCOMISS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void COMISS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void MOVMSKPS_reg_xmm(X86::Instruction const&) override;
+    virtual void SQRTPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void SQRTSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void RSQRTPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void RSQRTSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void RCPPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void RCPSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void ANDPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void ANDNPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void ORPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void XORPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void ADDPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void ADDSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void MULPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MULSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void SUBPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void SUBSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void MINPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MINSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void DIVPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void DIVSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void MAXPS_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MAXSS_xmm1_xmm2m32(X86::Instruction const&) override;
+    virtual void PSHUFW_mm1_mm2m64_imm8(X86::Instruction const&) override;
+    virtual void CMPPS_xmm1_xmm2m128_imm8(X86::Instruction const&) override;
+    virtual void CMPSS_xmm1_xmm2m32_imm8(X86::Instruction const&) override;
+    virtual void PINSRW_mm1_r32m16_imm8(X86::Instruction const&) override;
+    virtual void PINSRW_xmm1_r32m16_imm8(X86::Instruction const&) override;
+    virtual void PEXTRW_reg_mm1_imm8(X86::Instruction const&) override;
+    virtual void PEXTRW_reg_xmm1_imm8(X86::Instruction const&) override;
+    virtual void SHUFPS_xmm1_xmm2m128_imm8(X86::Instruction const&) override;
+    virtual void PMOVMSKB_reg_mm1(X86::Instruction const&) override;
+    virtual void PMOVMSKB_reg_xmm1(X86::Instruction const&) override;
+    virtual void PMINUB_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PMINUB_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void PMAXUB_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PMAXUB_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void PAVGB_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PAVGB_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void PAVGW_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PAVGW_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void PMULHUW_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PMULHUW_xmm1_xmm2m64(X86::Instruction const&) override;
+    virtual void MOVNTQ_m64_mm1(X86::Instruction const&) override;
+    virtual void PMINSB_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PMINSB_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void PMAXSB_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PMAXSB_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void PSADBB_mm1_mm2m64(X86::Instruction const&) override;
+    virtual void PSADBB_xmm1_xmm2m128(X86::Instruction const&) override;
+    virtual void MASKMOVQ_mm1_mm2m64(X86::Instruction const&) override;
+
     virtual void wrap_0xC0(const X86::Instruction&) override;
     virtual void wrap_0xC1_16(const X86::Instruction&) override;
     virtual void wrap_0xC1_32(const X86::Instruction&) override;
@@ -1152,11 +1245,10 @@ private:
 
     void update_code_cache();
 
-private:
     Emulator& m_emulator;
+    SoftFPU m_fpu;
 
-    PartAddressableRegister m_gpr[8];
-    PartAddressableRegister m_gpr_shadow[8];
+    ValueWithShadow<PartAddressableRegister> m_gpr[8];
 
     u16 m_segment[8] { 0 };
     u32 m_eflags { 0 };
@@ -1165,44 +1257,6 @@ private:
 
     u32 m_eip { 0 };
     u32 m_base_eip { 0 };
-
-    long double m_fpu[8];
-    // FIXME: Shadow for m_fpu.
-
-    // FIXME: Use bits 11 to 13 in the FPU status word for this.
-    int m_fpu_top { -1 };
-
-    void fpu_push(long double n)
-    {
-        ++m_fpu_top;
-        fpu_set(0, n);
-    }
-    long double fpu_pop()
-    {
-        auto n = fpu_get(0);
-        m_fpu_top--;
-        return n;
-    }
-    long double fpu_get(int i)
-    {
-        VERIFY(i >= 0 && i <= m_fpu_top);
-        return m_fpu[m_fpu_top - i];
-    }
-    void fpu_set(int i, long double n)
-    {
-        VERIFY(i >= 0 && i <= m_fpu_top);
-        m_fpu[m_fpu_top - i] = n;
-    }
-
-    // FIXME: Or just something like m_flags_tainted?
-    ValueWithShadow<u16> m_fpu_cw { 0, 0 };
-
-    // FIXME: Make FPU/MMX memory its own struct
-    // FIXME: FPU Status word
-    // FIXME: FPU Tag Word
-    // FIXME: FPU Data Pointer
-    // FIXME: FPU Instruction Pointer ?
-    // FIXME: FPU Last OP Code ?
 
     Region* m_cached_code_region { nullptr };
     u8* m_cached_code_base_ptr { nullptr };
@@ -1223,7 +1277,8 @@ ALWAYS_INLINE u16 SoftCPU::read16()
     if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
         update_code_cache();
 
-    u16 value = *reinterpret_cast<const u16*>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()]);
+    u16 value;
+    ByteReader::load<u16>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()], value);
     m_eip += 2;
     return value;
 }
@@ -1233,7 +1288,9 @@ ALWAYS_INLINE u32 SoftCPU::read32()
     if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
         update_code_cache();
 
-    u32 value = *reinterpret_cast<const u32*>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()]);
+    u32 value;
+    ByteReader::load<u32>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()], value);
+
     m_eip += 4;
     return value;
 }
@@ -1243,7 +1300,9 @@ ALWAYS_INLINE u64 SoftCPU::read64()
     if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
         update_code_cache();
 
-    auto value = *reinterpret_cast<const u64*>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()]);
+    u64 value;
+    ByteReader::load<u64>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()], value);
+
     m_eip += 8;
     return value;
 }

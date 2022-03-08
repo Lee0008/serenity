@@ -10,13 +10,13 @@
 
 namespace Wasm {
 
-Optional<Label> Configuration::nth_label(size_t i)
+Optional<size_t> Configuration::nth_label_index(size_t i)
 {
     for (size_t index = m_stack.size(); index > 0; --index) {
         auto& entry = m_stack.entries()[index - 1];
-        if (auto ptr = entry.get_pointer<Label>()) {
+        if (entry.has<Label>()) {
             if (i == 0)
-                return *ptr;
+                return index - 1;
             --i;
         }
     }
@@ -42,10 +42,8 @@ Result Configuration::call(Interpreter& interpreter, FunctionAddress address, Ve
     if (!function)
         return Trap {};
     if (auto* wasm_function = function->get_pointer<WasmFunction>()) {
-        Vector<Value> locals;
-        locals.ensure_capacity(arguments.size() + wasm_function->code().locals().size());
-        for (auto& value : arguments)
-            locals.append(Value { value });
+        Vector<Value> locals = move(arguments);
+        locals.ensure_capacity(locals.size() + wasm_function->code().locals().size());
         for (auto& type : wasm_function->code().locals())
             locals.empend(type, 0ull);
 
@@ -68,10 +66,10 @@ Result Configuration::execute(Interpreter& interpreter)
 {
     interpreter.interpret(*this);
     if (interpreter.did_trap())
-        return Trap {};
+        return Trap { interpreter.trap_reason() };
 
     if (stack().size() <= frame().arity() + 1)
-        return Trap {};
+        return Trap { "Not enough values to return from call" };
 
     Vector<Value> results;
     results.ensure_capacity(frame().arity());
@@ -80,7 +78,7 @@ Result Configuration::execute(Interpreter& interpreter)
     auto label = stack().pop();
     // ASSERT: label == current frame
     if (!label.has<Label>())
-        return Trap {};
+        return Trap { "Invalid stack configuration" };
     return Result { move(results) };
 }
 
@@ -90,7 +88,8 @@ void Configuration::dump_stack()
     {
         DuplexMemoryStream memory_stream;
         Printer { memory_stream }.print(vs...);
-        dbgln(format.view(), StringView(memory_stream.copy_into_contiguous_buffer()).trim_whitespace());
+        ByteBuffer buffer = memory_stream.copy_into_contiguous_buffer();
+        dbgln(format.view(), StringView(buffer).trim_whitespace());
     };
     for (auto const& entry : stack().entries()) {
         entry.visit(

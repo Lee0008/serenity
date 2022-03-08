@@ -6,7 +6,7 @@ describe("errors", () => {
     test("this value must be a Promise", () => {
         expect(() => {
             Promise.prototype.then.call({});
-        }).toThrowWithMessage(TypeError, "Not a Promise");
+        }).toThrowWithMessage(TypeError, "Not an object of type Promise");
     });
 });
 
@@ -139,5 +139,32 @@ describe("normal behavior", () => {
         resolvePromise();
         runQueuedPromiseJobs();
         expect(fulfillmentValue).toBe("Some value");
+    });
+
+    test("PromiseCapability with throwing resolve function", () => {
+        class PromiseLike {
+            constructor(executor) {
+                executor(
+                    () => {
+                        throw new Error();
+                    },
+                    () => {}
+                );
+            }
+        }
+
+        let resolvePromise;
+        const p = new Promise(resolve => {
+            resolvePromise = resolve;
+        });
+        p.constructor = { [Symbol.species]: PromiseLike };
+
+        // Triggers creation of a PromiseCapability with the throwing resolve function passed to the executor above
+        p.then(() => {});
+
+        // Crashes when assuming there are no job exceptions (as per the spec)
+        // If we survive this, the exception has been silently ignored
+        resolvePromise();
+        runQueuedPromiseJobs();
     });
 });

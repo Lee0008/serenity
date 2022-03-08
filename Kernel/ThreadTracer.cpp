@@ -4,9 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Memory.h>
-#include <AK/kmalloc.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/RegisterState.h>
 #include <Kernel/ThreadTracer.h>
 
 namespace Kernel {

@@ -5,13 +5,11 @@
  */
 
 #include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <Kernel/API/InodeWatcherEvent.h>
-#include <LibCompress/Gzip.h>
-#include <LibCore/File.h>
 #include <LibCore/FileWatcher.h>
-#include <LibCoreDump/Backtrace.h>
-#include <LibCoreDump/Reader.h>
+#include <LibCore/MappedFile.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <serenity.h>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -33,59 +31,11 @@ static void wait_until_coredump_is_ready(const String& coredump_path)
     }
 }
 
-static bool compress_coredump(const String& coredump_path)
-{
-    auto file_or_error = MappedFile::map(coredump_path);
-    if (file_or_error.is_error()) {
-        dbgln("Could not open coredump '{}': {}", coredump_path, file_or_error.error());
-        return false;
-    }
-    auto coredump_file = file_or_error.value();
-    auto compressed_coredump = Compress::GzipCompressor::compress_all(coredump_file->bytes());
-    if (!compressed_coredump.has_value()) {
-        dbgln("Could not compress coredump '{}'", coredump_path);
-        return false;
-    }
-    auto output_path = String::formatted("{}.gz", coredump_path);
-    auto output_file_or_error = Core::File::open(output_path, Core::OpenMode::WriteOnly);
-    if (output_file_or_error.is_error()) {
-        dbgln("Could not open '{}' for writing: {}", output_path, output_file_or_error.error());
-        return false;
-    }
-    auto output_file = output_file_or_error.value();
-    if (!output_file->write(compressed_coredump.value().data(), compressed_coredump.value().size())) {
-        dbgln("Could not write compressed coredump '{}'", output_path);
-        return false;
-    }
-    return true;
-}
-
-static void print_backtrace(const String& coredump_path)
-{
-    auto coredump = CoreDump::Reader::create(coredump_path);
-    if (!coredump) {
-        dbgln("Could not open coredump '{}'", coredump_path);
-        return;
-    }
-
-    size_t thread_index = 0;
-    coredump->for_each_thread_info([&](auto& thread_info) {
-        CoreDump::Backtrace backtrace(*coredump, thread_info);
-        if (thread_index > 0)
-            dbgln();
-        dbgln("--- Backtrace for thread #{} (TID {}) ---", thread_index, thread_info.tid);
-        for (auto& entry : backtrace.entries())
-            dbgln("{}", entry.to_string(true));
-        ++thread_index;
-        return IterationDecision::Continue;
-    });
-}
-
-static void launch_crash_reporter(const String& coredump_path, bool unlink_after_use)
+static void launch_crash_reporter(const String& coredump_path, bool unlink_on_exit)
 {
     pid_t child;
     const char* argv[4] = { "CrashReporter" };
-    if (unlink_after_use) {
+    if (unlink_on_exit) {
         argv[1] = "--unlink";
         argv[2] = coredump_path.characters();
         argv[3] = nullptr;
@@ -101,19 +51,12 @@ static void launch_crash_reporter(const String& coredump_path, bool unlink_after
     }
 }
 
-int main()
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    if (pledge("stdio rpath wpath cpath proc exec", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath wpath cpath proc exec"));
 
     Core::BlockingFileWatcher watcher;
-    auto watch_result = watcher.add_watch("/tmp/coredump", Core::FileWatcherEvent::Type::ChildCreated);
-    if (watch_result.is_error()) {
-        warnln("Failed to watch the coredump directory: {}", watch_result.error());
-        VERIFY_NOT_REACHED();
-    }
+    TRY(watcher.add_watch("/tmp/coredump", Core::FileWatcherEvent::Type::ChildCreated));
 
     while (true) {
         auto event = watcher.wait_for_event();
@@ -121,12 +64,15 @@ int main()
         if (event.value().type != Core::FileWatcherEvent::Type::ChildCreated)
             continue;
         auto& coredump_path = event.value().event_path;
-        if (coredump_path.ends_with(".gz"))
-            continue; // stops compress_coredump from accidentally triggering us
         dbgln("New coredump file: {}", coredump_path);
         wait_until_coredump_is_ready(coredump_path);
-        auto compressed = compress_coredump(coredump_path);
-        print_backtrace(coredump_path);
-        launch_crash_reporter(coredump_path, compressed);
+
+        auto file_or_error = Core::MappedFile::map(coredump_path);
+        if (file_or_error.is_error()) {
+            dbgln("Unable to map coredump {}: {}", coredump_path, file_or_error.error());
+            continue;
+        }
+
+        launch_crash_reporter(coredump_path, true);
     }
 }

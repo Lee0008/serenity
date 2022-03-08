@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/Arch/x86/CPU.h>
-#include <Kernel/IO.h>
-#include <Kernel/Interrupts/PIC.h>
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
+#include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Scheduler.h>
+#include <Kernel/Sections.h>
 #include <Kernel/Thread.h>
 #include <Kernel/Time/PIT.h>
 #include <Kernel/Time/TimeManagement.h>
@@ -20,7 +21,7 @@ UNMAP_AFTER_INIT NonnullRefPtr<PIT> PIT::initialize(Function<void(const Register
     return adopt_ref(*new PIT(move(callback)));
 }
 
-inline static void reset_countdown(u16 timer_reload)
+[[maybe_unused]] inline static void reset_countdown(u16 timer_reload)
 {
     IO::out8(PIT_CTL, TIMER0_SELECT | WRITE_WORD | MODE_COUNTDOWN);
     IO::out8(TIMER0_CTL, LSB(timer_reload));

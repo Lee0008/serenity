@@ -1,12 +1,16 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Math.h>
+#include <LibCore/System.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/ConnectionToWindowServer.h>
 #include <LibGUI/Frame.h>
 #include <LibGUI/Icon.h>
 #include <LibGUI/Menu.h>
@@ -16,9 +20,8 @@
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Path.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
-
-#include <math.h>
 
 class MainFrame final : public GUI::Frame {
     C_OBJECT(MainFrame);
@@ -71,12 +74,16 @@ public:
 
         painter.stroke_path(path, Color::Black, 1);
 
-        if (m_buttons & GUI::MouseButton::Left) {
+        auto primary_secondary_switched = GUI::ConnectionToWindowServer::the().get_buttons_switched();
+        auto primary_pressed = m_buttons & GUI::MouseButton::Primary;
+        auto secondary_pressed = m_buttons & GUI::MouseButton::Secondary;
+
+        if (primary_secondary_switched ? secondary_pressed : primary_pressed) {
             painter.fill_rect({ 31, 21, 34, 44 }, Color::Blue);
             painter.draw_triangle({ 30, 21 }, { 65, 21 }, { 65, 12 }, Color::Blue);
         }
 
-        if (m_buttons & GUI::MouseButton::Right) {
+        if (primary_secondary_switched ? primary_pressed : secondary_pressed) {
             painter.fill_rect({ 96, 21, 34, 44 }, Color::Blue);
             painter.draw_triangle({ 96, 12 }, { 96, 21 }, { 132, 21 }, Color::Blue);
         }
@@ -87,7 +94,7 @@ public:
         if (m_buttons & GUI::MouseButton::Forward)
             painter.fill_rect({ 26, 44, 4, 16 }, Color::Blue);
 
-        if (m_buttons & GUI::MouseButton::Back)
+        if (m_buttons & GUI::MouseButton::Backward)
             painter.fill_rect({ 26, 71, 4, 16 }, Color::Blue);
 
         if (m_show_scroll_wheel) {
@@ -100,17 +107,17 @@ public:
             Gfx::IntPoint p3;
             Gfx::IntPoint p4;
 
-            p1.set_x(radius * cos(M_PI * m_wheel_delta_acc / 18) + off_x);
-            p1.set_y(radius * sin(M_PI * m_wheel_delta_acc / 18) + off_y);
+            p1.set_x(radius * AK::cos(AK::Pi<double> * m_wheel_delta_acc / 18.) + off_x);
+            p1.set_y(radius * AK::sin(AK::Pi<double> * m_wheel_delta_acc / 18.) + off_y);
 
-            p2.set_x(radius * cos(M_PI * (m_wheel_delta_acc + 18) / 18) + off_x);
-            p2.set_y(radius * sin(M_PI * (m_wheel_delta_acc + 18) / 18) + off_y);
+            p2.set_x(radius * AK::cos(AK::Pi<double> * (m_wheel_delta_acc + 18) / 18.) + off_x);
+            p2.set_y(radius * AK::sin(AK::Pi<double> * (m_wheel_delta_acc + 18) / 18.) + off_y);
 
-            p3.set_x(radius * cos(M_PI * (m_wheel_delta_acc + 9) / 18) + off_x);
-            p3.set_y(radius * sin(M_PI * (m_wheel_delta_acc + 9) / 18) + off_y);
+            p3.set_x(radius * AK::cos(AK::Pi<double> * (m_wheel_delta_acc + 9) / 18.) + off_x);
+            p3.set_y(radius * AK::sin(AK::Pi<double> * (m_wheel_delta_acc + 9) / 18.) + off_y);
 
-            p4.set_x(radius * cos(M_PI * (m_wheel_delta_acc + 27) / 18) + off_x);
-            p4.set_y(radius * sin(M_PI * (m_wheel_delta_acc + 27) / 18) + off_y);
+            p4.set_x(radius * AK::cos(AK::Pi<double> * (m_wheel_delta_acc + 27) / 18.) + off_x);
+            p4.set_y(radius * AK::sin(AK::Pi<double> * (m_wheel_delta_acc + 27) / 18.) + off_y);
 
             painter.draw_line(p1, p2, Color::Red, 2);
             painter.draw_line(p3, p4, Color::Red, 2);
@@ -131,7 +138,7 @@ public:
 
     void mousewheel_event(GUI::MouseEvent& event) override
     {
-        m_wheel_delta_acc = (m_wheel_delta_acc + event.wheel_delta() + 36) % 36;
+        m_wheel_delta_acc = (m_wheel_delta_acc + event.wheel_delta_y() + 36) % 36;
         m_show_scroll_wheel = true;
         update();
         if (!has_timer())
@@ -150,42 +157,29 @@ private:
     }
 };
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    auto app = GUI::Application::construct(argc, argv);
-    auto app_icon = GUI::Icon::default_icon("app-mouse");
+    auto app = TRY(GUI::Application::try_create(arguments));
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-mouse"));
 
-    if (pledge("stdio recvfd sendfd rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    auto window = GUI::Window::construct();
-    window->set_title("Mouse button demo");
+    auto window = TRY(GUI::Window::try_create());
+    window->set_title("Mouse demo");
     window->set_icon(app_icon.bitmap_for_size(16));
     window->resize(160, 155);
 
-    auto& main_widget = window->set_main_widget<MainFrame>();
-    main_widget.set_fill_with_background_color(true);
+    auto main_widget = TRY(window->try_set_main_widget<MainFrame>());
+    main_widget->set_fill_with_background_color(true);
 
-    auto menubar = GUI::Menubar::construct();
-    auto& file_menu = menubar->add_menu("&File");
-    file_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
+    auto file_menu = TRY(window->try_add_menu("&File"));
+    TRY(file_menu->try_add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); })));
 
-    auto& help_menu = menubar->add_menu("&Help");
-    help_menu.add_action(GUI::CommonActions::make_about_action("Mouse Demo", app_icon, window));
+    auto help_menu = TRY(window->try_add_menu("&Help"));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_about_action("Mouse Demo", app_icon, window)));
 
-    window->set_menubar(move(menubar));
     window->set_resizable(false);
     window->show();
     return app->exec();

@@ -6,22 +6,25 @@
 
 #pragma once
 
+#include <AK/Concepts.h>
+#include <AK/Find.h>
 #include <AK/Iterator.h>
 
 namespace AK {
 
-template<typename Container, typename ValueType>
+template<typename TEndIterator, IteratorPairWith<TEndIterator> TIterator>
 constexpr bool any_of(
-    const SimpleIterator<Container, ValueType>& begin,
-    const SimpleIterator<Container, ValueType>& end,
-    const auto& predicate)
+    TIterator const& begin,
+    TEndIterator const& end,
+    auto const& predicate)
 {
-    for (auto iter = begin; iter != end; ++iter) {
-        if (predicate(*iter)) {
-            return true;
-        }
-    }
-    return false;
+    return find_if(begin, end, predicate) != end;
+}
+
+template<IterableContainer Container>
+constexpr bool any_of(Container&& container, auto const& predicate)
+{
+    return any_of(container.begin(), container.end(), predicate);
 }
 
 }

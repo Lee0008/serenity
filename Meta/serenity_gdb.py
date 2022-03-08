@@ -12,16 +12,16 @@ def handler_class_for_type(type, re=re.compile('^([^<]+)(<.*>)?$')):
 
     match = re.match(typename)
     if not match:
-        return None
+        return UnhandledType
 
     klass = match.group(1)
 
-    if klass == 'AK::Atomic':
+    if klass == 'AK::Array':
+        return AKArray
+    elif klass == 'AK::Atomic':
         return AKAtomic
     elif klass == 'AK::DistinctNumeric':
         return AKDistinctNumeric
-    elif klass == 'AK::InlineLinkedList':
-        return AKInlineLinkedList
     elif klass == 'AK::HashMap':
         return AKHashMapPrettyPrinter
     elif klass == 'AK::RefCounted':
@@ -107,7 +107,7 @@ class AKString:
         self.val = val
 
     def to_string(self):
-        if int(self.val["m_impl"]["m_bits"]["m_value"]) == 0:
+        if int(self.val["m_impl"]["m_ptr"]) == 0:
             return '""'
         else:
             impl = AKRefPtr(self.val["m_impl"]).get_pointee().dereference()
@@ -184,7 +184,7 @@ class AKRefPtr:
     def get_pointee(self):
         inner_type = self.val.type.template_argument(0)
         inner_type_ptr = inner_type.pointer()
-        return self.val["m_bits"]["m_value"].cast(inner_type_ptr)
+        return self.val["m_ptr"].cast(inner_type_ptr)
 
     def children(self):
         return [('*', self.get_pointee())]
@@ -259,6 +259,29 @@ class AKVector:
         return f'AK::Vector<{handler_class_for_type(template_type).prettyprint_type(template_type)}>'
 
 
+class AKArray:
+    def __init__(self, val):
+        self.val = val
+        self.storage_type = self.val.type.template_argument(0)
+        self.array_size = self.val.type.template_argument(1)
+
+    def to_string(self):
+        return AKArray.prettyprint_type(self.val.type)
+
+    def children(self):
+        data_array = self.val["__data"]
+        storage_type_ptr = self.storage_type.pointer()
+        elements = data_array.cast(storage_type_ptr)
+
+        return [(f"[{i}]", elements[i]) for i in range(self.array_size)]
+
+    @classmethod
+    def prettyprint_type(cls, type):
+        template_type = type.template_argument(0)
+        template_size = type.template_argument(1)
+        return f'AK::Array<{template_type}, {template_size}>'
+
+
 class AKHashMapPrettyPrinter:
     def __init__(self, val):
         self.val = val
@@ -318,30 +341,6 @@ class AKSinglyLinkedList:
     def prettyprint_type(cls, type):
         template_type = type.template_argument(0)
         return f'AK::SinglyLinkedList<{handler_class_for_type(template_type).prettyprint_type(template_type)}>'
-
-
-class AKInlineLinkedList:
-    def __init__(self, val):
-        self.val = val
-
-    def to_string(self):
-        return AKInlineLinkedList.prettyprint_type(self.val.type)
-
-    def children(self):
-        node_type_ptr = self.val.type.template_argument(0).pointer()
-
-        elements = []
-        node = self.val["m_head"]
-        while node != 0:
-            elements.append(node.cast(node_type_ptr))
-            node = node["m_next"]
-
-        return [(f"[{i}]", elements[i].dereference()) for i in range(len(elements))]
-
-    @classmethod
-    def prettyprint_type(cls, type):
-        template_type = type.template_argument(0)
-        return f'AK::InlineLinkedList<{handler_class_for_type(template_type).prettyprint_type(template_type)}>'
 
 
 class VirtualAddress:

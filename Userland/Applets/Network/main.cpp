@@ -6,6 +6,7 @@
 
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/ImageWidget.h>
@@ -13,22 +14,32 @@
 #include <LibGUI/Notification.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
+#include <LibMain/Main.h>
 #include <serenity.h>
 #include <spawn.h>
 #include <stdio.h>
 
 class NetworkWidget final : public GUI::ImageWidget {
-    C_OBJECT(NetworkWidget);
+    C_OBJECT_ABSTRACT(NetworkWidget)
 
 public:
-    NetworkWidget(bool notifications)
+    static ErrorOr<NonnullRefPtr<NetworkWidget>> try_create(bool notifications)
+    {
+        NonnullRefPtr<Gfx::Bitmap> connected_icon = TRY(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/network.png"));
+        NonnullRefPtr<Gfx::Bitmap> disconnected_icon = TRY(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/network-disconnected.png"));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) NetworkWidget(notifications, move(connected_icon), move(disconnected_icon)));
+    }
+
+private:
+    NetworkWidget(bool notifications, NonnullRefPtr<Gfx::Bitmap> connected_icon, NonnullRefPtr<Gfx::Bitmap> disconnected_icon)
+        : m_connected_icon(move(connected_icon))
+        , m_disconnected_icon(move(disconnected_icon))
     {
         m_notifications = notifications;
         update_widget();
         start_timer(5000);
     }
 
-private:
     virtual void timer_event(Core::TimerEvent&) override
     {
         update_widget();
@@ -36,7 +47,7 @@ private:
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() != GUI::MouseButton::Left)
+        if (event.button() != GUI::MouseButton::Primary)
             return;
 
         pid_t child_pid;
@@ -116,14 +127,16 @@ private:
         auto file_contents = file->read_all();
         auto json = JsonValue::from_string(file_contents);
 
-        if (!json.has_value())
+        if (json.is_error())
             return adapter_info.to_string();
 
         int connected_adapters = 0;
         json.value().as_array().for_each([&adapter_info, include_loopback, &connected_adapters](auto& value) {
             auto& if_object = value.as_object();
-            auto ip_address = if_object.get("ipv4_address").to_string();
+            auto ip_address = if_object.get("ipv4_address").as_string_or("no IP");
             auto ifname = if_object.get("name").to_string();
+            auto link_up = if_object.get("link_up").as_bool();
+            auto link_speed = if_object.get("link_speed").to_i32();
 
             if (!include_loopback)
                 if (ifname == "loop")
@@ -131,7 +144,14 @@ private:
             if (ip_address != "null")
                 connected_adapters++;
 
-            adapter_info.appendff("{}: {}\n", ifname, ip_address);
+            if (!adapter_info.is_empty())
+                adapter_info.append('\n');
+
+            adapter_info.appendff("{}: {} ", ifname, ip_address);
+            if (!link_up)
+                adapter_info.appendff("(down)");
+            else
+                adapter_info.appendff("({} Mb/s)", link_speed);
         });
 
         // show connected icon so long as at least one adapter is connected
@@ -143,61 +163,38 @@ private:
     String m_adapter_info;
     bool m_connected = false;
     bool m_notifications = true;
-    RefPtr<Gfx::Bitmap> m_connected_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/network.png");
-    RefPtr<Gfx::Bitmap> m_disconnected_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/network-disconnected.png");
+    NonnullRefPtr<Gfx::Bitmap> m_connected_icon;
+    NonnullRefPtr<Gfx::Bitmap> m_disconnected_icon;
 };
 
-int main(int argc, char* argv[])
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd rpath unix proc exec", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath unix proc exec"));
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    auto app = GUI::Application::construct(argc, argv);
-
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/tmp/portal/notify", "rw") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/proc/net/adapters", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil("/bin/SystemMonitor", "x") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/tmp/portal/notify", "rw"));
+    TRY(Core::System::unveil("/proc/net/adapters", "r"));
+    TRY(Core::System::unveil("/bin/SystemMonitor", "x"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     bool display_notifications = false;
     const char* name = nullptr;
     Core::ArgsParser args_parser;
     args_parser.add_option(display_notifications, "Display notifications", "display-notifications", 'd');
     args_parser.add_option(name, "Applet name used by WindowServer.ini to set the applet order", "name", 'n', "name");
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     if (name == nullptr)
         name = "Network";
 
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_title(name);
     window->set_window_type(GUI::WindowType::Applet);
     window->set_has_alpha_channel(true);
     window->resize(16, 16);
-    auto& icon = window->set_main_widget<NetworkWidget>(display_notifications);
-    icon.load_from_file("/res/icons/16x16/network.png");
+    auto icon = TRY(window->try_set_main_widget<NetworkWidget>(display_notifications));
+    icon->load_from_file("/res/icons/16x16/network.png");
     window->resize(16, 16);
     window->show();
 

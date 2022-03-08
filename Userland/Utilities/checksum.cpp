@@ -4,19 +4,19 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/LexicalPath.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
 #include <LibCrypto/Hash/HashManager.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath", nullptr));
 
-    auto program_name = StringView { argv[0] };
+    auto program_name = LexicalPath::basename(arguments.strings[0]);
     auto hash_kind = Crypto::Hash::HashKind::None;
 
     if (program_name == "md5sum")
@@ -29,18 +29,18 @@ int main(int argc, char** argv)
         hash_kind = Crypto::Hash::HashKind::SHA512;
 
     if (hash_kind == Crypto::Hash::HashKind::None) {
-        warnln("Error: program must be executed as 'md5sum', 'sha1sum', 'sha256sum' or 'sha512sum'; got '{}'", argv[0]);
+        warnln("Error: program must be executed as 'md5sum', 'sha1sum', 'sha256sum' or 'sha512sum'; got '{}'", program_name);
         exit(1);
     }
 
     auto hash_name = program_name.substring_view(0, program_name.length() - 3).to_string().to_uppercase();
     auto paths_help_string = String::formatted("File(s) to print {} checksum of", hash_name);
 
-    Vector<String> paths;
+    Vector<StringView> paths;
 
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(paths, paths_help_string.characters(), "path", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     if (paths.is_empty())
         paths.append("-");
@@ -48,32 +48,23 @@ int main(int argc, char** argv)
     Crypto::Hash::Manager hash;
     hash.initialize(hash_kind);
 
-    bool success;
     auto has_error = false;
-    auto file = Core::File::construct();
 
     for (auto const& path : paths) {
-        if (path == "-") {
-            success = file->open(STDIN_FILENO, Core::OpenMode::ReadOnly, Core::File::ShouldCloseFileDescriptor::No);
-        } else {
-            file->set_filename(path);
-            success = file->open(Core::OpenMode::ReadOnly);
-        }
-        if (!success) {
-            warnln("{}: {}: {}", argv[0], path, file->error_string());
-            has_error = true;
-            continue;
+        NonnullRefPtr<Core::File> file = Core::File::standard_input();
+        if (path != "-"sv) {
+            auto file_or_error = Core::File::open(path, Core::OpenMode::ReadOnly);
+            if (file_or_error.is_error()) {
+                warnln("{}: {}: {}", program_name, path, file->error_string());
+                has_error = true;
+                continue;
+            }
+            file = file_or_error.release_value();
         }
 
         while (!file->eof() && !file->has_error())
             hash.update(file->read(PAGE_SIZE));
-        auto digest = hash.digest();
-        auto digest_data = digest.immutable_data();
-        StringBuilder builder;
-        for (size_t i = 0; i < hash.digest_size(); ++i)
-            builder.appendff("{:02x}", digest_data[i]);
-        auto hash_sum_hex = builder.build();
-        outln("{}  {}", hash_sum_hex, path);
+        outln("{:hex-dump}  {}", hash.digest().bytes(), path);
     }
     return has_error ? 1 : 0;
 }

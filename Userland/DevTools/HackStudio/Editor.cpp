@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * 2018-2021, the SerenityOS developers
+ * Copyright (c) 2018-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -16,10 +16,14 @@
 #include <AK/LexicalPath.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
+#include <LibCore/Timer.h>
+#include <LibCpp/SemanticSyntaxHighlighter.h>
 #include <LibCpp/SyntaxHighlighter.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
-#include <LibGUI/GMLSyntaxHighlighter.h>
+#include <LibGUI/GML/AutocompleteProvider.h>
+#include <LibGUI/GML/SyntaxHighlighter.h>
+#include <LibGUI/GitCommitSyntaxHighlighter.h>
 #include <LibGUI/INISyntaxHighlighter.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
@@ -28,35 +32,37 @@
 #include <LibGUI/Window.h>
 #include <LibJS/SyntaxHighlighter.h>
 #include <LibMarkdown/Document.h>
-#include <LibWeb/DOM/ElementFactory.h>
+#include <LibSQL/AST/SyntaxHighlighter.h>
+#include <LibWeb/CSS/SyntaxHighlighter/SyntaxHighlighter.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/HTML/HTMLHeadElement.h>
+#include <LibWeb/HTML/SyntaxHighlighter/SyntaxHighlighter.h>
 #include <LibWeb/OutOfProcessWebView.h>
 #include <Shell/SyntaxHighlighter.h>
 #include <fcntl.h>
 
 namespace HackStudio {
 
+ErrorOr<NonnullRefPtr<Editor>> Editor::try_create()
+{
+    NonnullRefPtr<Editor> editor = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) Editor()));
+    TRY(editor->initialize_documentation_tooltip());
+    TRY(editor->initialize_parameters_hint_tooltip());
+    return editor;
+}
+
 Editor::Editor()
 {
+    create_tokens_info_timer();
+
     set_document(CodeDocument::create());
-    m_documentation_tooltip_window = GUI::Window::construct();
-    m_documentation_tooltip_window->set_rect(0, 0, 500, 400);
-    m_documentation_tooltip_window->set_window_type(GUI::WindowType::Tooltip);
-    m_documentation_page_view = m_documentation_tooltip_window->set_main_widget<Web::OutOfProcessWebView>();
     m_evaluate_expression_action = GUI::Action::create("Evaluate expression", { Mod_Ctrl, Key_E }, [this](auto&) {
-        if (!execution_position().has_value()) {
-            GUI::MessageBox::show(window(), "Program is not running", "Error", GUI::MessageBox::Type::Error);
-            return;
-        }
+        VERIFY(is_program_running());
         auto dialog = EvaluateExpressionDialog::construct(window());
         dialog->exec();
     });
     m_move_execution_to_line_action = GUI::Action::create("Set execution point to line", [this](auto&) {
-        if (!execution_position().has_value()) {
-            GUI::MessageBox::show(window(), "Program must be paused", "Error", GUI::MessageBox::Type::Error);
-            return;
-        }
+        VERIFY(is_program_running());
         auto success = Debugger::the().set_execution_position(currently_open_file(), cursor().line());
         if (success) {
             set_execution_position(cursor().line());
@@ -64,14 +70,31 @@ Editor::Editor()
             GUI::MessageBox::show(window(), "Failed to set execution position", "Error", GUI::MessageBox::Type::Error);
         }
     });
+
+    set_debug_mode(false);
+
     add_custom_context_menu_action(*m_evaluate_expression_action);
     add_custom_context_menu_action(*m_move_execution_to_line_action);
 
     set_gutter_visible(true);
 }
 
-Editor::~Editor()
+ErrorOr<void> Editor::initialize_documentation_tooltip()
 {
+    m_documentation_tooltip_window = GUI::Window::construct();
+    m_documentation_tooltip_window->set_rect(0, 0, 500, 400);
+    m_documentation_tooltip_window->set_window_type(GUI::WindowType::Tooltip);
+    m_documentation_page_view = TRY(m_documentation_tooltip_window->try_set_main_widget<Web::OutOfProcessWebView>());
+    return {};
+}
+
+ErrorOr<void> Editor::initialize_parameters_hint_tooltip()
+{
+    m_parameters_hint_tooltip_window = GUI::Window::construct();
+    m_parameters_hint_tooltip_window->set_rect(0, 0, 280, 35);
+    m_parameters_hint_tooltip_window->set_window_type(GUI::WindowType::Tooltip);
+    m_parameter_hint_page_view = TRY(m_parameters_hint_tooltip_window->try_set_main_widget<Web::OutOfProcessWebView>());
+    return {};
 }
 
 EditorWrapper& Editor::wrapper()
@@ -169,7 +192,7 @@ static HashMap<String, String>& man_paths()
         Core::DirIterator it("/usr/share/man/man2", Core::DirIterator::Flags::SkipDots);
         while (it.has_next()) {
             auto path = it.next_full_path();
-            auto title = LexicalPath(path).title();
+            auto title = LexicalPath::title(path);
             paths.set(title, path);
         }
     }
@@ -287,6 +310,8 @@ void Editor::mousemove_event(GUI::MouseEvent& event)
 
 void Editor::mousedown_event(GUI::MouseEvent& event)
 {
+    m_parameters_hint_tooltip_window->hide();
+
     auto highlighter = wrapper().editor().syntax_highlighter();
     if (!highlighter) {
         GUI::TextEditor::mousedown_event(event);
@@ -295,7 +320,7 @@ void Editor::mousedown_event(GUI::MouseEvent& event)
 
     auto text_position = text_position_at(event.position());
     auto ruler_line_rect = ruler_content_rect(text_position.line());
-    if (event.button() == GUI::MouseButton::Left && event.position().x() < ruler_line_rect.width()) {
+    if (event.button() == GUI::MouseButton::Primary && event.position().x() < ruler_line_rect.width()) {
         if (!breakpoint_lines().contains_slow(text_position.line())) {
             breakpoint_lines().append(text_position.line());
             Debugger::the().on_breakpoint_change(wrapper().filename_label().text(), text_position.line(), BreakpointChange::Added);
@@ -332,16 +357,17 @@ void Editor::mousedown_event(GUI::MouseEvent& event)
 void Editor::drop_event(GUI::DropEvent& event)
 {
     event.accept();
-    window()->move_to_front();
 
     if (event.mime_data().has_urls()) {
         auto urls = event.mime_data().urls();
         if (urls.is_empty())
             return;
+        window()->move_to_front();
         if (urls.size() > 1) {
             GUI::MessageBox::show(window(), "HackStudio can only open one file at a time!", "One at a time please!", GUI::MessageBox::Type::Error);
             return;
         }
+        set_current_editor_wrapper(static_cast<EditorWrapper*>(parent()));
         open_file(urls.first().path());
     }
 }
@@ -416,13 +442,13 @@ void Editor::clear_execution_position()
 
 const Gfx::Bitmap& Editor::breakpoint_icon_bitmap()
 {
-    static auto bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/breakpoint.png");
+    static auto bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/breakpoint.png").release_value_but_fixme_should_propagate_errors();
     return *bitmap;
 }
 
 const Gfx::Bitmap& Editor::current_position_icon_bitmap()
 {
-    static auto bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/go-forward.png");
+    static auto bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors();
     return *bitmap;
 }
 
@@ -440,33 +466,18 @@ CodeDocument& Editor::code_document()
 
 void Editor::set_document(GUI::TextDocument& doc)
 {
+    if (has_document() && &document() == &doc)
+        return;
+
     VERIFY(doc.is_code_document());
     GUI::TextEditor::set_document(doc);
 
     set_override_cursor(Gfx::StandardCursor::IBeam);
 
-    CodeDocument& code_document = static_cast<CodeDocument&>(doc);
-    switch (code_document.language()) {
-    case Language::Cpp:
-        set_syntax_highlighter(make<Cpp::SyntaxHighlighter>());
-        m_language_client = get_language_client<LanguageClients::Cpp::ServerConnection>(project().root_path());
-        break;
-    case Language::GML:
-        set_syntax_highlighter(make<GUI::GMLSyntaxHighlighter>());
-        break;
-    case Language::JavaScript:
-        set_syntax_highlighter(make<JS::SyntaxHighlighter>());
-        break;
-    case Language::Ini:
-        set_syntax_highlighter(make<GUI::IniSyntaxHighlighter>());
-        break;
-    case Language::Shell:
-        set_syntax_highlighter(make<Shell::SyntaxHighlighter>());
-        m_language_client = get_language_client<LanguageClients::Shell::ServerConnection>(project().root_path());
-        break;
-    default:
-        set_syntax_highlighter({});
-    }
+    auto& code_document = static_cast<CodeDocument&>(doc);
+
+    set_language_client_for(code_document);
+    set_syntax_highlighter_for(code_document);
 
     if (m_language_client) {
         set_autocomplete_provider(make<LanguageServerAidedAutocompleteProvider>(*m_language_client));
@@ -482,6 +493,8 @@ void Editor::set_document(GUI::TextDocument& doc)
         }
         m_language_client->open_file(code_document.file_path(), fd);
         close(fd);
+    } else {
+        set_autocomplete_provider_for(code_document);
     }
 }
 
@@ -563,11 +576,9 @@ void Editor::flush_file_content_to_langauge_server()
 
 void Editor::on_navigatable_link_click(const GUI::TextDocumentSpan& span)
 {
-    auto adjusted_range = span.range;
-    adjusted_range.end().set_column(adjusted_range.end().column() + 1);
-    auto span_text = document().text_in_range(adjusted_range);
+    auto span_text = document().text_in_range(span.range);
     auto header_path = span_text.substring(1, span_text.length() - 2);
-    dbgln_if(EDITOR_DEBUG, "Ctrl+click: {} \"{}\"", adjusted_range, header_path);
+    dbgln_if(EDITOR_DEBUG, "Ctrl+click: {} \"{}\"", span.range, header_path);
     navigate_to_include_if_available(header_path);
 }
 
@@ -576,14 +587,181 @@ void Editor::on_identifier_click(const GUI::TextDocumentSpan& span)
     if (!m_language_client)
         return;
 
-    m_language_client->on_declaration_found = [this](const String& file, size_t line, size_t column) {
+    m_language_client->on_declaration_found = [](const String& file, size_t line, size_t column) {
         HackStudio::open_file(file, line, column);
     };
     m_language_client->search_declaration(code_document().file_path(), span.range.start().line(), span.range.start().column());
 }
+
 void Editor::set_cursor(const GUI::TextPosition& a_position)
 {
     TextEditor::set_cursor(a_position);
+}
+
+void Editor::set_syntax_highlighter_for(const CodeDocument& document)
+{
+    switch (document.language()) {
+    case Language::Cpp:
+        if (m_use_semantic_syntax_highlighting) {
+            set_syntax_highlighter(make<Cpp::SemanticSyntaxHighlighter>());
+            on_token_info_timer_tick();
+            m_tokens_info_timer->restart();
+        } else
+            set_syntax_highlighter(make<Cpp::SyntaxHighlighter>());
+
+        break;
+    case Language::CSS:
+        set_syntax_highlighter(make<Web::CSS::SyntaxHighlighter>());
+        break;
+    case Language::GitCommit:
+        set_syntax_highlighter(make<GUI::GitCommitSyntaxHighlighter>());
+        break;
+    case Language::GML:
+        set_syntax_highlighter(make<GUI::GML::SyntaxHighlighter>());
+        break;
+    case Language::HTML:
+        set_syntax_highlighter(make<Web::HTML::SyntaxHighlighter>());
+        break;
+    case Language::JavaScript:
+        set_syntax_highlighter(make<JS::SyntaxHighlighter>());
+        break;
+    case Language::Ini:
+        set_syntax_highlighter(make<GUI::IniSyntaxHighlighter>());
+        break;
+    case Language::Shell:
+        set_syntax_highlighter(make<Shell::SyntaxHighlighter>());
+        break;
+    case Language::SQL:
+        set_syntax_highlighter(make<SQL::AST::SyntaxHighlighter>());
+        break;
+    default:
+        set_syntax_highlighter({});
+    }
+
+    force_rehighlight();
+}
+
+void Editor::set_autocomplete_provider_for(CodeDocument const& document)
+{
+    switch (document.language()) {
+    case Language::GML:
+        set_autocomplete_provider(make<GUI::GML::AutocompleteProvider>());
+        break;
+    default:
+        set_autocomplete_provider({});
+    }
+}
+
+void Editor::set_language_client_for(const CodeDocument& document)
+{
+    if (m_language_client && m_language_client->language() == document.language())
+        return;
+
+    if (document.language() == Language::Cpp)
+        m_language_client = get_language_client<LanguageClients::Cpp::ConnectionToServer>(project().root_path());
+
+    if (document.language() == Language::Shell)
+        m_language_client = get_language_client<LanguageClients::Shell::ConnectionToServer>(project().root_path());
+
+    if (m_language_client) {
+        m_language_client->on_tokens_info_result = [this](Vector<GUI::AutocompleteProvider::TokenInfo> const& tokens_info) {
+            on_tokens_info_result(tokens_info);
+        };
+    }
+}
+
+void Editor::keydown_event(GUI::KeyEvent& event)
+{
+    TextEditor::keydown_event(event);
+
+    m_parameters_hint_tooltip_window->hide();
+
+    if (!event.shift() && !event.alt() && event.ctrl() && event.key() == KeyCode::Key_P) {
+        handle_function_parameters_hint_request();
+    }
+
+    m_tokens_info_timer->restart();
+}
+
+void Editor::handle_function_parameters_hint_request()
+{
+    if (!m_language_client)
+        return;
+
+    m_language_client->on_function_parameters_hint_result = [this](Vector<String> const& params, size_t argument_index) {
+        dbgln("on_function_parameters_hint_result");
+
+        StringBuilder html;
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (i == argument_index)
+                html.append("<b>");
+
+            html.appendff("{}", params[i]);
+
+            if (i == argument_index)
+                html.append("</b>");
+
+            if (i < params.size() - 1)
+                html.append(", ");
+        }
+        html.append("<style>body { background-color: #dac7b5; }</style>");
+
+        m_parameter_hint_page_view->load_html(html.build(), {});
+
+        auto cursor_rect = current_editor().cursor_content_rect().location().translated(screen_relative_rect().location());
+
+        Gfx::Rect content(cursor_rect.x(), cursor_rect.y(), m_parameter_hint_page_view->children_clip_rect().width(), m_parameter_hint_page_view->children_clip_rect().height());
+        m_parameters_hint_tooltip_window->move_to(cursor_rect.x(), cursor_rect.y() - m_parameters_hint_tooltip_window->height() - vertical_scrollbar().value());
+
+        m_parameters_hint_tooltip_window->show();
+    };
+
+    m_language_client->get_parameters_hint(
+        code_document().file_path(),
+        cursor().line(),
+        cursor().column());
+}
+
+void Editor::set_debug_mode(bool enabled)
+{
+    m_evaluate_expression_action->set_enabled(enabled);
+    m_move_execution_to_line_action->set_enabled(enabled);
+}
+
+void Editor::on_token_info_timer_tick()
+{
+    if (!semantic_syntax_highlighting_is_enabled())
+        return;
+    if (!m_language_client || !m_language_client->is_active_client())
+        return;
+
+    m_language_client->get_tokens_info(code_document().file_path());
+}
+
+void Editor::on_tokens_info_result(Vector<GUI::AutocompleteProvider::TokenInfo> const& tokens_info)
+{
+    auto highlighter = syntax_highlighter();
+    if (highlighter && highlighter->is_cpp_semantic_highlighter()) {
+        auto& semantic_cpp_highlighter = verify_cast<Cpp::SemanticSyntaxHighlighter>(*highlighter);
+        semantic_cpp_highlighter.update_tokens_info(tokens_info);
+        force_rehighlight();
+    }
+}
+
+void Editor::create_tokens_info_timer()
+{
+    static constexpr size_t token_info_timer_interval_ms = 1000;
+    m_tokens_info_timer = Core::Timer::create_repeating((int)token_info_timer_interval_ms, [this] {
+        on_token_info_timer_tick();
+        m_tokens_info_timer->stop();
+    });
+    m_tokens_info_timer->start();
+}
+
+void Editor::set_semantic_syntax_highlighting(bool value)
+{
+    m_use_semantic_syntax_highlighting = value;
+    set_syntax_highlighter_for(code_document());
 }
 
 }

@@ -14,7 +14,7 @@
 #include <LibGUI/Model.h>
 
 struct Match {
-    int offset;
+    u64 offset;
     String value;
 };
 
@@ -74,8 +74,6 @@ public:
         }
         return {};
     }
-
-    virtual void update() override { }
 
 private:
     Vector<Match> m_matches;

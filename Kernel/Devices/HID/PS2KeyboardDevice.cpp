@@ -5,16 +5,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Assertions.h>
-#include <AK/ByteBuffer.h>
-#include <AK/Singleton.h>
-#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/IO.h>
 #include <Kernel/Debug.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/Devices/HID/PS2KeyboardDevice.h>
-#include <Kernel/IO.h>
+#include <Kernel/Scheduler.h>
+#include <Kernel/Sections.h>
 #include <Kernel/TTY/ConsoleManagement.h>
 #include <Kernel/WorkQueue.h>
 
@@ -34,10 +32,10 @@ void PS2KeyboardDevice::irq_handle_byte_read(u8 byte)
         return;
     }
 
-    if (m_modifiers == (Mod_Alt | Mod_Shift) && byte == 0x58) {
+    if ((m_modifiers == (Mod_Alt | Mod_Shift) || m_modifiers == (Mod_Ctrl | Mod_Alt | Mod_Shift)) && byte == 0x58) {
         // Alt+Shift+F12 pressed, dump some kernel state to the debug console.
         ConsoleManagement::the().switch_to_debug();
-        Scheduler::dump_scheduler_state();
+        Scheduler::dump_scheduler_state(m_modifiers == (Mod_Ctrl | Mod_Alt | Mod_Shift));
     }
 
     dbgln_if(KEYBOARD_DEBUG, "Keyboard::irq_handle_byte_read: {:#02x} {}", ch, (pressed ? "down" : "up"));
@@ -52,51 +50,49 @@ void PS2KeyboardDevice::irq_handle_byte_read(u8 byte)
         update_modifier(Mod_Ctrl, pressed);
         break;
     case 0x5b:
-        update_modifier(Mod_Super, pressed);
+        m_left_super_pressed = pressed;
+        update_modifier(Mod_Super, m_left_super_pressed || m_right_super_pressed);
+        break;
+    case 0x5c:
+        m_right_super_pressed = pressed;
+        update_modifier(Mod_Super, m_left_super_pressed || m_right_super_pressed);
         break;
     case 0x2a:
+        m_left_shift_pressed = pressed;
+        update_modifier(Mod_Shift, m_left_shift_pressed || m_right_shift_pressed);
+        break;
     case 0x36:
-        if (m_both_shift_keys_pressed)
-            m_both_shift_keys_pressed = false;
-        else if ((m_modifiers & Mod_Shift) != 0 && pressed)
-            m_both_shift_keys_pressed = true;
-        else
-            update_modifier(Mod_Shift, pressed);
+        m_right_shift_pressed = pressed;
+        update_modifier(Mod_Shift, m_left_shift_pressed || m_right_shift_pressed);
         break;
     }
     switch (ch) {
-    case I8042_ACK:
+    case I8042Response::Acknowledge:
         break;
     default:
-        if (m_modifiers & Mod_Alt) {
-            switch (ch) {
-            case 0x02 ... 0x01 + ConsoleManagement::s_max_virtual_consoles:
-                g_io_work->queue([this, ch]() {
-                    ConsoleManagement::the().switch_to(ch - 0x02);
-                });
-                break;
-            default:
-                key_state_changed(ch, pressed);
-                break;
-            }
-        } else {
-            key_state_changed(ch, pressed);
+        if ((m_modifiers & Mod_Alt) != 0 && ch >= 2 && ch <= ConsoleManagement::s_max_virtual_consoles + 1) {
+            g_io_work->queue([ch]() {
+                ConsoleManagement::the().switch_to(ch - 0x02);
+            });
         }
+        key_state_changed(ch, pressed);
     }
 }
 
-void PS2KeyboardDevice::handle_irq(const RegisterState&)
+bool PS2KeyboardDevice::handle_irq(const RegisterState&)
 {
     // The controller will read the data and call irq_handle_byte_read
     // for the appropriate device
-    m_i8042_controller->irq_process_input_buffer(HIDDevice::Type::Keyboard);
+    return m_i8042_controller->irq_process_input_buffer(HIDDevice::Type::Keyboard);
 }
 
 UNMAP_AFTER_INIT RefPtr<PS2KeyboardDevice> PS2KeyboardDevice::try_to_initialize(const I8042Controller& ps2_controller)
 {
-    auto device = adopt_ref(*new PS2KeyboardDevice(ps2_controller));
-    if (device->initialize())
-        return device;
+    auto keyboard_device_or_error = DeviceManagement::try_create_device<PS2KeyboardDevice>(ps2_controller);
+    // FIXME: Find a way to propagate errors
+    VERIFY(!keyboard_device_or_error.is_error());
+    if (keyboard_device_or_error.value()->initialize())
+        return keyboard_device_or_error.release_value();
     return nullptr;
 }
 

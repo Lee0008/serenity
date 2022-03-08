@@ -1,8 +1,14 @@
+serenity_component(
+    RequestServer
+    TARGETS RequestServer
+)
+
 compile_ipc(RequestServer.ipc RequestServerEndpoint.h)
 compile_ipc(RequestClient.ipc RequestClientEndpoint.h)
 
 set(SOURCES
-    ClientConnection.cpp
+    ConnectionFromClient.cpp
+    ConnectionCache.cpp
     Request.cpp
     RequestClientEndpoint.h
     RequestServerEndpoint.h
@@ -17,4 +23,4 @@ set(SOURCES
 )
 
 serenity_bin(RequestServer)
-target_link_libraries(RequestServer LibCore LibIPC LibGemini LibHTTP)
+target_link_libraries(RequestServer LibCore LibIPC LibGemini LibHTTP LibMain)

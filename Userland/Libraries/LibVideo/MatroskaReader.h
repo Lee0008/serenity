@@ -8,37 +8,37 @@
 
 #include "MatroskaDocument.h"
 #include <AK/Debug.h>
+#include <AK/IntegralMath.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/Optional.h>
 #include <AK/OwnPtr.h>
-#include <math.h>
 
 namespace Video {
 
 class MatroskaReader {
 public:
-    MatroskaReader(const u8* data, size_t size)
+    MatroskaReader(u8 const* data, size_t size)
         : m_streamer(data, size)
     {
     }
 
-    static OwnPtr<MatroskaDocument> parse_matroska_from_file(const StringView& path);
-    static OwnPtr<MatroskaDocument> parse_matroska_from_data(const u8*, size_t);
+    static OwnPtr<MatroskaDocument> parse_matroska_from_file(StringView path);
+    static OwnPtr<MatroskaDocument> parse_matroska_from_data(u8 const*, size_t);
 
     OwnPtr<MatroskaDocument> parse();
 
 private:
     class Streamer {
     public:
-        Streamer(const u8* data, size_t size)
+        Streamer(u8 const* data, size_t size)
             : m_data_ptr(data)
             , m_size_remaining(size)
         {
         }
 
-        const u8* data() { return m_data_ptr; }
+        u8 const* data() { return m_data_ptr; }
 
-        const char* data_as_chars() { return reinterpret_cast<const char*>(m_data_ptr); }
+        char const* data_as_chars() { return reinterpret_cast<char const*>(m_data_ptr); }
 
         u8 read_octet()
         {
@@ -122,7 +122,7 @@ private:
                 u8 next_octet = read_octet();
                 result = (result << 8u) | next_octet;
             }
-            result -= pow(2, length * 7 - 1) - 1;
+            result -= AK::exp2<i64>(length * 7 - 1) - 1;
             return result;
         }
 
@@ -141,12 +141,12 @@ private:
         void set_remaining(size_t remaining) { m_size_remaining = remaining; }
 
     private:
-        const u8* m_data_ptr { nullptr };
+        u8 const* m_data_ptr { nullptr };
         size_t m_size_remaining { 0 };
         Vector<size_t> m_octets_read { 0 };
     };
 
-    bool parse_master_element(const StringView& element_name, Function<bool(u64 element_id)> element_consumer);
+    bool parse_master_element(StringView element_name, Function<bool(u64 element_id)> element_consumer);
     Optional<EBMLHeader> parse_ebml_header();
 
     bool parse_segment_elements(MatroskaDocument&);

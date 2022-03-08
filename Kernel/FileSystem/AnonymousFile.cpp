@@ -5,12 +5,12 @@
  */
 
 #include <Kernel/FileSystem/AnonymousFile.h>
+#include <Kernel/Memory/AnonymousVMObject.h>
 #include <Kernel/Process.h>
-#include <Kernel/VM/AnonymousVMObject.h>
 
 namespace Kernel {
 
-AnonymousFile::AnonymousFile(NonnullRefPtr<AnonymousVMObject> vmobject)
+AnonymousFile::AnonymousFile(NonnullRefPtr<Memory::AnonymousVMObject> vmobject)
     : m_vmobject(move(vmobject))
 {
 }
@@ -19,7 +19,7 @@ AnonymousFile::~AnonymousFile()
 {
 }
 
-KResultOr<Region*> AnonymousFile::mmap(Process& process, FileDescription&, const Range& range, u64 offset, int prot, bool shared)
+ErrorOr<Memory::Region*> AnonymousFile::mmap(Process& process, OpenFileDescription&, Memory::VirtualRange const& range, u64 offset, int prot, bool shared)
 {
     if (offset != 0)
         return EINVAL;
@@ -27,7 +27,12 @@ KResultOr<Region*> AnonymousFile::mmap(Process& process, FileDescription&, const
     if (range.size() != m_vmobject->size())
         return EINVAL;
 
-    return process.space().allocate_region_with_vmobject(range, m_vmobject, offset, {}, prot, shared);
+    return process.address_space().allocate_region_with_vmobject(range, m_vmobject, offset, {}, prot, shared);
+}
+
+ErrorOr<NonnullOwnPtr<KString>> AnonymousFile::pseudo_path(const OpenFileDescription&) const
+{
+    return KString::try_create(":anonymous-file:"sv);
 }
 
 }

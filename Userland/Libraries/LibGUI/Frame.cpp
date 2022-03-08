@@ -29,8 +29,7 @@ Frame::Frame()
         { Gfx::FrameShape::Box, "Box" },
         { Gfx::FrameShape::Container, "Container" },
         { Gfx::FrameShape::Panel, "Panel" },
-        { Gfx::FrameShape::VerticalLine, "VerticalLine" },
-        { Gfx::FrameShape::HorizontalLine, "HorizontalLine" });
+        { Gfx::FrameShape::Window, "Window" });
 }
 
 Frame::~Frame()
@@ -42,7 +41,7 @@ void Frame::set_frame_thickness(int thickness)
     if (m_thickness == thickness)
         return;
     m_thickness = thickness;
-    set_content_margins({ thickness, thickness, thickness, thickness });
+    set_grabbable_margins(thickness);
 }
 
 void Frame::paint_event(PaintEvent& event)

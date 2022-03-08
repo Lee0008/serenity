@@ -1,9 +1,11 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BitCast.h>
 #include <AK/ByteBuffer.h>
 #include <AK/String.h>
 #include <AK/URL.h>
@@ -34,17 +36,16 @@ Encoder& Encoder::operator<<(u16 value)
     return *this;
 }
 
-Encoder& Encoder::operator<<(u32 value)
+void Encoder::encode_u32(u32 value)
 {
     m_buffer.data.ensure_capacity(m_buffer.data.size() + 4);
     m_buffer.data.unchecked_append((u8)value);
     m_buffer.data.unchecked_append((u8)(value >> 8));
     m_buffer.data.unchecked_append((u8)(value >> 16));
     m_buffer.data.unchecked_append((u8)(value >> 24));
-    return *this;
 }
 
-Encoder& Encoder::operator<<(u64 value)
+void Encoder::encode_u64(u64 value)
 {
     m_buffer.data.ensure_capacity(m_buffer.data.size() + 8);
     m_buffer.data.unchecked_append((u8)value);
@@ -55,6 +56,29 @@ Encoder& Encoder::operator<<(u64 value)
     m_buffer.data.unchecked_append((u8)(value >> 40));
     m_buffer.data.unchecked_append((u8)(value >> 48));
     m_buffer.data.unchecked_append((u8)(value >> 56));
+}
+
+Encoder& Encoder::operator<<(unsigned value)
+{
+    encode_u32(value);
+    return *this;
+}
+
+Encoder& Encoder::operator<<(unsigned long value)
+{
+    if constexpr (sizeof(value) == 4)
+        encode_u32(value);
+    else
+        encode_u64(value);
+    return *this;
+}
+
+Encoder& Encoder::operator<<(unsigned long long value)
+{
+    if constexpr (sizeof(value) == 4)
+        encode_u32(value);
+    else
+        encode_u64(value);
     return *this;
 }
 
@@ -98,26 +122,28 @@ Encoder& Encoder::operator<<(i64 value)
 
 Encoder& Encoder::operator<<(float value)
 {
-    union bits {
-        float as_float;
-        u32 as_u32;
-    } u;
-    u.as_float = value;
-    return *this << u.as_u32;
+    u32 as_u32 = bit_cast<u32>(value);
+    return *this << as_u32;
 }
 
-Encoder& Encoder::operator<<(const char* value)
+Encoder& Encoder::operator<<(double value)
+{
+    u64 as_u64 = bit_cast<u64>(value);
+    return *this << as_u64;
+}
+
+Encoder& Encoder::operator<<(char const* value)
 {
     return *this << StringView(value);
 }
 
-Encoder& Encoder::operator<<(const StringView& value)
+Encoder& Encoder::operator<<(StringView value)
 {
-    m_buffer.data.append((const u8*)value.characters_without_null_termination(), value.length());
+    m_buffer.data.append((u8 const*)value.characters_without_null_termination(), value.length());
     return *this;
 }
 
-Encoder& Encoder::operator<<(const String& value)
+Encoder& Encoder::operator<<(String const& value)
 {
     if (value.is_null())
         return *this << (i32)-1;
@@ -125,19 +151,19 @@ Encoder& Encoder::operator<<(const String& value)
     return *this << value.view();
 }
 
-Encoder& Encoder::operator<<(const ByteBuffer& value)
+Encoder& Encoder::operator<<(ByteBuffer const& value)
 {
     *this << static_cast<i32>(value.size());
     m_buffer.data.append(value.data(), value.size());
     return *this;
 }
 
-Encoder& Encoder::operator<<(const URL& value)
+Encoder& Encoder::operator<<(URL const& value)
 {
     return *this << value.to_string();
 }
 
-Encoder& Encoder::operator<<(const Dictionary& dictionary)
+Encoder& Encoder::operator<<(Dictionary const& dictionary)
 {
     *this << (u64)dictionary.size();
     dictionary.for_each_entry([this](auto& key, auto& value) {
@@ -146,7 +172,7 @@ Encoder& Encoder::operator<<(const Dictionary& dictionary)
     return *this;
 }
 
-Encoder& Encoder::operator<<(const File& file)
+Encoder& Encoder::operator<<(File const& file)
 {
     int fd = file.fd();
     if (fd != -1) {
@@ -161,7 +187,7 @@ Encoder& Encoder::operator<<(const File& file)
     return *this;
 }
 
-bool encode(Encoder& encoder, const Core::AnonymousBuffer& buffer)
+bool encode(Encoder& encoder, Core::AnonymousBuffer const& buffer)
 {
     encoder << buffer.is_valid();
     if (buffer.is_valid()) {
@@ -171,7 +197,7 @@ bool encode(Encoder& encoder, const Core::AnonymousBuffer& buffer)
     return true;
 }
 
-bool encode(Encoder& encoder, const Core::DateTime& datetime)
+bool encode(Encoder& encoder, Core::DateTime const& datetime)
 {
     encoder << static_cast<i64>(datetime.timestamp());
     return true;

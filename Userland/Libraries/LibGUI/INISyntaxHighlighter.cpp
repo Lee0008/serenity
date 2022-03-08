@@ -6,18 +6,16 @@
 
 #include <LibGUI/INILexer.h>
 #include <LibGUI/INISyntaxHighlighter.h>
-#include <LibGUI/TextEditor.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/Palette.h>
 
 namespace GUI {
 
-static Syntax::TextStyle style_for_token_type(const Gfx::Palette& palette, IniToken::Type type)
+static Syntax::TextStyle style_for_token_type(Gfx::Palette const& palette, IniToken::Type type)
 {
     switch (type) {
     case IniToken::Type::LeftBracket:
     case IniToken::Type::RightBracket:
-    case IniToken::Type::section:
+    case IniToken::Type::Section:
         return { palette.syntax_keyword(), true };
     case IniToken::Type::Name:
         return { palette.syntax_identifier() };
@@ -38,7 +36,7 @@ bool IniSyntaxHighlighter::is_identifier(u64 token) const
     return ini_token == GUI::IniToken::Type::Name;
 }
 
-void IniSyntaxHighlighter::rehighlight(const Palette& palette)
+void IniSyntaxHighlighter::rehighlight(Palette const& palette)
 {
     auto text = m_client->get_text();
     IniLexer lexer(text);

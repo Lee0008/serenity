@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,14 +8,13 @@
 #include <AK/Random.h>
 #include <AK/ScopeGuard.h>
 #include <LibCore/Account.h>
-#include <LibCore/File.h>
-#ifndef AK_OS_MACOS
-#    include <crypt.h>
-#endif
+#include <LibCore/System.h>
+#include <LibCore/UmaskScope.h>
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
 #ifndef AK_OS_BSD_GENERIC
+#    include <crypt.h>
 #    include <shadow.h>
 #endif
 #include <stdio.h>
@@ -56,7 +55,7 @@ static Vector<gid_t> get_extra_gids(const passwd& pwd)
     return extra_gids;
 }
 
-Result<Account, String> Account::from_passwd(const passwd& pwd, const spwd& spwd)
+ErrorOr<Account> Account::from_passwd(const passwd& pwd, const spwd& spwd)
 {
     Account account(pwd, spwd, get_extra_gids(pwd));
     endpwent();
@@ -66,53 +65,64 @@ Result<Account, String> Account::from_passwd(const passwd& pwd, const spwd& spwd
     return account;
 }
 
-Result<Account, String> Account::from_name(const char* username)
+ErrorOr<Account> Account::self([[maybe_unused]] Read options)
 {
-    errno = 0;
-    auto* pwd = getpwnam(username);
-    if (!pwd) {
-        if (errno == 0)
-            return String("No such user");
+    Vector<gid_t> extra_gids = TRY(Core::System::getgroups());
 
-        return String(strerror(errno));
-    }
-    spwd spwd_dummy = {};
-    spwd_dummy.sp_namp = const_cast<char*>(username);
-    spwd_dummy.sp_pwdp = const_cast<char*>("");
+    auto pwd = TRY(Core::System::getpwuid(getuid()));
+    if (!pwd.has_value())
+        return Error::from_string_literal("No such user"sv);
+
+    spwd spwd = {};
 #ifndef AK_OS_BSD_GENERIC
-    auto* spwd = getspnam(username);
-    if (!spwd)
-        spwd = &spwd_dummy;
-#else
-    auto* spwd = &spwd_dummy;
+    if (options != Read::PasswdOnly) {
+        auto maybe_spwd = TRY(Core::System::getspnam(pwd->pw_name));
+        if (!maybe_spwd.has_value())
+            return Error::from_string_literal("No shadow entry for user"sv);
+        spwd = maybe_spwd.release_value();
+    }
 #endif
-    return from_passwd(*pwd, *spwd);
+
+    return Account(*pwd, spwd, extra_gids);
 }
 
-Result<Account, String> Account::from_uid(uid_t uid)
+ErrorOr<Account> Account::from_name(const char* username, [[maybe_unused]] Read options)
 {
-    errno = 0;
-    auto* pwd = getpwuid(uid);
-    if (!pwd) {
-        if (errno == 0)
-            return String("No such user");
+    auto pwd = TRY(Core::System::getpwnam(username));
+    if (!pwd.has_value())
+        return Error::from_string_literal("No such user"sv);
 
-        return String(strerror(errno));
-    }
-    spwd spwd_dummy = {};
-    spwd_dummy.sp_namp = pwd->pw_name;
-    spwd_dummy.sp_pwdp = const_cast<char*>("");
+    spwd spwd = {};
 #ifndef AK_OS_BSD_GENERIC
-    auto* spwd = getspnam(pwd->pw_name);
-    if (!spwd)
-        spwd = &spwd_dummy;
-#else
-    auto* spwd = &spwd_dummy;
+    if (options != Read::PasswdOnly) {
+        auto maybe_spwd = TRY(Core::System::getspnam(pwd->pw_name));
+        if (!maybe_spwd.has_value())
+            return Error::from_string_literal("No shadow entry for user"sv);
+        spwd = maybe_spwd.release_value();
+    }
 #endif
-    return from_passwd(*pwd, *spwd);
+    return from_passwd(*pwd, spwd);
 }
 
-bool Account::authenticate(const char* password) const
+ErrorOr<Account> Account::from_uid(uid_t uid, [[maybe_unused]] Read options)
+{
+    auto pwd = TRY(Core::System::getpwuid(uid));
+    if (!pwd.has_value())
+        return Error::from_string_literal("No such user"sv);
+
+    spwd spwd = {};
+#ifndef AK_OS_BSD_GENERIC
+    if (options != Read::PasswdOnly) {
+        auto maybe_spwd = TRY(Core::System::getspnam(pwd->pw_name));
+        if (!maybe_spwd.has_value())
+            return Error::from_string_literal("No shadow entry for user"sv);
+        spwd = maybe_spwd.release_value();
+    }
+#endif
+    return from_passwd(*pwd, spwd);
+}
+
+bool Account::authenticate(SecretString const& password) const
 {
     // If there was no shadow entry for this account, authentication always fails.
     if (m_password_hash.is_null())
@@ -123,7 +133,7 @@ bool Account::authenticate(const char* password) const
         return true;
 
     // FIXME: Use crypt_r if it can be built in lagom.
-    char* hash = crypt(password, m_password_hash.characters());
+    char* hash = crypt(password.characters(), m_password_hash.characters());
     return hash != nullptr && strcmp(hash, m_password_hash.characters()) == 0;
 }
 
@@ -141,9 +151,9 @@ bool Account::login() const
     return true;
 }
 
-void Account::set_password(const char* password)
+void Account::set_password(SecretString const& password)
 {
-    m_password_hash = crypt(password, get_salt().characters());
+    m_password_hash = crypt(password.characters(), get_salt().characters());
 }
 
 void Account::set_password_enabled(bool enabled)
@@ -175,7 +185,7 @@ Account::Account(const passwd& pwd, const spwd& spwd, Vector<gid_t> extra_gids)
 {
 }
 
-String Account::generate_passwd_file() const
+ErrorOr<String> Account::generate_passwd_file() const
 {
     StringBuilder builder;
 
@@ -184,7 +194,7 @@ String Account::generate_passwd_file() const
     struct passwd* p;
     errno = 0;
     while ((p = getpwent())) {
-        if (p->pw_uid == m_uid) {
+        if (p->pw_name == m_username) {
             builder.appendff("{}:!:{}:{}:{}:{}:{}\n",
                 m_username,
                 m_uid, m_gid,
@@ -201,16 +211,14 @@ String Account::generate_passwd_file() const
     }
     endpwent();
 
-    if (errno) {
-        dbgln("errno was non-zero after generating new passwd file.");
-        return {};
-    }
+    if (errno)
+        return Error::from_errno(errno);
 
     return builder.to_string();
 }
 
 #ifndef AK_OS_BSD_GENERIC
-String Account::generate_shadow_file() const
+ErrorOr<String> Account::generate_shadow_file() const
 {
     StringBuilder builder;
 
@@ -244,22 +252,20 @@ String Account::generate_shadow_file() const
     }
     endspent();
 
-    if (errno) {
-        dbgln("errno was non-zero after generating new passwd file.");
-        return {};
-    }
+    if (errno)
+        return Error::from_errno(errno);
 
     return builder.to_string();
 }
 #endif
 
-bool Account::sync()
+ErrorOr<void> Account::sync()
 {
-    auto new_passwd_file_content = generate_passwd_file();
-    VERIFY(!new_passwd_file_content.is_null());
+    Core::UmaskScope umask_scope(0777);
+
+    auto new_passwd_file_content = TRY(generate_passwd_file());
 #ifndef AK_OS_BSD_GENERIC
-    auto new_shadow_file_content = generate_shadow_file();
-    VERIFY(!new_shadow_file_content.is_null());
+    auto new_shadow_file_content = TRY(generate_shadow_file());
 #endif
 
     char new_passwd_name[] = "/etc/passwd.XXXXXX";
@@ -268,56 +274,31 @@ bool Account::sync()
 #endif
 
     {
-        auto new_passwd_fd = mkstemp(new_passwd_name);
-        if (new_passwd_fd < 0) {
-            perror("mkstemp");
-            VERIFY_NOT_REACHED();
-        }
+        auto new_passwd_fd = TRY(Core::System::mkstemp(new_passwd_name));
         ScopeGuard new_passwd_fd_guard = [new_passwd_fd] { close(new_passwd_fd); };
+        TRY(Core::System::fchmod(new_passwd_fd, 0644));
+
 #ifndef AK_OS_BSD_GENERIC
-        auto new_shadow_fd = mkstemp(new_shadow_name);
-        if (new_shadow_fd < 0) {
-            perror("mkstemp");
-            VERIFY_NOT_REACHED();
-        }
+        auto new_shadow_fd = TRY(Core::System::mkstemp(new_shadow_name));
         ScopeGuard new_shadow_fd_guard = [new_shadow_fd] { close(new_shadow_fd); };
+        TRY(Core::System::fchmod(new_shadow_fd, 0600));
 #endif
 
-        if (fchmod(new_passwd_fd, 0644) < 0) {
-            perror("fchmod");
-            VERIFY_NOT_REACHED();
-        }
-
-        auto nwritten = write(new_passwd_fd, new_passwd_file_content.characters(), new_passwd_file_content.length());
-        if (nwritten < 0) {
-            perror("write");
-            VERIFY_NOT_REACHED();
-        }
+        auto nwritten = TRY(Core::System::write(new_passwd_fd, new_passwd_file_content.bytes()));
         VERIFY(static_cast<size_t>(nwritten) == new_passwd_file_content.length());
 
 #ifndef AK_OS_BSD_GENERIC
-        nwritten = write(new_shadow_fd, new_shadow_file_content.characters(), new_shadow_file_content.length());
-        if (nwritten < 0) {
-            perror("write");
-            VERIFY_NOT_REACHED();
-        }
+        nwritten = TRY(Core::System::write(new_shadow_fd, new_shadow_file_content.bytes()));
         VERIFY(static_cast<size_t>(nwritten) == new_shadow_file_content.length());
 #endif
     }
 
-    if (rename(new_passwd_name, "/etc/passwd") < 0) {
-        perror("Failed to install new /etc/passwd");
-        return false;
-    }
-
+    TRY(Core::System::rename(new_passwd_name, "/etc/passwd"));
 #ifndef AK_OS_BSD_GENERIC
-    if (rename(new_shadow_name, "/etc/shadow") < 0) {
-        perror("Failed to install new /etc/shadow");
-        return false;
-    }
+    TRY(Core::System::rename(new_shadow_name, "/etc/shadow"));
 #endif
 
-    return true;
+    return {};
     // FIXME: Sync extra groups.
 }
 

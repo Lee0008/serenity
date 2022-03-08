@@ -7,11 +7,13 @@
 #include <AK/Singleton.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Time.h>
-#include <Kernel/ACPI/Parser.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/CommandLine.h>
+#include <Kernel/Firmware/ACPI/Parser.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/PerformanceManager.h>
 #include <Kernel/Scheduler.h>
+#include <Kernel/Sections.h>
 #include <Kernel/Time/APICTimer.h>
 #include <Kernel/Time/HPET.h>
 #include <Kernel/Time/HPETComparator.h>
@@ -20,18 +22,22 @@
 #include <Kernel/Time/RTC.h>
 #include <Kernel/Time/TimeManagement.h>
 #include <Kernel/TimerQueue.h>
-#include <Kernel/VM/MemoryManager.h>
 
 namespace Kernel {
 
-static AK::Singleton<TimeManagement> s_the;
+static Singleton<TimeManagement> s_the;
+
+bool TimeManagement::is_initialized()
+{
+    return s_the.is_initialized();
+}
 
 TimeManagement& TimeManagement::the()
 {
     return *s_the;
 }
 
-bool TimeManagement::is_valid_clock_id(clockid_t clock_id)
+ErrorOr<void> TimeManagement::validate_clock_id(clockid_t clock_id)
 {
     switch (clock_id) {
     case CLOCK_MONOTONIC:
@@ -39,9 +45,9 @@ bool TimeManagement::is_valid_clock_id(clockid_t clock_id)
     case CLOCK_MONOTONIC_RAW:
     case CLOCK_REALTIME:
     case CLOCK_REALTIME_COARSE:
-        return true;
+        return {};
     default:
-        return false;
+        return EINVAL;
     };
 }
 
@@ -136,13 +142,15 @@ UNMAP_AFTER_INIT void TimeManagement::initialize(u32 cpu)
         VERIFY(!s_the.is_initialized());
         s_the.ensure_instance();
 
-        // Initialize the APIC timers after the other timers as the
-        // initialization needs to briefly enable interrupts, which then
-        // would trigger a deadlock trying to get the s_the instance while
-        // creating it.
-        if (auto* apic_timer = APIC::the().initialize_timers(*s_the->m_system_timer)) {
-            dmesgln("Time: Using APIC timer as system timer");
-            s_the->set_system_timer(*apic_timer);
+        if (APIC::initialized()) {
+            // Initialize the APIC timers after the other timers as the
+            // initialization needs to briefly enable interrupts, which then
+            // would trigger a deadlock trying to get the s_the instance while
+            // creating it.
+            if (auto* apic_timer = APIC::the().initialize_timers(*s_the->m_system_timer)) {
+                dmesgln("Time: Using APIC timer as system timer");
+                s_the->set_system_timer(*apic_timer);
+            }
         }
     } else {
         VERIFY(s_the.is_initialized());
@@ -173,6 +181,7 @@ time_t TimeManagement::boot_time() const
 }
 
 UNMAP_AFTER_INIT TimeManagement::TimeManagement()
+    : m_time_page_region(MM.allocate_kernel_region(PAGE_SIZE, "Time page"sv, Memory::Region::Access::ReadWrite, AllocationStrategy::AllocateNow).release_value_but_fixme_should_propagate_errors())
 {
     bool probe_non_legacy_hardware_timers = !(kernel_command_line().is_legacy_time_enabled());
     if (ACPI::is_enabled()) {
@@ -353,12 +362,15 @@ void TimeManagement::increment_time_since_boot_hpet()
     auto delta_ns = HPET::the().update_time(seconds_since_boot, ticks_this_second, false);
 
     // Now that we have a precise time, go update it as quickly as we can
-    u32 update_iteration = m_update1.fetch_add(1, AK::MemoryOrder::memory_order_acquire);
+    u32 update_iteration = m_update2.fetch_add(1, AK::MemoryOrder::memory_order_acquire);
     m_seconds_since_boot = seconds_since_boot;
     m_ticks_this_second = ticks_this_second;
     // TODO: Apply m_remaining_epoch_time_adjustment
     timespec_add(m_epoch_time, { (time_t)(delta_ns / 1000000000), (long)(delta_ns % 1000000000) }, m_epoch_time);
-    m_update2.store(update_iteration + 1, AK::MemoryOrder::memory_order_release);
+
+    m_update1.store(update_iteration + 1, AK::MemoryOrder::memory_order_release);
+
+    update_time_page();
 }
 
 void TimeManagement::increment_time_since_boot()
@@ -371,7 +383,7 @@ void TimeManagement::increment_time_since_boot()
     long NanosPerTick = 1'000'000'000 / m_time_keeper_timer->frequency();
     time_t MaxSlewNanos = NanosPerTick / 100;
 
-    u32 update_iteration = m_update1.fetch_add(1, AK::MemoryOrder::memory_order_acquire);
+    u32 update_iteration = m_update2.fetch_add(1, AK::MemoryOrder::memory_order_acquire);
 
     // Clamp twice, to make sure intermediate fits into a long.
     long slew_nanos = clamp(clamp(m_remaining_epoch_time_adjustment.tv_sec, (time_t)-1, (time_t)1) * 1'000'000'000 + m_remaining_epoch_time_adjustment.tv_nsec, -MaxSlewNanos, MaxSlewNanos);
@@ -388,12 +400,15 @@ void TimeManagement::increment_time_since_boot()
         ++m_seconds_since_boot;
         m_ticks_this_second = 0;
     }
-    m_update2.store(update_iteration + 1, AK::MemoryOrder::memory_order_release);
+
+    m_update1.store(update_iteration + 1, AK::MemoryOrder::memory_order_release);
+
+    update_time_page();
 }
 
 void TimeManagement::system_timer_tick(const RegisterState& regs)
 {
-    if (Processor::current().in_irq() <= 1) {
+    if (Processor::current_in_irq() <= 1) {
         // Don't expire timers while handling IRQs
         TimerQueue::the().fire();
     }
@@ -416,6 +431,25 @@ bool TimeManagement::disable_profile_timer()
     if (m_profile_enable_count.fetch_sub(1) == 1)
         return m_profile_timer->try_to_set_frequency(m_profile_timer->calculate_nearest_possible_frequency(1));
     return true;
+}
+
+void TimeManagement::update_time_page()
+{
+    auto& page = time_page();
+    u32 update_iteration = AK::atomic_fetch_add(&page.update2, 1u, AK::MemoryOrder::memory_order_acquire);
+    page.clocks[CLOCK_REALTIME_COARSE] = m_epoch_time;
+    page.clocks[CLOCK_MONOTONIC_COARSE] = monotonic_time(TimePrecision::Coarse).to_timespec();
+    AK::atomic_store(&page.update1, update_iteration + 1u, AK::MemoryOrder::memory_order_release);
+}
+
+TimePage& TimeManagement::time_page()
+{
+    return *static_cast<TimePage*>((void*)m_time_page_region->vaddr().as_ptr());
+}
+
+Memory::VMObject& TimeManagement::time_page_vmobject()
+{
+    return m_time_page_region->vmobject();
 }
 
 }

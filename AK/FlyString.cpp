@@ -24,7 +24,7 @@ struct FlyStringImplTraits : public Traits<StringImpl*> {
     }
 };
 
-static AK::Singleton<HashTable<StringImpl*, FlyStringImplTraits>> s_table;
+static Singleton<HashTable<StringImpl*, FlyStringImplTraits>> s_table;
 
 static HashTable<StringImpl*, FlyStringImplTraits>& fly_impls()
 {
@@ -55,7 +55,7 @@ FlyString::FlyString(const String& string)
     }
 }
 
-FlyString::FlyString(StringView const& string)
+FlyString::FlyString(StringView string)
 {
     if (string.is_null())
         return;
@@ -74,38 +74,38 @@ FlyString::FlyString(StringView const& string)
 }
 
 template<typename T>
-Optional<T> FlyString::to_int() const
+Optional<T> FlyString::to_int(TrimWhitespace trim_whitespace) const
 {
-    return StringUtils::convert_to_int<T>(view());
+    return StringUtils::convert_to_int<T>(view(), trim_whitespace);
 }
 
-template Optional<i8> FlyString::to_int() const;
-template Optional<i16> FlyString::to_int() const;
-template Optional<i32> FlyString::to_int() const;
-template Optional<i64> FlyString::to_int() const;
+template Optional<i8> FlyString::to_int(TrimWhitespace) const;
+template Optional<i16> FlyString::to_int(TrimWhitespace) const;
+template Optional<i32> FlyString::to_int(TrimWhitespace) const;
+template Optional<i64> FlyString::to_int(TrimWhitespace) const;
 
 template<typename T>
-Optional<T> FlyString::to_uint() const
+Optional<T> FlyString::to_uint(TrimWhitespace trim_whitespace) const
 {
-    return StringUtils::convert_to_uint<T>(view());
+    return StringUtils::convert_to_uint<T>(view(), trim_whitespace);
 }
 
-template Optional<u8> FlyString::to_uint() const;
-template Optional<u16> FlyString::to_uint() const;
-template Optional<u32> FlyString::to_uint() const;
-template Optional<u64> FlyString::to_uint() const;
+template Optional<u8> FlyString::to_uint(TrimWhitespace) const;
+template Optional<u16> FlyString::to_uint(TrimWhitespace) const;
+template Optional<u32> FlyString::to_uint(TrimWhitespace) const;
+template Optional<u64> FlyString::to_uint(TrimWhitespace) const;
 
-bool FlyString::equals_ignoring_case(const StringView& other) const
+bool FlyString::equals_ignoring_case(StringView other) const
 {
     return StringUtils::equals_ignoring_case(view(), other);
 }
 
-bool FlyString::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
+bool FlyString::starts_with(StringView str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::starts_with(view(), str, case_sensitivity);
 }
 
-bool FlyString::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
+bool FlyString::ends_with(StringView str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::ends_with(view(), str, case_sensitivity);
 }
@@ -117,33 +117,17 @@ FlyString FlyString::to_lowercase() const
 
 bool FlyString::operator==(const String& other) const
 {
-    if (m_impl == other.impl())
-        return true;
-
-    if (!m_impl)
-        return !other.impl();
-
-    if (!other.impl())
-        return false;
-
-    if (length() != other.length())
-        return false;
-
-    return !__builtin_memcmp(characters(), other.characters(), length());
+    return m_impl == other.impl() || view() == other.view();
 }
 
-bool FlyString::operator==(const StringView& string) const
+bool FlyString::operator==(StringView string) const
 {
-    return *this == String(string);
+    return view() == string;
 }
 
 bool FlyString::operator==(const char* string) const
 {
-    if (is_null())
-        return !string;
-    if (!string)
-        return false;
-    return !__builtin_strcmp(m_impl->characters(), string);
+    return view() == string;
 }
 
 }

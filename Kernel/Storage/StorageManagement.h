@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/IntrusiveList.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/Types.h>
@@ -18,38 +19,40 @@ namespace Kernel {
 
 class PartitionTable;
 class StorageManagement {
-    AK_MAKE_ETERNAL;
 
 public:
-    StorageManagement(String boot_argument, bool force_pio);
+    StorageManagement();
     static bool initialized();
-    static void initialize(String boot_argument, bool force_pio);
+    void initialize(StringView boot_argument, bool force_pio, bool nvme_poll);
     static StorageManagement& the();
 
-    NonnullRefPtr<FS> root_filesystem() const;
+    NonnullRefPtr<FileSystem> root_filesystem() const;
 
-    static int major_number();
-    static int minor_number();
+    static MajorNumber storage_type_major_number();
+    static MinorNumber generate_storage_minor_number();
+
+    void remove_device(StorageDevice&);
 
 private:
     bool boot_argument_contains_partition_uuid();
 
-    NonnullRefPtrVector<StorageController> enumerate_controllers(bool force_pio) const;
-    NonnullRefPtrVector<StorageDevice> enumerate_storage_devices() const;
-    NonnullRefPtrVector<DiskPartition> enumerate_disk_partitions() const;
+    void enumerate_pci_controllers(bool force_pio, bool nvme_poll);
+    void enumerate_storage_devices();
+    void enumerate_disk_partitions();
 
     void determine_boot_device();
     void determine_boot_device_with_partition_uuid();
+
+    void dump_storage_devices_and_partitions() const;
 
     OwnPtr<PartitionTable> try_to_initialize_partition_table(const StorageDevice&) const;
 
     RefPtr<BlockDevice> boot_block_device() const;
 
-    String m_boot_argument;
-    RefPtr<BlockDevice> m_boot_block_device { nullptr };
+    StringView m_boot_argument;
+    WeakPtr<BlockDevice> m_boot_block_device;
     NonnullRefPtrVector<StorageController> m_controllers;
-    NonnullRefPtrVector<StorageDevice> m_storage_devices;
-    NonnullRefPtrVector<DiskPartition> m_disk_partitions;
+    IntrusiveList<&StorageDevice::m_list_node> m_storage_devices;
 };
 
 }

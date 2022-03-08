@@ -20,11 +20,8 @@ public:
     BigIntObject(BigInt&, Object& prototype);
     virtual ~BigIntObject();
 
-    const BigInt& bigint() const { return m_bigint; }
-    virtual Value value_of() const override
-    {
-        return Value(&m_bigint);
-    }
+    BigInt const& bigint() const { return m_bigint; }
+    BigInt& bigint() { return m_bigint; }
 
 private:
     virtual void visit_edges(Visitor&) override;

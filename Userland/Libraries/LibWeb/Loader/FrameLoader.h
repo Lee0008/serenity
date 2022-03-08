@@ -23,26 +23,29 @@ public:
         IFrame,
     };
 
-    explicit FrameLoader(BrowsingContext&);
+    explicit FrameLoader(HTML::BrowsingContext&);
     ~FrameLoader();
 
-    bool load(const URL&, Type);
-    bool load(const LoadRequest&, Type);
+    bool load(const AK::URL&, Type);
+    bool load(LoadRequest&, Type);
 
-    void load_html(const StringView&, const URL&);
+    void load_html(StringView, const AK::URL&);
 
-    BrowsingContext& browsing_context() { return m_browsing_context; }
-    const BrowsingContext& browsing_context() const { return m_browsing_context; }
+    HTML::BrowsingContext& browsing_context() { return m_browsing_context; }
+    HTML::BrowsingContext const& browsing_context() const { return m_browsing_context; }
 
 private:
     // ^ResourceClient
     virtual void resource_did_load() override;
     virtual void resource_did_fail() override;
 
-    void load_error_page(const URL& failed_url, const String& error_message);
+    void load_error_page(const AK::URL& failed_url, const String& error_message);
+    void load_favicon(RefPtr<Gfx::Bitmap> bitmap = nullptr);
     bool parse_document(DOM::Document&, const ByteBuffer& data);
 
-    BrowsingContext& m_browsing_context;
+    void store_response_cookies(AK::URL const& url, String const& cookies);
+
+    HTML::BrowsingContext& m_browsing_context;
     size_t m_redirects_count { 0 };
 };
 

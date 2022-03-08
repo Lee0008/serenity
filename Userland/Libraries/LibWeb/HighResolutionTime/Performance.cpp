@@ -8,13 +8,13 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/EventDispatcher.h>
-#include <LibWeb/DOM/Window.h>
+#include <LibWeb/HTML/Window.h>
 #include <LibWeb/HighResolutionTime/Performance.h>
 
 namespace Web::HighResolutionTime {
 
-Performance::Performance(DOM::Window& window)
-    : DOM::EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.document()))
+Performance::Performance(HTML::Window& window)
+    : DOM::EventTarget()
     , m_window(window)
     , m_timing(make<NavigationTiming::PerformanceTiming>(window))
 {
@@ -39,11 +39,6 @@ void Performance::ref_event_target()
 void Performance::unref_event_target()
 {
     m_window.unref();
-}
-
-bool Performance::dispatch_event(NonnullRefPtr<DOM::Event> event)
-{
-    return DOM::EventDispatcher::dispatch(*this, event);
 }
 
 JS::Object* Performance::create_wrapper(JS::GlobalObject& global_object)

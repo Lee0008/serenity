@@ -6,32 +6,35 @@
 
 #pragma once
 
+#include <bits/wchar.h>
 #include <stddef.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>
-
-__attribute__((warn_unused_result)) int __generate_unique_filename(char* pattern);
 
 __BEGIN_DECLS
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
-#define MB_CUR_MAX 1
+
+__attribute__((noreturn)) void _abort(void);
 
 __attribute__((malloc)) __attribute__((alloc_size(1))) void* malloc(size_t);
 __attribute__((malloc)) __attribute__((alloc_size(1, 2))) void* calloc(size_t nmemb, size_t);
-size_t malloc_size(void*);
+size_t malloc_size(void const*);
 size_t malloc_good_size(size_t);
 void serenity_dump_malloc_stats(void);
 void free(void*);
 __attribute__((alloc_size(2))) void* realloc(void* ptr, size_t);
+__attribute__((malloc, alloc_size(1), alloc_align(2))) void* _aligned_malloc(size_t size, size_t alignment);
+void _aligned_free(void* memblock);
 char* getenv(const char* name);
 char* secure_getenv(const char* name);
 int putenv(char*);
 int unsetenv(const char*);
 int clearenv(void);
 int setenv(const char* name, const char* value, int overwrite);
-const char* getprogname();
+int serenity_setenv(const char* name, ssize_t name_length, const char* value, ssize_t value_length, int overwrite);
+const char* getprogname(void);
 void setprogname(const char*);
 int atoi(const char*);
 long atol(const char*);
@@ -45,9 +48,9 @@ unsigned long long strtoull(const char*, char** endptr, int base);
 unsigned long strtoul(const char*, char** endptr, int base);
 void qsort(void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*));
 void qsort_r(void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*, void*), void* arg);
-int atexit(void (*function)());
+int atexit(void (*function)(void));
 __attribute__((noreturn)) void exit(int status);
-__attribute__((noreturn)) void abort();
+__attribute__((noreturn)) void abort(void);
 char* ptsname(int fd);
 int ptsname_r(int fd, char* buffer, size_t);
 int abs(int);
@@ -68,10 +71,10 @@ char* realpath(const char* pathname, char* buffer);
 __attribute__((noreturn)) void _Exit(int status);
 
 #define RAND_MAX 32767
-int rand();
+int rand(void);
 void srand(unsigned seed);
 
-long int random();
+long int random(void);
 void srandom(unsigned seed);
 
 uint32_t arc4random(void);
@@ -97,7 +100,5 @@ lldiv_t lldiv(long long, long long);
 int posix_openpt(int flags);
 int grantpt(int fd);
 int unlockpt(int fd);
-
-long getauxval(long type);
 
 __END_DECLS

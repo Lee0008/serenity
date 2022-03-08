@@ -9,6 +9,7 @@
 #include <AK/Format.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
+#include <AK/Vector.h>
 #include <LibPDF/Value.h>
 
 #define ENUMERATE_COMMANDS(V)                                                            \
@@ -96,7 +97,7 @@ enum class CommandType {
 
 class Command {
 public:
-    static CommandType command_type_from_symbol(StringView const& symbol_string)
+    static CommandType command_type_from_symbol(StringView symbol_string)
     {
 #define V(name, snake_name, symbol) \
     if (symbol_string == #symbol)   \
@@ -165,7 +166,7 @@ namespace AK {
 
 template<>
 struct Formatter<PDF::Command> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::Command const& command)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::Command const& command)
     {
         StringBuilder builder;
         builder.appendff("{} ({})",
@@ -179,7 +180,7 @@ struct Formatter<PDF::Command> : Formatter<StringView> {
             builder.append(" ]");
         }
 
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 

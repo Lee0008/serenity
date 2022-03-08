@@ -9,12 +9,12 @@
 #include <AK/Function.h>
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
+#include <AK/Variant.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Object.h>
 #include <LibGUI/FocusSource.h>
 #include <LibGUI/Forward.h>
 #include <LibGUI/WindowType.h>
-#include <LibGfx/Color.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Rect.h>
 #include <LibGfx/StandardCursor.h>
@@ -45,11 +45,16 @@ public:
     bool is_frameless() const { return m_frameless; }
     void set_frameless(bool);
 
+    void set_forced_shadow(bool);
+
     bool is_resizable() const { return m_resizable; }
     void set_resizable(bool resizable) { m_resizable = resizable; }
 
     bool is_minimizable() const { return m_minimizable; }
     void set_minimizable(bool minimizable) { m_minimizable = minimizable; }
+
+    bool is_closeable() const { return m_closeable; }
+    void set_closeable(bool closeable) { m_closeable = closeable; }
 
     void set_double_buffering_enabled(bool);
     void set_has_alpha_channel(bool);
@@ -70,9 +75,6 @@ public:
     String title() const;
     void set_title(String);
 
-    Color background_color() const { return m_background_color; }
-    void set_background_color(Color color) { m_background_color = color; }
-
     enum class CloseRequestDecision {
         StayOpen,
         Close,
@@ -81,6 +83,7 @@ public:
     Function<void()> on_close;
     Function<CloseRequestDecision()> on_close_request;
     Function<void(bool is_active_input)> on_active_input_change;
+    Function<void(bool is_active_window)> on_active_window_change;
 
     int x() const { return rect().x(); }
     int y() const { return rect().y(); }
@@ -129,6 +132,14 @@ public:
     void set_main_widget(Widget*);
 
     template<class T, class... Args>
+    inline ErrorOr<NonnullRefPtr<T>> try_set_main_widget(Args&&... args)
+    {
+        auto widget = TRY(T::try_create(forward<Args>(args)...));
+        set_main_widget(widget.ptr());
+        return widget;
+    }
+
+    template<class T, class... Args>
     inline T& set_main_widget(Args&&... args)
     {
         auto widget = T::construct(forward<Args>(args)...);
@@ -136,16 +147,16 @@ public:
         return *widget;
     }
 
+    Widget* default_return_key_widget() { return m_default_return_key_widget; }
+    Widget const* default_return_key_widget() const { return m_default_return_key_widget; }
+    void set_default_return_key_widget(Widget*);
+
     Widget* focused_widget() { return m_focused_widget; }
     const Widget* focused_widget() const { return m_focused_widget; }
     void set_focused_widget(Widget*, FocusSource = FocusSource::Programmatic);
 
     void update();
     void update(const Gfx::IntRect&);
-
-    void set_global_cursor_tracking_widget(Widget*);
-    Widget* global_cursor_tracking_widget() { return m_global_cursor_tracking_widget.ptr(); }
-    const Widget* global_cursor_tracking_widget() const { return m_global_cursor_tracking_widget.ptr(); }
 
     void set_automatic_cursor_tracking_widget(Widget*);
     Widget* automatic_cursor_tracking_widget() { return m_automatic_cursor_tracking_widget.ptr(); }
@@ -167,7 +178,7 @@ public:
     void set_resize_aspect_ratio(const Optional<Gfx::IntSize>& ratio);
 
     void set_cursor(Gfx::StandardCursor);
-    void set_cursor(const Gfx::Bitmap&);
+    void set_cursor(NonnullRefPtr<Gfx::Bitmap>);
 
     void set_icon(const Gfx::Bitmap*);
     void apply_icon();
@@ -179,9 +190,9 @@ public:
 
     void refresh_system_theme();
 
-    static void for_each_window(Badge<WindowServerConnection>, Function<void(Window&)>);
-    static void update_all_windows(Badge<WindowServerConnection>);
-    void notify_state_changed(Badge<WindowServerConnection>, bool minimized, bool occluded);
+    static void for_each_window(Badge<ConnectionToWindowServer>, Function<void(Window&)>);
+    static void update_all_windows(Badge<ConnectionToWindowServer>);
+    void notify_state_changed(Badge<ConnectionToWindowServer>, bool minimized, bool occluded);
 
     virtual bool is_visible_for_timer_purposes() const override { return m_visible_for_timer_purposes; }
 
@@ -198,12 +209,23 @@ public:
 
     void did_disable_focused_widget(Badge<Widget>);
 
-    void set_menubar(RefPtr<Menubar>);
+    Menu& add_menu(String name);
+    ErrorOr<NonnullRefPtr<Menu>> try_add_menu(String name);
+    void flash_menubar_menu_for(const MenuItem&);
+
+    void flush_pending_paints_immediately();
+
+    Menubar& menubar() { return *m_menubar; }
+    Menubar const& menubar() const { return *m_menubar; }
 
 protected:
     Window(Core::Object* parent = nullptr);
     virtual void wm_event(WMEvent&);
-    virtual void screen_rect_change_event(ScreenRectChangeEvent&);
+    virtual void screen_rects_change_event(ScreenRectsChangeEvent&);
+    virtual void applet_area_rect_change_event(AppletAreaRectChangeEvent&);
+
+    virtual void enter_event(Core::Event&);
+    virtual void leave_event(Core::Event&);
 
 private:
     void update_cursor();
@@ -218,9 +240,12 @@ private:
     void handle_became_active_or_inactive_event(Core::Event&);
     void handle_close_request();
     void handle_theme_change_event(ThemeChangeEvent&);
-    void handle_screen_rect_change_event(ScreenRectChangeEvent&);
+    void handle_fonts_change_event(FontsChangeEvent&);
+    void handle_screen_rects_change_event(ScreenRectsChangeEvent&);
+    void handle_applet_area_rect_change_event(AppletAreaRectChangeEvent&);
     void handle_drag_move_event(DragEvent&);
-    void handle_left_event();
+    void handle_entered_event(Core::Event&);
+    void handle_left_event(Core::Event&);
 
     void server_did_destroy();
 
@@ -229,21 +254,22 @@ private:
     void flip(const Vector<Gfx::IntRect, 32>& dirty_rects);
     void force_update();
 
+    bool are_cursors_the_same(AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const&, AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const&) const;
+
     WeakPtr<Widget> m_previously_focused_widget;
 
     OwnPtr<WindowBackingStore> m_front_store;
     OwnPtr<WindowBackingStore> m_back_store;
 
-    RefPtr<Menubar> m_menubar;
+    NonnullRefPtr<Menubar> m_menubar;
 
     RefPtr<Gfx::Bitmap> m_icon;
-    RefPtr<Gfx::Bitmap> m_custom_cursor;
     int m_window_id { 0 };
     float m_opacity_when_windowless { 1.0f };
     float m_alpha_hit_threshold { 0.0f };
     RefPtr<Widget> m_main_widget;
+    WeakPtr<Widget> m_default_return_key_widget;
     WeakPtr<Widget> m_focused_widget;
-    WeakPtr<Widget> m_global_cursor_tracking_widget;
     WeakPtr<Widget> m_automatic_cursor_tracking_widget;
     WeakPtr<Widget> m_hovered_widget;
     Gfx::IntRect m_rect_when_windowless;
@@ -253,10 +279,9 @@ private:
     Vector<Gfx::IntRect, 32> m_pending_paint_event_rects;
     Gfx::IntSize m_size_increment;
     Gfx::IntSize m_base_size;
-    Color m_background_color { Color::WarmGray };
     WindowType m_window_type { WindowType::Normal };
-    Gfx::StandardCursor m_cursor { Gfx::StandardCursor::None };
-    Gfx::StandardCursor m_effective_cursor { Gfx::StandardCursor::None };
+    AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> m_cursor { Gfx::StandardCursor::None };
+    AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> m_effective_cursor { Gfx::StandardCursor::None };
     bool m_is_active_input { false };
     bool m_has_alpha_channel { false };
     bool m_double_buffering_enabled { true };
@@ -264,8 +289,11 @@ private:
     bool m_resizable { true };
     Optional<Gfx::IntSize> m_resize_aspect_ratio {};
     bool m_minimizable { true };
+    bool m_closeable { true };
+    bool m_maximized_when_windowless { false };
     bool m_fullscreen { false };
     bool m_frameless { false };
+    bool m_forced_shadow { false };
     bool m_layout_pending { false };
     bool m_visible_for_timer_purposes { true };
     bool m_visible { false };

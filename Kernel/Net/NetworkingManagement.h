@@ -11,36 +11,38 @@
 #include <AK/NonnullRefPtr.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/Types.h>
-#include <Kernel/PCI/Definitions.h>
-#include <Kernel/VM/Region.h>
+#include <Kernel/Bus/PCI/Definitions.h>
+#include <Kernel/Locking/SpinlockProtected.h>
+#include <Kernel/Memory/Region.h>
 
 namespace Kernel {
 
 class NetworkAdapter;
 class NetworkingManagement {
     friend class NetworkAdapter;
-    AK_MAKE_ETERNAL
 
 public:
     static NetworkingManagement& the();
     static bool is_initialized();
     bool initialize();
 
+    static ErrorOr<NonnullOwnPtr<KString>> generate_interface_name_from_pci_address(PCI::DeviceIdentifier const&);
+
     NetworkingManagement();
 
     void for_each(Function<void(NetworkAdapter&)>);
+    ErrorOr<void> try_for_each(Function<ErrorOr<void>(NetworkAdapter&)>);
 
     RefPtr<NetworkAdapter> from_ipv4_address(const IPv4Address&) const;
-    RefPtr<NetworkAdapter> lookup_by_name(const StringView&) const;
+    RefPtr<NetworkAdapter> lookup_by_name(StringView) const;
 
     NonnullRefPtr<NetworkAdapter> loopback_adapter() const;
 
 private:
-    RefPtr<NetworkAdapter> determine_network_device(PCI::Address address) const;
+    RefPtr<NetworkAdapter> determine_network_device(PCI::DeviceIdentifier const&) const;
 
-    NonnullRefPtrVector<NetworkAdapter> m_adapters;
+    SpinlockProtected<NonnullRefPtrVector<NetworkAdapter>> m_adapters;
     RefPtr<NetworkAdapter> m_loopback_adapter;
-    mutable Lock m_lock { "Networking" };
 };
 
 }

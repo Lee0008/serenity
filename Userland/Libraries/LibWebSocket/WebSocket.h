@@ -9,7 +9,7 @@
 #include <AK/Span.h>
 #include <LibCore/Object.h>
 #include <LibWebSocket/ConnectionInfo.h>
-#include <LibWebSocket/Impl/AbstractWebSocketImpl.h>
+#include <LibWebSocket/Impl/WebSocketImpl.h>
 #include <LibWebSocket/Message.h>
 
 namespace WebSocket {
@@ -35,10 +35,10 @@ public:
     void start();
 
     // This can only be used if the `ready_state` is `ReadyState::Open`
-    void send(Message);
+    void send(Message const&);
 
     // This can only be used if the `ready_state` is `ReadyState::Open`
-    void close(u16 code = 1005, String reason = {});
+    void close(u16 code = 1005, String const& reason = {});
 
     Function<void()> on_open;
     Function<void(u16 code, String reason, bool was_clean)> on_close;
@@ -104,7 +104,7 @@ private:
     String m_last_close_message;
 
     ConnectionInfo m_connection;
-    RefPtr<AbstractWebSocketImpl> m_impl;
+    RefPtr<WebSocketImpl> m_impl;
 };
 
 }

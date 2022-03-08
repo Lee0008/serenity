@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -24,7 +25,7 @@ class EditorWrapper : public GUI::Widget {
     C_OBJECT(EditorWrapper)
 
 public:
-    virtual ~EditorWrapper() override;
+    virtual ~EditorWrapper() override = default;
 
     Editor& editor() { return *m_editor; }
     const Editor& editor() const { return *m_editor; }
@@ -39,30 +40,32 @@ public:
 
     void set_mode_displayable();
     void set_mode_non_displayable();
+    void set_debug_mode(bool);
     void set_filename(const String&);
     const String& filename() const { return m_filename; }
-    bool document_dirty() const { return m_document_dirty; }
 
-    LexicalPath const& project_root() const { return m_project_root; }
-    void set_project_root(LexicalPath const& project_root);
+    Optional<String> const& project_root() const { return m_project_root; }
+    void set_project_root(String const& project_root);
 
     GitRepo const* git_repo() const { return m_git_repo; }
 
     void update_diff();
     Vector<Diff::Hunk> const& hunks() const { return m_hunks; }
 
+    Function<void()> on_change;
+
 private:
+    static constexpr auto untitled_label = "(Untitled)";
+
     EditorWrapper();
 
     void update_title();
 
     String m_filename;
     RefPtr<GUI::Label> m_filename_label;
-    RefPtr<GUI::Label> m_cursor_label;
     RefPtr<Editor> m_editor;
-    bool m_document_dirty { false };
 
-    LexicalPath m_project_root;
+    Optional<String> m_project_root;
     RefPtr<GitRepo> m_git_repo;
     Vector<Diff::Hunk> m_hunks;
 };

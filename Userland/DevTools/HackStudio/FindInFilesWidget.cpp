@@ -76,7 +76,6 @@ public:
         return {};
     }
 
-    virtual void update() override { }
     virtual GUI::ModelIndex index(int row, int column = 0, const GUI::ModelIndex& = GUI::ModelIndex()) const override
     {
         if (row < 0 || row >= (int)m_matches.size())
@@ -90,7 +89,7 @@ private:
     Vector<Match> m_matches;
 };
 
-static RefPtr<SearchResultsModel> find_in_files(const StringView& text)
+static RefPtr<SearchResultsModel> find_in_files(StringView text)
 {
     Vector<Match> matches;
     project().for_each_text_file([&](auto& file) {
@@ -119,7 +118,7 @@ FindInFilesWidget::FindInFilesWidget()
 
     auto& top_container = add<Widget>();
     top_container.set_layout<GUI::HorizontalBoxLayout>();
-    top_container.set_fixed_height(20);
+    top_container.set_fixed_height(22);
 
     m_textbox = top_container.add<GUI::TextBox>();
 
@@ -148,6 +147,10 @@ void FindInFilesWidget::focus_textbox_and_select_all()
 {
     m_textbox->select_all();
     m_textbox->set_focus(true);
+}
+void FindInFilesWidget::reset()
+{
+    m_result_view->set_model(nullptr);
 }
 
 }

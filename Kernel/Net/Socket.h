@@ -6,14 +6,13 @@
 
 #pragma once
 
-#include <AK/HashTable.h>
+#include <AK/Error.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/Time.h>
 #include <Kernel/FileSystem/File.h>
-#include <Kernel/KResult.h>
-#include <Kernel/Lock.h>
+#include <Kernel/Locking/Mutex.h>
 #include <Kernel/Net/NetworkAdapter.h>
 #include <Kernel/UnixTypes.h>
 
@@ -24,11 +23,11 @@ enum class ShouldBlock {
     Yes = 1
 };
 
-class FileDescription;
+class OpenFileDescription;
 
 class Socket : public File {
 public:
-    static KResultOr<NonnullRefPtr<Socket>> create(int domain, int type, int protocol);
+    static ErrorOr<NonnullRefPtr<Socket>> create(int domain, int type, int protocol);
     virtual ~Socket() override;
 
     int domain() const { return m_domain; }
@@ -52,24 +51,24 @@ public:
         Connecting
     };
 
-    static const char* to_string(SetupState setup_state)
+    static StringView to_string(SetupState setup_state)
     {
         switch (setup_state) {
         case SetupState::Unstarted:
-            return "Unstarted";
+            return "Unstarted"sv;
         case SetupState::InProgress:
-            return "InProgress";
+            return "InProgress"sv;
         case SetupState::Completed:
-            return "Completed";
+            return "Completed"sv;
         default:
-            return "None";
+            return "None"sv;
         }
     }
 
     SetupState setup_state() const { return m_setup_state; }
     void set_setup_state(SetupState setup_state);
 
-    virtual Role role(const FileDescription&) const { return m_role; }
+    virtual Role role(const OpenFileDescription&) const { return m_role; }
 
     bool is_connected() const { return m_connected; }
     void set_connected(bool);
@@ -77,36 +76,36 @@ public:
     bool can_accept() const { return !m_pending.is_empty(); }
     RefPtr<Socket> accept();
 
-    KResult shutdown(int how);
+    ErrorOr<void> shutdown(int how);
 
-    virtual KResult bind(Userspace<const sockaddr*>, socklen_t) = 0;
-    virtual KResult connect(FileDescription&, Userspace<const sockaddr*>, socklen_t, ShouldBlock) = 0;
-    virtual KResult listen(size_t) = 0;
+    virtual ErrorOr<void> bind(Userspace<const sockaddr*>, socklen_t) = 0;
+    virtual ErrorOr<void> connect(OpenFileDescription&, Userspace<const sockaddr*>, socklen_t, ShouldBlock) = 0;
+    virtual ErrorOr<void> listen(size_t) = 0;
     virtual void get_local_address(sockaddr*, socklen_t*) = 0;
     virtual void get_peer_address(sockaddr*, socklen_t*) = 0;
     virtual bool is_local() const { return false; }
     virtual bool is_ipv4() const { return false; }
-    virtual KResultOr<size_t> sendto(FileDescription&, const UserOrKernelBuffer&, size_t, int flags, Userspace<const sockaddr*>, socklen_t) = 0;
-    virtual KResultOr<size_t> recvfrom(FileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, Time&) = 0;
+    virtual ErrorOr<size_t> sendto(OpenFileDescription&, const UserOrKernelBuffer&, size_t, int flags, Userspace<const sockaddr*>, socklen_t) = 0;
+    virtual ErrorOr<size_t> recvfrom(OpenFileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, Time&) = 0;
 
-    virtual KResult setsockopt(int level, int option, Userspace<const void*>, socklen_t);
-    virtual KResult getsockopt(FileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>);
+    virtual ErrorOr<void> setsockopt(int level, int option, Userspace<const void*>, socklen_t);
+    virtual ErrorOr<void> getsockopt(OpenFileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>);
 
-    pid_t origin_pid() const { return m_origin.pid; }
-    uid_t origin_uid() const { return m_origin.uid; }
-    gid_t origin_gid() const { return m_origin.gid; }
-    pid_t acceptor_pid() const { return m_acceptor.pid; }
-    uid_t acceptor_uid() const { return m_acceptor.uid; }
-    gid_t acceptor_gid() const { return m_acceptor.gid; }
+    ProcessID origin_pid() const { return m_origin.pid; }
+    UserID origin_uid() const { return m_origin.uid; }
+    GroupID origin_gid() const { return m_origin.gid; }
+    ProcessID acceptor_pid() const { return m_acceptor.pid; }
+    UserID acceptor_uid() const { return m_acceptor.uid; }
+    GroupID acceptor_gid() const { return m_acceptor.gid; }
     const RefPtr<NetworkAdapter> bound_interface() const { return m_bound_interface; }
 
-    Lock& lock() { return m_lock; }
+    Mutex& mutex() { return m_mutex; }
 
     // ^File
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override final;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override final;
-    virtual KResult stat(::stat&) const override;
-    virtual String absolute_path(const FileDescription&) const override = 0;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override final;
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override final;
+    virtual ErrorOr<struct stat> stat() const override;
+    virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override = 0;
 
     bool has_receive_timeout() const { return m_receive_timeout != Time::zero(); }
     const Time& receive_timeout() const { return m_receive_timeout; }
@@ -119,26 +118,56 @@ public:
 protected:
     Socket(int domain, int type, int protocol);
 
-    KResult queue_connection_from(NonnullRefPtr<Socket>);
+    ErrorOr<void> queue_connection_from(NonnullRefPtr<Socket>);
 
     size_t backlog() const { return m_backlog; }
     void set_backlog(size_t backlog) { m_backlog = backlog; }
 
-    virtual const char* class_name() const override { return "Socket"; }
+    virtual StringView class_name() const override { return "Socket"sv; }
 
     virtual void shut_down_for_reading() { }
     virtual void shut_down_for_writing() { }
 
     Role m_role { Role::None };
 
-protected:
+    ErrorOr<void> so_error() const
+    {
+        VERIFY(m_mutex.is_exclusively_locked_by_current_thread());
+        return m_so_error;
+    }
+
+    Error set_so_error(ErrnoCode error_code)
+    {
+        MutexLocker locker(mutex());
+        auto error = Error::from_errno(error_code);
+        m_so_error = error;
+        return error;
+    }
+    Error set_so_error(Error error)
+    {
+        MutexLocker locker(mutex());
+        m_so_error = error;
+        return error;
+    }
+
+    void clear_so_error()
+    {
+        m_so_error = {};
+    }
+
+    void set_origin(Process const&);
+    void set_acceptor(Process const&);
+
+    void set_role(Role role) { m_role = role; }
+
     ucred m_origin { 0, 0, 0 };
     ucred m_acceptor { 0, 0, 0 };
+    bool m_routing_disabled { false };
 
 private:
     virtual bool is_socket() const final { return true; }
 
-    Lock m_lock { "Socket" };
+    Mutex m_mutex { "Socket"sv };
 
     int m_domain { 0 };
     int m_type { 0 };
@@ -155,45 +184,18 @@ private:
     Time m_send_timeout {};
     int m_timestamp { 0 };
 
+    ErrorOr<void> m_so_error;
+
     NonnullRefPtrVector<Socket> m_pending;
 };
 
-template<typename SocketType>
-class SocketHandle {
-public:
-    SocketHandle() = default;
-
-    SocketHandle(NonnullRefPtr<SocketType>&& socket)
-        : m_socket(move(socket))
-    {
-        if (m_socket)
-            m_socket->lock().lock();
-    }
-
-    SocketHandle(SocketHandle&& other)
-        : m_socket(move(other.m_socket))
-    {
-    }
-
-    ~SocketHandle()
-    {
-        if (m_socket)
-            m_socket->lock().unlock();
-    }
-
-    SocketHandle(const SocketHandle&) = delete;
-    SocketHandle& operator=(const SocketHandle&) = delete;
-
-    operator bool() const { return m_socket; }
-
-    SocketType* operator->() { return &socket(); }
-    const SocketType* operator->() const { return &socket(); }
-
-    SocketType& socket() { return *m_socket; }
-    const SocketType& socket() const { return *m_socket; }
-
-private:
-    RefPtr<SocketType> m_socket;
-};
+// This is a special variant of TRY() that also updates the socket's SO_ERROR field on error.
+#define SOCKET_TRY(expression)                           \
+    ({                                                   \
+        auto result = (expression);                      \
+        if (result.is_error())                           \
+            return set_so_error(result.release_error()); \
+        result.release_value();                          \
+    })
 
 }

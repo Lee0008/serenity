@@ -1,3 +1,8 @@
+serenity_component(
+    PDFViewer
+    TARGETS PDFViewer
+)
+
 set(SOURCES
     NumericInput.cpp
     OutlineModel.cpp
@@ -8,4 +13,4 @@ set(SOURCES
     )
 
 serenity_app(PDFViewer ICON app-pdf-viewer)
-target_link_libraries(PDFViewer LibGUI LibPDF)
+target_link_libraries(PDFViewer LibGUI LibPDF LibFileSystemAccessClient LibMain)

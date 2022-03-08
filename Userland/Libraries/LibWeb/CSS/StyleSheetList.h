@@ -26,7 +26,10 @@ public:
     }
 
     void add_sheet(NonnullRefPtr<CSSStyleSheet>);
-    const NonnullRefPtrVector<CSSStyleSheet>& sheets() const { return m_sheets; }
+    void remove_sheet(CSSStyleSheet&);
+
+    NonnullRefPtrVector<CSSStyleSheet> const& sheets() const { return m_sheets; }
+    NonnullRefPtrVector<CSSStyleSheet>& sheets() { return m_sheets; }
 
     RefPtr<CSSStyleSheet> item(size_t index) const
     {
@@ -37,11 +40,18 @@ public:
 
     size_t length() const { return m_sheets.size(); }
 
+    bool is_supported_property_index(u32) const;
+
+    int generation() const { return m_generation; }
+    void bump_generation() { ++m_generation; }
+
 private:
     explicit StyleSheetList(DOM::Document&);
 
     DOM::Document& m_document;
     NonnullRefPtrVector<CSSStyleSheet> m_sheets;
+
+    int m_generation { 0 };
 };
 
 }

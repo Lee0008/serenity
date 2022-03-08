@@ -8,7 +8,7 @@
 #include <AK/Checked.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/PNGWriter.h>
-#include <LibWeb/CSS/StyleResolver.h>
+#include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/CanvasRenderingContext2D.h>
 #include <LibWeb/HTML/HTMLCanvasElement.h>
@@ -18,7 +18,7 @@ namespace Web::HTML {
 
 static constexpr auto max_canvas_area = 16384 * 16384;
 
-HTMLCanvasElement::HTMLCanvasElement(DOM::Document& document, QualifiedName qualified_name)
+HTMLCanvasElement::HTMLCanvasElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
 {
 }
@@ -37,17 +37,25 @@ unsigned HTMLCanvasElement::height() const
     return attribute(HTML::AttributeNames::height).to_uint().value_or(150);
 }
 
-RefPtr<Layout::Node> HTMLCanvasElement::create_layout_node()
+void HTMLCanvasElement::set_width(unsigned value)
 {
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
-        return nullptr;
+    set_attribute(HTML::AttributeNames::width, String::number(value));
+}
+
+void HTMLCanvasElement::set_height(unsigned value)
+{
+    set_attribute(HTML::AttributeNames::height, String::number(value));
+}
+
+RefPtr<Layout::Node> HTMLCanvasElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
+{
     return adopt_ref(*new Layout::CanvasBox(document(), *this, move(style)));
 }
 
 CanvasRenderingContext2D* HTMLCanvasElement::get_context(String type)
 {
-    VERIFY(type == "2d");
+    if (type != "2d")
+        return nullptr;
     if (!m_context)
         m_context = CanvasRenderingContext2D::create(*this);
     return m_context;
@@ -79,8 +87,12 @@ bool HTMLCanvasElement::create_bitmap()
         m_bitmap = nullptr;
         return false;
     }
-    if (!m_bitmap || m_bitmap->size() != size)
-        m_bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::BGRA8888, size);
+    if (!m_bitmap || m_bitmap->size() != size) {
+        auto bitmap_or_error = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRA8888, size);
+        if (bitmap_or_error.is_error())
+            return false;
+        m_bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+    }
     return m_bitmap;
 }
 
@@ -91,7 +103,7 @@ String HTMLCanvasElement::to_data_url(const String& type, [[maybe_unused]] Optio
     if (type != "image/png")
         return {};
     auto encoded_bitmap = Gfx::PNGWriter::encode(*m_bitmap);
-    return URL::create_with_data(type, encode_base64(encoded_bitmap), true).to_string();
+    return AK::URL::create_with_data(type, encode_base64(encoded_bitmap), true).to_string();
 }
 
 }

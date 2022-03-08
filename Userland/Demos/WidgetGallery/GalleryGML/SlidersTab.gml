@@ -1,21 +1,38 @@
 @GUI::Widget {
     name: "sliders_tab"
     layout: @GUI::VerticalBoxLayout {
-        margins: [4, 4, 4, 4]
+        margins: [4]
     }
 
     @GUI::GroupBox {
         fixed_height: 129
         layout: @GUI::VerticalBoxLayout {
-            margins: [8, 8, 8, 8]
+            margins: [6]
         }
 
-        @GUI::OpacitySlider {
-            name: "opacity_slider"
+        @GUI::GroupBox {
+            max_height: 30
+            layout: @GUI::HorizontalBoxLayout {
+                margins: [8]
+            }
+
+            @GUI::OpacitySlider {
+                name: "opacity_slider"
+                tooltip: "Opacity Slider"
+            }
+
+            @GUI::VerticalSeparator {}
+
+            @GUI::ValueSlider {
+                name: "opacity_value_slider"
+                min: 0
+                max: 100
+                value: 100
+                tooltip: "Value Slider"
+            }
         }
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
         @GUI::Frame {
             shape: "Panel"
@@ -24,7 +41,7 @@
             max_width: 394
             max_height: 79
             layout: @GUI::VerticalBoxLayout {
-                margins: [1, 1, 1, 1]
+                margins: [1]
             }
 
             @GUI::ImageWidget {
@@ -36,11 +53,10 @@
     @GUI::Widget {
         fixed_height: 88
         layout: @GUI::VerticalBoxLayout {
-            margins: [8, 0, 8, 0]
+            margins: [0, 8]
         }
 
-        @GUI::Widget {
-        }
+        @GUI::Widget {}
 
         @GUI::Scrollbar {
             name: "enabled_scrollbar"
@@ -51,14 +67,11 @@
             value: 50
         }
 
-        @GUI::Widget {
-        }
+        @GUI::Widget {}
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
-        @GUI::Widget {
-        }
+        @GUI::Widget {}
 
         @GUI::Scrollbar {
             name: "disabled_scrollbar"
@@ -66,13 +79,12 @@
             fixed_width: -1
         }
 
-        @GUI::Widget {
-        }
+        @GUI::Widget {}
     }
 
     @GUI::GroupBox {
         layout: @GUI::HorizontalBoxLayout {
-            margins: [8, 8, 8, 8]
+            margins: [6]
         }
 
         @GUI::VerticalProgressbar {
@@ -89,8 +101,7 @@
             tooltip: "Fixed"
         }
 
-        @GUI::VerticalSeparator {
-        }
+        @GUI::VerticalSeparator {}
 
         @GUI::VerticalSlider {
             enabled: false
@@ -100,8 +111,7 @@
             value: 5
         }
 
-        @GUI::VerticalSeparator {
-        }
+        @GUI::VerticalSeparator {}
 
         @GUI::VerticalProgressbar {
             name: "vertical_progressbar_right"
@@ -120,12 +130,11 @@
 
     @GUI::GroupBox {
         layout: @GUI::VerticalBoxLayout {
-            margins: [8, 8, 8, 8]
+            margins: [6]
         }
 
         @GUI::Widget {
-            layout: @GUI::HorizontalBoxLayout {
-            }
+            layout: @GUI::HorizontalBoxLayout {}
 
             @GUI::HorizontalSlider {
                 name: "horizontal_slider_left"
@@ -135,8 +144,7 @@
                 value: 0
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::HorizontalSlider {
                 enabled: false
@@ -145,8 +153,7 @@
                 value: 5
             }
 
-            @GUI::VerticalSeparator {
-            }
+            @GUI::VerticalSeparator {}
 
             @GUI::HorizontalSlider {
                 name: "horizontal_slider_right"
@@ -157,8 +164,7 @@
             }
         }
 
-        @GUI::HorizontalSeparator {
-        }
+        @GUI::HorizontalSeparator {}
 
         @GUI::HorizontalProgressbar {
             name: "horizontal_progressbar"

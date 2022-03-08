@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, Tobias Christiansen <tobi@tobyase.de>
+ * Copyright (c) 2018-2022, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,12 +13,17 @@ namespace Web::Layout {
 
 class ListItemMarkerBox final : public Box {
 public:
-    explicit ListItemMarkerBox(DOM::Document&, CSS::ListStyleType, size_t index);
+    explicit ListItemMarkerBox(DOM::Document&, CSS::ListStyleType, size_t index, NonnullRefPtr<CSS::StyleProperties>);
     virtual ~ListItemMarkerBox() override;
 
     virtual void paint(PaintContext&, PaintPhase) override;
 
+    Gfx::Bitmap const* list_style_image_bitmap() const;
+    String const& text() const { return m_text; }
+
 private:
+    virtual bool can_have_children() const override { return false; }
+
     CSS::ListStyleType m_list_style_type { CSS::ListStyleType::None };
     size_t m_index;
 

@@ -57,12 +57,12 @@ void UndoStack::push(NonnullOwnPtr<Command> command)
 {
     // If the stack cursor is behind the top of the stack, nuke everything from here to the top.
     while (m_stack.size() != m_stack_index)
-        m_stack.take_last();
+        (void)m_stack.take_last();
 
     if (m_clean_index.has_value() && m_clean_index.value() > m_stack.size())
         m_clean_index = {};
 
-    if (!m_stack.is_empty()) {
+    if (!m_stack.is_empty() && is_current_modified()) {
         if (m_stack.last().merge_with(*command))
             return;
     }
@@ -80,6 +80,7 @@ void UndoStack::set_current_unmodified()
         return;
 
     m_clean_index = m_stack_index;
+    m_last_unmodified_timestamp = Time::now_monotonic();
 
     if (on_state_change)
         on_state_change();

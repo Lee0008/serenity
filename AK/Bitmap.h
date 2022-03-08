@@ -7,49 +7,57 @@
 #pragma once
 
 #include <AK/BitmapView.h>
+#include <AK/Error.h>
 #include <AK/Noncopyable.h>
 #include <AK/Optional.h>
 #include <AK/Platform.h>
 #include <AK/StdLibExtras.h>
+#include <AK/Try.h>
 #include <AK/Types.h>
 #include <AK/kmalloc.h>
 
 namespace AK {
 
-class Bitmap {
+class Bitmap : public BitmapView {
     AK_MAKE_NONCOPYABLE(Bitmap);
 
 public:
-    Bitmap() = default;
-
-    Bitmap(size_t size, bool default_value)
-        : m_size(size)
+    static ErrorOr<Bitmap> try_create(size_t size, bool default_value)
     {
-        VERIFY(m_size != 0);
-        m_data = static_cast<u8*>(kmalloc(size_in_bytes()));
-        fill(default_value);
+        VERIFY(size != 0);
+
+        auto* data = kmalloc(ceil_div(size, static_cast<size_t>(8)));
+        if (!data)
+            return Error::from_errno(ENOMEM);
+
+        auto bitmap = Bitmap { (u8*)data, size, true };
+        bitmap.fill(default_value);
+        return bitmap;
     }
 
+    static Bitmap must_create(size_t size, bool default_value)
+    {
+        return MUST(try_create(size, default_value));
+    }
+
+    Bitmap() = default;
+
     Bitmap(u8* data, size_t size, bool is_owning = false)
-        : m_data(data)
-        , m_size(size)
+        : BitmapView(data, size)
         , m_is_owning(is_owning)
     {
     }
 
-    BitmapView view() { return { m_data, m_size }; }
-    const BitmapView view() const { return { m_data, m_size }; }
-
     Bitmap(Bitmap&& other)
-        : m_data(exchange(other.m_data, nullptr))
-        , m_size(exchange(other.m_size, 0))
+        : BitmapView(exchange(other.m_data, nullptr), exchange(other.m_size, 0))
     {
+        m_is_owning = exchange(other.m_is_owning, false);
     }
 
     Bitmap& operator=(Bitmap&& other)
     {
         if (this != &other) {
-            kfree(m_data);
+            kfree_sized(m_data, size_in_bytes());
             m_data = exchange(other.m_data, nullptr);
             m_size = exchange(other.m_size, 0);
         }
@@ -59,21 +67,14 @@ public:
     ~Bitmap()
     {
         if (m_is_owning) {
-            kfree(m_data);
+            kfree_sized(m_data, size_in_bytes());
         }
         m_data = nullptr;
     }
 
-    size_t size() const { return m_size; }
-    size_t size_in_bytes() const { return ceil_div(m_size, static_cast<size_t>(8)); }
+    [[nodiscard]] BitmapView view() const { return *this; }
 
-    bool get(size_t index) const
-    {
-        VERIFY(index < m_size);
-        return 0 != (m_data[index / 8] & (1u << (index % 8)));
-    }
-
-    void set(size_t index, bool value) const
+    void set(size_t index, bool value)
     {
         VERIFY(index < m_size);
         if (value)
@@ -82,13 +83,8 @@ public:
             m_data[index / 8] &= static_cast<u8>(~(1u << (index % 8)));
     }
 
-    size_t count_slow(bool value) const { return count_in_range(0, m_size, value); }
-    size_t count_in_range(size_t start, size_t len, bool value) const { return view().count_in_range(start, len, value); }
-
-    bool is_null() const { return !m_data; }
-
-    u8* data() { return m_data; }
-    const u8* data() const { return m_data; }
+    // NOTE: There's a const method variant of this method at the parent class BitmapView.
+    [[nodiscard]] u8* data() { return m_data; }
 
     void grow(size_t size, bool default_value)
     {
@@ -96,7 +92,7 @@ public:
 
         auto previous_size_bytes = size_in_bytes();
         auto previous_size = m_size;
-        auto previous_data = m_data;
+        auto* previous_data = m_data;
 
         m_size = size;
         m_data = reinterpret_cast<u8*>(kmalloc(size_in_bytes()));
@@ -105,9 +101,9 @@ public:
 
         if (previous_data != nullptr) {
             __builtin_memcpy(m_data, previous_data, previous_size_bytes);
-            if (previous_size % 8)
+            if ((previous_size % 8) != 0)
                 set_range(previous_size, 8 - previous_size % 8, default_value);
-            kfree(previous_data);
+            kfree_sized(previous_data, previous_size_bytes);
         }
     }
 
@@ -189,30 +185,7 @@ public:
         __builtin_memset(m_data, value ? 0xff : 0x00, size_in_bytes());
     }
 
-    Optional<size_t> find_one_anywhere_set(size_t hint = 0) const { return view().find_one_anywhere<true>(hint); }
-    Optional<size_t> find_one_anywhere_unset(size_t hint = 0) const { return view().find_one_anywhere<false>(hint); }
-
-    Optional<size_t> find_first_set() const { return view().find_first<true>(); }
-    Optional<size_t> find_first_unset() const { return view().find_first<false>(); }
-
-    Optional<size_t> find_next_range_of_unset_bits(size_t& from, size_t min_length = 1, size_t max_length = max_size) const
-    {
-        return view().find_next_range_of_unset_bits(from, min_length, max_length);
-    }
-
-    Optional<size_t> find_longest_range_of_unset_bits(size_t max_length, size_t& found_range_size) const
-    {
-        return view().find_longest_range_of_unset_bits(max_length, found_range_size);
-    }
-
-    Optional<size_t> find_first_fit(size_t minimum_length) const { return view().find_first_fit(minimum_length); }
-    Optional<size_t> find_best_fit(size_t minimum_length) const { return view().find_best_fit(minimum_length); }
-
-    static constexpr size_t max_size = 0xffffffff;
-
 private:
-    u8* m_data { nullptr };
-    size_t m_size { 0 };
     bool m_is_owning { true };
 };
 

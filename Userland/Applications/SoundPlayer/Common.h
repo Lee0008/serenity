@@ -13,15 +13,15 @@ class AutoSlider final : public GUI::Slider {
 public:
     ~AutoSlider() override = default;
     Function<void(int)> on_knob_released;
-    void set_value(int value)
+    virtual void set_value(int value, GUI::AllowCallback allow_callback = GUI::AllowCallback::Yes) override
     {
-        if (!knob_dragging())
-            GUI::Slider::set_value(value);
+        if (!knob_dragging() && !mouse_is_down())
+            GUI::Slider::set_value(value, allow_callback);
     }
 
     bool mouse_is_down() const { return m_mouse_is_down; }
 
-protected:
+private:
     AutoSlider(Orientation orientation)
         : GUI::Slider(orientation)
     {
@@ -42,6 +42,5 @@ protected:
         GUI::Slider::mouseup_event(event);
     }
 
-private:
     bool m_mouse_is_down { false };
 };

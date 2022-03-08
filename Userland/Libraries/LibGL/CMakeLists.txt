@@ -1,21 +1,23 @@
 set(SOURCES
-    Tex/NameAllocator.cpp
-    Tex/Texture2D.cpp
-    Tex/TextureUnit.cpp
-    Clipper.cpp
     GLBlend.cpp
     GLColor.cpp
     GLContext.cpp
+    GLDraw.cpp
+    GLFog.cpp
     GLLights.cpp
     GLLists.cpp
-    GLMat.cpp
+    GLMap.cpp
+    GLMatrix.cpp
+    GLStencil.cpp
     GLTexture.cpp
     GLUtils.cpp
     GLVert.cpp
+    GLVertexArrays.cpp
     SoftwareGLContext.cpp
-    SoftwareRasterizer.cpp
-    DepthBuffer.cpp
+    Tex/NameAllocator.cpp
+    Tex/Texture2D.cpp
+    Tex/TextureUnit.cpp
 )
 
 serenity_lib(LibGL gl)
-target_link_libraries(LibGL LibM LibCore LibGfx)
+target_link_libraries(LibGL LibM LibCore LibGfx LibSoftGPU)

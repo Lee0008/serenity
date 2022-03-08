@@ -6,11 +6,13 @@
 
 #pragma once
 
-#include <AK/MappedFile.h>
+#include <AK/Bitmap.h>
+#include <AK/ByteReader.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/String.h>
 #include <AK/Types.h>
+#include <LibCore/MappedFile.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Size.h>
 
@@ -20,31 +22,34 @@ namespace Gfx {
 class GlyphBitmap {
 public:
     GlyphBitmap() = default;
-    GlyphBitmap(const unsigned* rows, IntSize size)
+    GlyphBitmap(const u8* rows, size_t start_index, IntSize size)
         : m_rows(rows)
+        , m_start_index(start_index)
         , m_size(size)
     {
     }
 
-    const unsigned* rows() const { return m_rows; }
-    unsigned row(unsigned index) const { return m_rows[index]; }
+    unsigned row(unsigned index) const { return ByteReader::load32(bitmap(index).data()); }
 
-    bool bit_at(int x, int y) const { return row(y) & (1 << x); }
-    void set_bit_at(int x, int y, bool b)
-    {
-        auto& mutable_row = const_cast<unsigned*>(m_rows)[y];
-        if (b)
-            mutable_row |= 1 << x;
-        else
-            mutable_row &= ~(1 << x);
-    }
+    bool bit_at(int x, int y) const { return bitmap(y).get(x); }
+    void set_bit_at(int x, int y, bool b) { bitmap(y).set(x, b); }
 
     IntSize size() const { return m_size; }
     int width() const { return m_size.width(); }
     int height() const { return m_size.height(); }
 
+    static constexpr size_t bytes_per_row() { return sizeof(u32); }
+    static constexpr int max_width() { return bytes_per_row() * 8; }
+    static constexpr int max_height() { return max_width() + bytes_per_row(); }
+
 private:
-    const unsigned* m_rows { nullptr };
+    AK::Bitmap bitmap(size_t y) const
+    {
+        return { const_cast<u8*>(m_rows) + bytes_per_row() * (m_start_index + y), bytes_per_row() * 8 };
+    }
+
+    const u8* m_rows { nullptr };
+    size_t m_start_index { 0 };
     IntSize m_size { 0, 0 };
 };
 
@@ -81,21 +86,37 @@ private:
     int m_ascent;
 };
 
+struct FontMetrics {
+    float size { 0 };
+    float x_height { 0 };
+    float glyph_width { 0 };
+    float glyph_spacing { 0 };
+};
+
 class Font : public RefCounted<Font> {
 public:
+    enum class AllowInexactSizeMatch {
+        No,
+        Yes,
+    };
+
     virtual NonnullRefPtr<Font> clone() const = 0;
     virtual ~Font() {};
 
+    FontMetrics metrics(u32 code_point) const;
+
     virtual u8 presentation_size() const = 0;
+    virtual u8 slope() const = 0;
 
     virtual u16 weight() const = 0;
     virtual Glyph glyph(u32 code_point) const = 0;
     virtual bool contains_glyph(u32 code_point) const = 0;
 
-    virtual u8 glyph_width(size_t ch) const = 0;
+    virtual u8 glyph_width(u32 code_point) const = 0;
     virtual int glyph_or_emoji_width(u32 code_point) const = 0;
     virtual u8 glyph_height() const = 0;
     virtual int x_height() const = 0;
+    virtual int preferred_line_height() const = 0;
 
     virtual u8 min_glyph_width() const = 0;
     virtual u8 max_glyph_width() const = 0;
@@ -104,7 +125,7 @@ public:
     virtual u8 baseline() const = 0;
     virtual u8 mean_line() const = 0;
 
-    virtual int width(const StringView&) const = 0;
+    virtual int width(StringView) const = 0;
     virtual int width(const Utf8View&) const = 0;
     virtual int width(const Utf32View&) const = 0;
 
@@ -120,8 +141,12 @@ public:
     virtual String variant() const = 0;
 
     virtual String qualified_name() const = 0;
+    virtual String human_readable_name() const = 0;
 
-    virtual const Font& bold_variant() const = 0;
+    Font const& bold_variant() const;
+
+private:
+    mutable RefPtr<Gfx::Font> m_bold_variant;
 };
 
 }

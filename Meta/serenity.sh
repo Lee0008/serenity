@@ -6,8 +6,9 @@ ARG0=$0
 print_help() {
     NAME=$(basename "$ARG0")
     cat <<EOF
-Usage: $NAME COMMAND [TARGET] [ARGS...]
-  Supported TARGETs: i686 (default), x86_64, lagom
+Usage: $NAME COMMAND [TARGET] [TOOLCHAIN] [ARGS...]
+  Supported TARGETs: aarch64, i686, x86_64, lagom. Defaults to SERENITY_ARCH, or i686 if not set.
+  Supported TOOLCHAINs: GNU, Clang. Defaults to GNU if not set.
   Supported COMMANDs:
     build:      Compiles the target binaries, [ARGS...] are passed through to ninja
     install:    Installs the target binary
@@ -29,7 +30,7 @@ Usage: $NAME COMMAND [TARGET] [ARGS...]
                     is specified tests matching it.
                 All other TARGETs: $NAME test [TARGET]
                     Runs the built image in QEMU in self-test mode, by passing
-                    boot_mode=self-test to the Kernel
+                    system_mode=self-test to the Kernel
     delete:     Removes the build environment for TARGET
     recreate:   Deletes and re-creates the build environment for TARGET
     rebuild:    Deletes and re-creates the build environment, and compiles for TARGET
@@ -40,6 +41,9 @@ Usage: $NAME COMMAND [TARGET] [ARGS...]
                     attempt to find the BINARY_FILE in the appropriate build directory
     rebuild-toolchain: Deletes and re-builds the TARGET's toolchain
     rebuild-world:     Deletes and re-builds the toolchain and build environment for TARGET.
+    copy-src:   Same as image, but also copies the project's source tree to ~/Source/serenity
+                in the built disk image.
+
 
   Examples:
     $NAME run i686 smp=on
@@ -81,44 +85,121 @@ fi
 if [ -n "$1" ]; then
     TARGET="$1"; shift
 else
-    TARGET="i686"
+    TARGET="${SERENITY_ARCH:-"i686"}"
 fi
-CMD_ARGS=( "$@" )
+
 CMAKE_ARGS=()
+
+# Toolchain selection only applies to non-lagom targets.
+if [ "$TARGET" != "lagom" ]; then
+    case "$1" in
+        GNU|Clang)
+            TOOLCHAIN_TYPE="$1"; shift
+            ;;
+        *)
+            if [ -n "$1" ]; then
+                echo "WARNING: unknown toolchain '$1'. Defaulting to GNU."
+                echo "         Valid values are 'Clang', 'GNU' (default)"
+            fi
+            TOOLCHAIN_TYPE="GNU"
+            ;;
+    esac
+    CMAKE_ARGS+=( "-DSERENITY_TOOLCHAIN=$TOOLCHAIN_TYPE" )
+fi
+
+CMD_ARGS=( "$@" )
 
 get_top_dir() {
     git rev-parse --show-toplevel
 }
 
 is_valid_target() {
+    if [ "$TARGET" = "aarch64" ]; then
+        CMAKE_ARGS+=("-DSERENITY_ARCH=aarch64")
+        return 0
+    fi
+    if [ "$TARGET" = "i686" ]; then
+        CMAKE_ARGS+=("-DSERENITY_ARCH=i686")
+        return 0
+    fi
+    if [ "$TARGET" = "x86_64" ]; then
+        CMAKE_ARGS+=("-DSERENITY_ARCH=x86_64")
+        return 0
+    fi
     if [ "$TARGET" = "lagom" ]; then
         CMAKE_ARGS+=("-DBUILD_LAGOM=ON")
         return 0
     fi
-    [[ "$TARGET" =~ ^(i686|x86_64|lagom)$ ]] || return 1
+    return 1
 }
 
 create_build_dir() {
-    mkdir -p "$BUILD_DIR"
-    cmake -GNinja "${CMAKE_ARGS[@]}" -S . -B "$BUILD_DIR"
+    if [ "$TARGET" != "lagom" ]; then
+        cmake -GNinja "${CMAKE_ARGS[@]}" -S "$SERENITY_SOURCE_DIR/Meta/CMake/Superbuild" -B "$SUPER_BUILD_DIR"
+    else
+        cmake -GNinja "${CMAKE_ARGS[@]}" -S "$SERENITY_SOURCE_DIR/Meta/Lagom" -B "$SUPER_BUILD_DIR"
+    fi
+}
+
+pick_gcc() {
+    local BEST_VERSION=0
+    local BEST_GCC_CANDIDATE=""
+    for GCC_CANDIDATE in egcc gcc gcc-11 gcc-12 /usr/local/bin/gcc-11 /opt/homebrew/bin/gcc-11; do
+        if ! command -v $GCC_CANDIDATE >/dev/null 2>&1; then
+            continue
+        fi
+        if $GCC_CANDIDATE --version 2>&1 | grep "Apple clang" >/dev/null; then
+            continue
+        fi
+        if ! $GCC_CANDIDATE -dumpversion >/dev/null 2>&1; then
+            continue
+        fi
+        local VERSION=""
+        VERSION="$($GCC_CANDIDATE -dumpversion)"
+        local MAJOR_VERSION="${VERSION%%.*}"
+        if [ "$MAJOR_VERSION" -gt "$BEST_VERSION" ]; then
+            BEST_VERSION=$MAJOR_VERSION
+            BEST_GCC_CANDIDATE="$GCC_CANDIDATE"
+        fi
+    done
+    CMAKE_ARGS+=("-DCMAKE_C_COMPILER=$BEST_GCC_CANDIDATE")
+    CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=${BEST_GCC_CANDIDATE/gcc/g++}")
+    if [ "$BEST_VERSION" -lt 11 ]; then
+        die "Please make sure that GCC version 11 or higher is installed."
+    fi
 }
 
 cmd_with_target() {
     is_valid_target || ( >&2 echo "Unknown target: $TARGET"; usage )
+    pick_gcc
 
     if [ ! -d "$SERENITY_SOURCE_DIR" ]; then
         SERENITY_SOURCE_DIR="$(get_top_dir)"
         export SERENITY_SOURCE_DIR
     fi
-    BUILD_DIR="$SERENITY_SOURCE_DIR/Build/$TARGET"
+    local TARGET_TOOLCHAIN=""
+    if [[ "$TOOLCHAIN_TYPE" != "GNU" && "$TARGET" != "lagom" ]]; then
+        # Only append the toolchain if it's not GNU
+        TARGET_TOOLCHAIN=$(echo "$TOOLCHAIN_TYPE" | tr "[:upper:]" "[:lower:]")
+    fi
+    BUILD_DIR="$SERENITY_SOURCE_DIR/Build/$TARGET$TARGET_TOOLCHAIN"
     if [ "$TARGET" != "lagom" ]; then
         export SERENITY_ARCH="$TARGET"
-        TOOLCHAIN_DIR="$SERENITY_SOURCE_DIR/Toolchain/Build/$TARGET"
+        export SERENITY_TOOLCHAIN="$TOOLCHAIN_TYPE"
+        if [ "$TOOLCHAIN_TYPE" = "Clang" ]; then
+            TOOLCHAIN_DIR="$SERENITY_SOURCE_DIR/Toolchain/Local/clang"
+        else
+            TOOLCHAIN_DIR="$SERENITY_SOURCE_DIR/Toolchain/Local/$TARGET_TOOLCHAIN/$TARGET"
+        fi
+        SUPER_BUILD_DIR="$SERENITY_SOURCE_DIR/Build/superbuild-$TARGET$TARGET_TOOLCHAIN"
+    else
+        SUPER_BUILD_DIR="$BUILD_DIR"
+        CMAKE_ARGS+=("-DCMAKE_INSTALL_PREFIX=$SERENITY_SOURCE_DIR/Build/lagom-install")
     fi
 }
 
 ensure_target() {
-    [ -f "$BUILD_DIR/build.ninja" ] || create_build_dir
+    [ -f "$SUPER_BUILD_DIR/build.ninja" ] || create_build_dir
 }
 
 run_tests() {
@@ -132,19 +213,59 @@ run_tests() {
 }
 
 build_target() {
-    ninja -C "$BUILD_DIR" -- "$@"
+    if [ "$TARGET" = "lagom" ]; then
+        # Ensure that all lagom binaries get built, in case user first
+        # invoked superbuild for serenity target that doesn't set -DBUILD_LAGOM=ON
+        cmake -S "$SERENITY_SOURCE_DIR/Meta/Lagom" -B "$BUILD_DIR" -DBUILD_LAGOM=ON
+    fi
+    # With zero args, we are doing a standard "build"
+    # With multiple args, we are doing an install/image/run
+    if [ $# -eq 0 ]; then
+        cmake --build "$SUPER_BUILD_DIR"
+    else
+        ninja -C "$BUILD_DIR" -- "$@"
+    fi
+}
+
+build_image() {
+    if [ "$SERENITY_RUN" = "limine" ]; then
+        build_target limine-image
+    else
+        build_target image
+    fi
 }
 
 delete_target() {
     [ ! -d "$BUILD_DIR" ] || rm -rf "$BUILD_DIR"
+    [ ! -d "$SUPER_BUILD_DIR" ] || rm -rf "$SUPER_BUILD_DIR"
 }
 
 build_toolchain() {
-    ( cd "$SERENITY_SOURCE_DIR/Toolchain" && ARCH="$TARGET" ./BuildIt.sh )
+    echo "build_toolchain: $TOOLCHAIN_DIR"
+    if [ "$TOOLCHAIN_TYPE" = "Clang" ]; then
+        ( cd "$SERENITY_SOURCE_DIR/Toolchain" && ./BuildClang.sh )
+    else
+        ( cd "$SERENITY_SOURCE_DIR/Toolchain" && ARCH="$TARGET" ./BuildIt.sh )
+    fi
 }
 
 ensure_toolchain() {
     [ -d "$TOOLCHAIN_DIR" ] || build_toolchain
+
+    # FIXME: Remove this check when most people have already updated their toolchain
+    if [ "$TOOLCHAIN_TYPE" = "GNU" ]; then
+        local ld_version
+        ld_version="$("$TOOLCHAIN_DIR"/bin/"$TARGET"-pc-serenity-ld -v)"
+        local expected_version="GNU ld (GNU Binutils) 2.38"
+        if [ "$ld_version" != "$expected_version" ]; then
+            echo "Your toolchain has an old version of binutils installed."
+            echo "    installed version: \"$ld_version\""
+            echo "    expected version:  \"$expected_version\""
+            echo "Please run $ARG0 rebuild-toolchain $TARGET to update it."
+            exit 1
+        fi
+    fi
+
 }
 
 delete_toolchain() {
@@ -196,17 +317,17 @@ run_gdb() {
         GDB_ARGS+=( "$PASS_ARG_TO_GDB" )
     fi
     if [ "$TARGET" = "lagom" ]; then
-        gdb "$BUILD_DIR/Meta/Lagom/$LAGOM_EXECUTABLE" "${GDB_ARGS[@]}"
+        gdb "$BUILD_DIR/$LAGOM_EXECUTABLE" "${GDB_ARGS[@]}"
     else
         if [ -n "$KERNEL_CMD_LINE" ]; then
             export SERENITY_KERNEL_CMDLINE="$KERNEL_CMD_LINE"
         fi
         sleep 1
-        "$(get_top_dir)/Meta/debug-kernel.sh" "${GDB_ARGS[@]}" -ex cont
+        "$(get_top_dir)/Meta/debug-kernel.sh" "${GDB_ARGS[@]}"
     fi
 }
 
-if [[ "$CMD" =~ ^(build|install|image|run|gdb|test|rebuild|recreate|kaddr2line|addr2line|setup-and-run)$ ]]; then
+if [[ "$CMD" =~ ^(build|install|image|copy-src|run|gdb|test|rebuild|recreate|kaddr2line|addr2line|setup-and-run)$ ]]; then
     cmd_with_target
     [[ "$CMD" != "recreate" && "$CMD" != "rebuild" ]] || delete_target
     [ "$TARGET" = "lagom" ] || ensure_toolchain
@@ -216,7 +337,6 @@ if [[ "$CMD" =~ ^(build|install|image|run|gdb|test|rebuild|recreate|kaddr2line|a
             build_target "$@"
             ;;
         install)
-            lagom_unsupported
             build_target
             build_target install
             ;;
@@ -224,16 +344,23 @@ if [[ "$CMD" =~ ^(build|install|image|run|gdb|test|rebuild|recreate|kaddr2line|a
             lagom_unsupported
             build_target
             build_target install
-            build_target image
+            build_image
             ;;
+        copy-src)
+          lagom_unsupported
+          build_target
+          build_target install
+          export SERENITY_COPY_SOURCE=1
+          build_image
+          ;;
         run)
             if [ "$TARGET" = "lagom" ]; then
                 build_target "${CMD_ARGS[0]}"
-                "$BUILD_DIR/Meta/Lagom/${CMD_ARGS[0]}" "${CMD_ARGS[@]:1}"
+                "$BUILD_DIR/${CMD_ARGS[0]}" "${CMD_ARGS[@]:1}"
             else
                 build_target
                 build_target install
-                build_target image
+                build_image
                 if [ -n "${CMD_ARGS[0]}" ]; then
                     export SERENITY_KERNEL_CMDLINE="${CMD_ARGS[0]}"
                 fi
@@ -249,19 +376,20 @@ if [[ "$CMD" =~ ^(build|install|image|run|gdb|test|rebuild|recreate|kaddr2line|a
             else
                 build_target
                 build_target install
-                build_target image
-                tmux new-session "$ARG0" __tmux_cmd "$TARGET" run "${CMD_ARGS[@]}" \; set-option -t 0 mouse on \; split-window "$ARG0" __tmux_cmd "$TARGET" gdb "${CMD_ARGS[@]}" \;
+                build_image
+                tmux new-session "$ARG0" __tmux_cmd "$TARGET" "$TOOLCHAIN_TYPE" run "${CMD_ARGS[@]}" \; set-option -t 0 mouse on \; split-window "$ARG0" __tmux_cmd "$TARGET" "$TOOLCHAIN_TYPE" gdb "${CMD_ARGS[@]}" \;
             fi
             ;;
         test)
-            # FIXME: can we avoid building everything for host tests?
             build_target
             if [ "$TARGET" = "lagom" ]; then
                 run_tests "${CMD_ARGS[0]}"
             else
                 build_target install
-                build_target image
-                export SERENITY_KERNEL_CMDLINE="boot_mode=self-test"
+                build_image
+                # In contrast to CI, we don't set 'panic=shutdown' here,
+                # in case the user wants to inspect qemu some more.
+                export SERENITY_KERNEL_CMDLINE="fbdev=off system_mode=self-test"
                 export SERENITY_RUN="ci"
                 build_target run
             fi
@@ -275,7 +403,12 @@ if [[ "$CMD" =~ ^(build|install|image|run|gdb|test|rebuild|recreate|kaddr2line|a
             lagom_unsupported
             build_target
             [ $# -ge 1 ] || usage
-            "$TOOLCHAIN_DIR/binutils/binutils/addr2line" -e "$BUILD_DIR/Kernel/Kernel" "$@"
+            if [ "$TOOLCHAIN_TYPE" = "Clang" ]; then
+                ADDR2LINE="$TOOLCHAIN_DIR/bin/llvm-addr2line"
+            else
+                ADDR2LINE="$TOOLCHAIN_DIR/binutils/binutils/addr2line"
+            fi
+            "$ADDR2LINE" -e "$BUILD_DIR/Kernel/Kernel" "$@"
             ;;
         addr2line)
             build_target
@@ -285,6 +418,8 @@ if [[ "$CMD" =~ ^(build|install|image|run|gdb|test|rebuild|recreate|kaddr2line|a
             if [ "$TARGET" = "lagom" ]; then
                 command -v addr2line >/dev/null 2>&1 || die "Please install addr2line!"
                 ADDR2LINE=addr2line
+            elif [ "$TOOLCHAIN_TYPE" = "Clang" ]; then
+                ADDR2LINE="$TOOLCHAIN_DIR/bin/llvm-addr2line"
             else
                 ADDR2LINE="$TOOLCHAIN_DIR/binutils/binutils/addr2line"
             fi

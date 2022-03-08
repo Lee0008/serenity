@@ -9,7 +9,6 @@
 #include <AK/Time.h>
 #include <LibCore/DateTime.h>
 #include <errno.h>
-#include <sys/time.h>
 #include <time.h>
 
 namespace Core {
@@ -19,7 +18,7 @@ DateTime DateTime::now()
     return from_timestamp(time(nullptr));
 }
 
-DateTime DateTime::create(unsigned year, unsigned month, unsigned day, unsigned hour, unsigned minute, unsigned second)
+DateTime DateTime::create(int year, int month, int day, int hour, int minute, int second)
 {
     DateTime dt;
     dt.set_time(year, month, day, hour, minute, second);
@@ -61,15 +60,15 @@ bool DateTime::is_leap_year() const
     return ::is_leap_year(m_year);
 }
 
-void DateTime::set_time(unsigned year, unsigned month, unsigned day, unsigned hour, unsigned minute, unsigned second)
+void DateTime::set_time(int year, int month, int day, int hour, int minute, int second)
 {
     struct tm tm = {};
-    tm.tm_sec = (int)second;
-    tm.tm_min = (int)minute;
-    tm.tm_hour = (int)hour;
-    tm.tm_mday = (int)day;
-    tm.tm_mon = (int)month - 1;
-    tm.tm_year = (int)year - 1900;
+    tm.tm_sec = second;
+    tm.tm_min = minute;
+    tm.tm_hour = hour;
+    tm.tm_mday = day;
+    tm.tm_mon = month - 1;
+    tm.tm_year = year - 1900;
     tm.tm_isdst = -1;
     // mktime() doesn't read tm.tm_wday and tm.tm_yday, no need to fill them in.
 
@@ -84,7 +83,7 @@ void DateTime::set_time(unsigned year, unsigned month, unsigned day, unsigned ho
     m_second = tm.tm_sec;
 }
 
-String DateTime::to_string(const String& format) const
+String DateTime::to_string(StringView format) const
 {
     const char wday_short_names[7][4] = {
         "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
@@ -105,6 +104,28 @@ String DateTime::to_string(const String& format) const
     localtime_r(&m_timestamp, &tm);
     StringBuilder builder;
     const int format_len = format.length();
+
+    auto format_time_zone_offset = [&](bool with_separator) {
+#ifndef __FreeBSD__
+        auto offset_seconds = -timezone;
+#else
+        auto offset_seconds = 0;
+#endif
+        StringView offset_sign;
+
+        if (offset_seconds >= 0) {
+            offset_sign = "+"sv;
+        } else {
+            offset_sign = "-"sv;
+            offset_seconds *= -1;
+        }
+
+        auto offset_hours = offset_seconds / 3600;
+        auto offset_minutes = (offset_seconds % 3600) / 60;
+        auto separator = with_separator ? ":"sv : ""sv;
+
+        builder.appendff("{}{:02}{}{:02}", offset_sign, offset_hours, separator, offset_minutes);
+    };
 
     for (int i = 0; i < format_len; ++i) {
         if (format[i] != '%') {
@@ -218,6 +239,20 @@ String DateTime::to_string(const String& format) const
             case 'Y':
                 builder.appendff("{}", tm.tm_year + 1900);
                 break;
+            case 'z':
+                format_time_zone_offset(false);
+                break;
+            case ':':
+                if (++i == format_len)
+                    return String::empty();
+                if (format[i] != 'z')
+                    return String::empty();
+
+                format_time_zone_offset(true);
+                break;
+            case 'Z':
+                builder.append(tzname[0]);
+                break;
             case '%':
                 builder.append('%');
                 break;
@@ -230,7 +265,7 @@ String DateTime::to_string(const String& format) const
     return builder.build();
 }
 
-Optional<DateTime> DateTime::parse(const String& format, const String& string)
+Optional<DateTime> DateTime::parse(StringView format, const String& string)
 {
     unsigned format_pos = 0;
     unsigned string_pos = 0;

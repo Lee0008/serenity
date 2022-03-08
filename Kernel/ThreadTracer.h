@@ -8,17 +8,18 @@
 
 #include <AK/Optional.h>
 #include <AK/OwnPtr.h>
-#include <Kernel/UnixTypes.h>
+#include <Kernel/Arch/RegisterState.h>
+#include <Kernel/Forward.h>
 #include <LibC/sys/arch/i386/regs.h>
 
 namespace Kernel {
 
 class ThreadTracer {
 public:
-    static OwnPtr<ThreadTracer> create(ProcessID tracer) { return adopt_own_if_nonnull(new ThreadTracer(tracer)); }
+    static ErrorOr<NonnullOwnPtr<ThreadTracer>> try_create(ProcessID tracer) { return adopt_nonnull_own_or_enomem(new (nothrow) ThreadTracer(tracer)); }
 
     ProcessID tracer_pid() const { return m_tracer_pid; }
-    bool has_pending_signal(u32 signal) const { return m_pending_signals & (1 << (signal - 1)); }
+    bool has_pending_signal(u32 signal) const { return (m_pending_signals & (1 << (signal - 1))) != 0; }
     void set_signal(u32 signal) { m_pending_signals |= (1 << (signal - 1)); }
     void unset_signal(u32 signal) { m_pending_signals &= ~(1 << (signal - 1)); }
 
@@ -34,9 +35,9 @@ public:
         return m_regs.value();
     }
 
+private:
     explicit ThreadTracer(ProcessID);
 
-private:
     ProcessID m_tracer_pid { -1 };
 
     // This is a bitmap for signals that are sent from the tracer to the tracee

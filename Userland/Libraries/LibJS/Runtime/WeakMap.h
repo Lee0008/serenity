@@ -27,9 +27,11 @@ public:
     HashMap<Cell*, Value> const& values() const { return m_values; };
     HashMap<Cell*, Value>& values() { return m_values; };
 
-    virtual void remove_sweeped_cells(Badge<Heap>, Vector<Cell*>&) override;
+    virtual void remove_dead_cells(Badge<Heap>) override;
 
 private:
+    void visit_edges(Visitor&) override;
+
     HashMap<Cell*, Value> m_values; // This stores Cell pointers instead of Object pointers to aide with sweeping
 };
 

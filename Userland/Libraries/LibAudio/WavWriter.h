@@ -6,15 +6,19 @@
 
 #pragma once
 
+#include <AK/Noncopyable.h>
 #include <AK/StringView.h>
 #include <LibCore/File.h>
 
 namespace Audio {
 
 class WavWriter {
+    AK_MAKE_NONCOPYABLE(WavWriter);
+    AK_MAKE_NONMOVABLE(WavWriter);
+
 public:
-    WavWriter(const StringView& path, int sample_rate = 44100, int num_channels = 2, int bits_per_sample = 16);
-    WavWriter(int sample_rate = 44100, int num_channels = 2, int bits_per_sample = 16);
+    WavWriter(StringView path, int sample_rate = 44100, u16 num_channels = 2, u16 bits_per_sample = 16);
+    WavWriter(int sample_rate = 44100, u16 num_channels = 2, u16 bits_per_sample = 16);
     ~WavWriter();
 
     bool has_error() const { return !m_error_string.is_null(); }
@@ -28,7 +32,7 @@ public:
     u16 bits_per_sample() const { return m_bits_per_sample; }
     RefPtr<Core::File> file() const { return m_file; }
 
-    void set_file(const StringView& path);
+    void set_file(StringView path);
     void set_num_channels(int num_channels) { m_num_channels = num_channels; }
     void set_sample_rate(int sample_rate) { m_sample_rate = sample_rate; }
     void set_bits_per_sample(int bits_per_sample) { m_bits_per_sample = bits_per_sample; }

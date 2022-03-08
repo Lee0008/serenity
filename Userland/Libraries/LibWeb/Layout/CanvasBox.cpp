@@ -20,8 +20,6 @@ CanvasBox::~CanvasBox()
 
 void CanvasBox::prepare_for_replaced_layout()
 {
-    set_has_intrinsic_width(true);
-    set_has_intrinsic_height(true);
     set_intrinsic_width(dom_node().width());
     set_intrinsic_height(dom_node().height());
 }
@@ -39,7 +37,7 @@ void CanvasBox::paint(PaintContext& context, PaintPhase phase)
             return;
 
         if (dom_node().bitmap())
-            context.painter().draw_scaled_bitmap(enclosing_int_rect(absolute_rect()), *dom_node().bitmap(), dom_node().bitmap()->rect());
+            context.painter().draw_scaled_bitmap(rounded_int_rect(absolute_rect()), *dom_node().bitmap(), dom_node().bitmap()->rect(), 1.0f, to_gfx_scaling_mode(computed_values().image_rendering()));
     }
 }
 

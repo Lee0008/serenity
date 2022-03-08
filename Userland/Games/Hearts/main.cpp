@@ -1,15 +1,19 @@
 /*
  * Copyright (c) 2020, Till Mayer <till.mayer@web.de>
  * Copyright (c) 2021, Gunnar Beutner <gbeutner@serenityos.org>
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Game.h"
 #include "SettingsDialog.h"
+#include <AK/URL.h>
 #include <Games/Hearts/HeartsGML.h>
-#include <LibCore/ConfigFile.h>
+#include <LibConfig/Client.h>
+#include <LibCore/System.h>
 #include <LibCore/Timer.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
@@ -19,48 +23,40 @@
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Statusbar.h>
 #include <LibGUI/Window.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    auto app = GUI::Application::construct(argc, argv);
-    auto app_icon = GUI::Icon::default_icon("app-hearts");
-    auto config = Core::ConfigFile::get_for_app("Hearts");
+    auto app = TRY(GUI::Application::try_create(arguments));
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-hearts"));
 
-    if (pledge("stdio recvfd sendfd rpath wpath cpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    Config::pledge_domain("Hearts");
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath unix"));
 
-    if (unveil(config->filename().characters(), "crw") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Desktop::Launcher::add_allowed_handler_with_only_specific_urls("/bin/Help", { URL::create_with_file_protocol("/usr/share/man/man6/Hearts.md") }));
+    TRY(Desktop::Launcher::seal_allowlist());
 
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
 
-    auto window = GUI::Window::construct();
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/tmp/portal/launch", "rw"));
+    TRY(Core::System::unveil(nullptr, nullptr));
+
+    auto window = TRY(GUI::Window::try_create());
     window->set_title("Hearts");
 
-    auto& widget = window->set_main_widget<GUI::Widget>();
-    widget.load_from_gml(hearts_gml);
+    auto widget = TRY(window->try_set_main_widget<GUI::Widget>());
+    widget->load_from_gml(hearts_gml);
 
-    auto& game = *widget.find_descendant_of_type_named<Hearts::Game>("game");
+    auto& game = *widget->find_descendant_of_type_named<Hearts::Game>("game");
     game.set_focus(true);
 
-    auto& statusbar = *widget.find_descendant_of_type_named<GUI::Statusbar>("statusbar");
+    auto& statusbar = *widget->find_descendant_of_type_named<GUI::Statusbar>("statusbar");
     statusbar.set_text(0, "Score: 0");
 
-    String player_name = config->read_entry("", "player_name", "Gunnar");
+    String player_name = Config::read_string("Hearts", "", "player_name", "Gunnar");
 
     game.on_status_change = [&](const AK::StringView& status) {
         statusbar.set_override_text(status);
@@ -84,35 +80,31 @@ int main(int argc, char** argv)
 
         player_name = settings_dialog->player_name();
 
-        config->write_entry("", "player_name", player_name);
-
-        if (!config->sync()) {
-            GUI::MessageBox::show(window, "Settings could not be saved!", "Error", GUI::MessageBox::Type::Error);
-            return;
-        }
+        Config::write_string("Hearts", "", "player_name", player_name);
 
         GUI::MessageBox::show(window, "Settings have been successfully saved and will take effect in the next game.", "Settings Changed Successfully", GUI::MessageBox::Type::Information);
     };
 
-    auto menubar = GUI::Menubar::construct();
-    auto& game_menu = menubar->add_menu("&Game");
+    auto game_menu = TRY(window->try_add_menu("&Game"));
 
-    game_menu.add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
+    TRY(game_menu->try_add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
         game.setup(player_name);
-    }));
-    game_menu.add_separator();
-    game_menu.add_action(GUI::Action::create("&Settings...", [&](auto&) {
+    })));
+    TRY(game_menu->try_add_separator());
+    TRY(game_menu->try_add_action(GUI::Action::create("&Settings...", [&](auto&) {
         change_settings();
-    }));
-    game_menu.add_separator();
-    game_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
+    })));
+    TRY(game_menu->try_add_separator());
+    TRY(game_menu->try_add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); })));
 
-    auto& help_menu = menubar->add_menu("&Help");
-    help_menu.add_action(GUI::CommonActions::make_about_action("Hearts", app_icon, window));
+    auto help_menu = TRY(window->try_add_menu("&Help"));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_help_action([](auto&) {
+        Desktop::Launcher::open(URL::create_with_file_protocol("/usr/share/man/man6/Hearts.md"), "/bin/Help");
+    })));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_about_action("Hearts", app_icon, window)));
 
     window->set_resizable(false);
     window->resize(Hearts::Game::width, Hearts::Game::height + statusbar.max_height());
-    window->set_menubar(move(menubar));
     window->set_icon(app_icon.bitmap_for_size(16));
     window->show();
     game.setup(player_name);

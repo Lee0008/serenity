@@ -8,7 +8,6 @@
 #include "RemoteObject.h"
 #include "RemoteObjectGraphModel.h"
 #include "RemoteObjectPropertyModel.h"
-#include <stdio.h>
 #include <stdlib.h>
 
 namespace Inspector {
@@ -25,7 +24,7 @@ RemoteProcess::RemoteProcess(pid_t pid)
     , m_object_graph_model(RemoteObjectGraphModel::create(*this))
 {
     s_the = this;
-    m_client = InspectorServerClient::construct();
+    m_client = InspectorServerClient::try_create().release_value_but_fixme_should_propagate_errors();
 }
 
 void RemoteProcess::handle_identify_response(const JsonObject& response)
@@ -72,7 +71,7 @@ void RemoteProcess::handle_get_all_objects_response(const JsonObject& response)
         }
     }
 
-    m_object_graph_model->update();
+    m_object_graph_model->invalidate();
 
     if (on_update)
         on_update();
@@ -83,7 +82,7 @@ void RemoteProcess::set_inspected_object(FlatPtr address)
     m_client->async_set_inspected_object(m_pid, address);
 }
 
-void RemoteProcess::set_property(FlatPtr object, const StringView& name, const JsonValue& value)
+void RemoteProcess::set_property(FlatPtr object, StringView name, const JsonValue& value)
 {
     m_client->async_set_object_property(m_pid, object, name, value.to_string());
 }

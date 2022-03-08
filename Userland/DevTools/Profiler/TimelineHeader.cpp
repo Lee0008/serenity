@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,9 +10,7 @@
 #include "Profile.h"
 #include <AK/LexicalPath.h>
 #include <LibGUI/FileIconProvider.h>
-#include <LibGUI/Icon.h>
 #include <LibGUI/Painter.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/Palette.h>
 
 namespace Profiler {
@@ -26,11 +25,7 @@ TimelineHeader::TimelineHeader(Profile& profile, Process const& process)
     update_selection();
 
     m_icon = GUI::FileIconProvider::icon_for_executable(m_process.executable).bitmap_for_size(32);
-    m_text = String::formatted("{} ({})", LexicalPath(m_process.executable).basename(), m_process.pid);
-}
-
-TimelineHeader::~TimelineHeader()
-{
+    m_text = String::formatted("{} ({})", LexicalPath::basename(m_process.executable), m_process.pid);
 }
 
 void TimelineHeader::paint_event(GUI::PaintEvent& event)
@@ -55,7 +50,7 @@ void TimelineHeader::paint_event(GUI::PaintEvent& event)
     };
     text_rect.center_vertically_within(frame_inner_rect());
 
-    auto& font = m_selected ? painter.font().bold_variant() : painter.font();
+    auto const& font = m_selected ? painter.font().bold_variant() : painter.font();
     auto color = m_selected ? palette().selection_text() : palette().button_text();
     painter.draw_text(text_rect, m_text, font, Gfx::TextAlignment::CenterLeft, color);
 }
@@ -68,7 +63,7 @@ void TimelineHeader::update_selection()
 
 void TimelineHeader::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
     m_selected = !m_selected;
     on_selection_change(m_selected);

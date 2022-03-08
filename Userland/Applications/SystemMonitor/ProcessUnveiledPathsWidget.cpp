@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,7 +14,7 @@
 ProcessUnveiledPathsWidget::ProcessUnveiledPathsWidget()
 {
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 4, 4, 4, 4 });
+    layout()->set_margins(4);
     m_table_view = add<GUI::TableView>();
 
     Vector<GUI::JsonArrayModel::FieldSpec> pid_unveil_fields;
@@ -21,11 +22,7 @@ ProcessUnveiledPathsWidget::ProcessUnveiledPathsWidget()
     pid_unveil_fields.empend("permissions", "Permissions", Gfx::TextAlignment::CenterLeft);
 
     m_model = GUI::JsonArrayModel::create({}, move(pid_unveil_fields));
-    m_table_view->set_model(GUI::SortingProxyModel::create(*m_model));
-}
-
-ProcessUnveiledPathsWidget::~ProcessUnveiledPathsWidget()
-{
+    m_table_view->set_model(MUST(GUI::SortingProxyModel::create(*m_model)));
 }
 
 void ProcessUnveiledPathsWidget::set_pid(pid_t pid)

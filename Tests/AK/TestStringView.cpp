@@ -7,6 +7,7 @@
 #include <LibTest/TestCase.h>
 
 #include <AK/String.h>
+#include <AK/Vector.h>
 
 TEST_CASE(construct_empty)
 {
@@ -104,52 +105,38 @@ TEST_CASE(lines)
     EXPECT_EQ(test_string_vector.at(2).is_empty(), true);
 }
 
-TEST_CASE(find_first_of)
+TEST_CASE(find)
 {
-    String test_string = "aabbcc_xy_ccbbaa";
-    StringView test_string_view = test_string.view();
-
-    EXPECT_EQ(test_string_view.find_first_of('b').has_value(), true);
-    EXPECT_EQ(test_string_view.find_first_of('b').value(), 2U);
-
-    EXPECT_EQ(test_string_view.find_first_of('_').has_value(), true);
-    EXPECT_EQ(test_string_view.find_first_of('_').value(), 6U);
-
-    EXPECT_EQ(test_string_view.find_first_of("bc").has_value(), true);
-    EXPECT_EQ(test_string_view.find_first_of("bc").value(), 2U);
-
-    EXPECT_EQ(test_string_view.find_first_of("yx").has_value(), true);
-    EXPECT_EQ(test_string_view.find_first_of("yx").value(), 7U);
-
-    EXPECT_EQ(test_string_view.find_first_of('n').has_value(), false);
-    EXPECT_EQ(test_string_view.find_first_of("defg").has_value(), false);
+    auto test_string_view = "aabbcc_xy_ccbbaa"sv;
+    EXPECT_EQ(test_string_view.find('b'), 2U);
+    EXPECT_EQ(test_string_view.find('_'), 6U);
+    EXPECT_EQ(test_string_view.find('n').has_value(), false);
 }
 
-TEST_CASE(find_last_of)
+TEST_CASE(find_last)
 {
-    String test_string = "aabbcc_xy_ccbbaa";
-    StringView test_string_view = test_string.view();
+    auto test_string_view = "aabbcc_xy_ccbbaa"sv;
+    EXPECT_EQ(test_string_view.find_last('b'), 13U);
+    EXPECT_EQ(test_string_view.find_last('_'), 9U);
+    EXPECT_EQ(test_string_view.find_last('3').has_value(), false);
 
-    EXPECT_EQ(test_string_view.find_last_of('b').has_value(), true);
-    EXPECT_EQ(test_string_view.find_last_of('b').value(), 13U);
+    test_string_view = "/"sv;
+    EXPECT_EQ(test_string_view.find_last('/'), 0U);
+}
 
-    EXPECT_EQ(test_string_view.find_last_of('_').has_value(), true);
-    EXPECT_EQ(test_string_view.find_last_of('_').value(), 9U);
+TEST_CASE(find_any_of)
+{
+    auto test_string_view = "aabbcc_xy_ccbbaa"sv;
+    EXPECT_EQ(test_string_view.find_any_of("bc", StringView::SearchDirection::Forward), 2U);
+    EXPECT_EQ(test_string_view.find_any_of("yx", StringView::SearchDirection::Forward), 7U);
+    EXPECT_EQ(test_string_view.find_any_of("defg", StringView::SearchDirection::Forward).has_value(), false);
+    EXPECT_EQ(test_string_view.find_any_of("bc", StringView::SearchDirection::Backward), 13U);
+    EXPECT_EQ(test_string_view.find_any_of("yx", StringView::SearchDirection::Backward), 8U);
+    EXPECT_EQ(test_string_view.find_any_of("fghi", StringView::SearchDirection::Backward).has_value(), false);
 
-    EXPECT_EQ(test_string_view.find_last_of("bc").has_value(), true);
-    EXPECT_EQ(test_string_view.find_last_of("bc").value(), 13U);
-
-    EXPECT_EQ(test_string_view.find_last_of("yx").has_value(), true);
-    EXPECT_EQ(test_string_view.find_last_of("yx").value(), 8U);
-
-    EXPECT_EQ(test_string_view.find_last_of('3').has_value(), false);
-    EXPECT_EQ(test_string_view.find_last_of("fghi").has_value(), false);
-
-    test_string_view = "/";
-    EXPECT_EQ(test_string_view.find_last_of('/').has_value(), true);
-    EXPECT_EQ(test_string_view.find_last_of('/').value(), 0U);
-    EXPECT_EQ(test_string_view.find_last_of("/").has_value(), true);
-    EXPECT_EQ(test_string_view.find_last_of("/").value(), 0U);
+    test_string_view = "/"sv;
+    EXPECT_EQ(test_string_view.find_any_of("/", StringView::SearchDirection::Forward), 0U);
+    EXPECT_EQ(test_string_view.find_any_of("/", StringView::SearchDirection::Backward), 0U);
 }
 
 TEST_CASE(split_view)
@@ -171,9 +158,46 @@ TEST_CASE(split_view)
     EXPECT_EQ(test_string_view.split_view("xx", true), Vector<StringView>({ "a", "bc", "d", "" }));
 
     test_string_view = "ax_b_cxd";
-    auto predicate = [](char ch) { return ch == 'x' || ch == '_'; };
+    Function<bool(char)> predicate = [](char ch) { return ch == 'x' || ch == '_'; };
     EXPECT_EQ(test_string_view.split_view_if(predicate), Vector<StringView>({ "a", "b", "c", "d" }));
     EXPECT_EQ(test_string_view.split_view_if(predicate, true), Vector<StringView>({ "a", "", "b", "c", "d" }));
     EXPECT_EQ(test_string_view.split_view_if(predicate), Vector<StringView>({ "a", "b", "c", "d" }));
     EXPECT_EQ(test_string_view.split_view_if(predicate, true), Vector<StringView>({ "a", "", "b", "c", "d" }));
+}
+
+TEST_CASE(constexpr_stuff)
+{
+#define do_test()                                                       \
+    static_assert(test_constexpr.length() == 3);                        \
+    static_assert(!test_constexpr.is_empty());                          \
+    static_assert(test_constexpr.is_one_of("foo", "bar", "baz"));       \
+    static_assert(test_constexpr.is_one_of("foo"sv, "bar"sv, "baz"sv)); \
+    static_assert(test_constexpr != "fob"sv);                           \
+    static_assert(test_constexpr != "fob");                             \
+    static_assert(test_constexpr.substring_view(1).is_one_of("oo"sv));
+
+    {
+        // Can initialize from ""sv.
+        constexpr StringView test_constexpr { "foo"sv };
+        do_test();
+    }
+
+    {
+        // Can initialize from char const*.
+        constexpr StringView test_constexpr { "foo" };
+        do_test();
+    }
+#undef do_test
+}
+
+TEST_CASE(case_insensitive_hash)
+{
+    auto string1 = "abcdef"sv;
+    auto string2 = "ABCDEF"sv;
+    auto string3 = "aBcDeF"sv;
+    auto string4 = "foo"sv;
+
+    EXPECT_EQ(CaseInsensitiveStringViewTraits::hash(string1), CaseInsensitiveStringViewTraits::hash(string2));
+    EXPECT_EQ(CaseInsensitiveStringViewTraits::hash(string1), CaseInsensitiveStringViewTraits::hash(string3));
+    EXPECT_NE(CaseInsensitiveStringViewTraits::hash(string1), CaseInsensitiveStringViewTraits::hash(string4));
 }

@@ -43,39 +43,22 @@ ByteBuffer IODevice::read(size_t max_size)
         return {};
     if (!max_size)
         return {};
-    auto buffer = ByteBuffer::create_uninitialized(max_size);
+
+    if (m_buffered_data.size() < max_size)
+        populate_read_buffer(max(max_size - m_buffered_data.size(), 1024));
+
+    auto size = min(max_size, m_buffered_data.size());
+    auto buffer_result = ByteBuffer::create_uninitialized(size);
+    if (buffer_result.is_error()) {
+        dbgln("IODevice::read: Not enough memory to allocate a buffer of {} bytes", size);
+        return {};
+    }
+    auto buffer = buffer_result.release_value();
     auto* buffer_ptr = (char*)buffer.data();
-    size_t remaining_buffer_space = buffer.size();
-    size_t taken_from_buffered = 0;
-    if (!m_buffered_data.is_empty()) {
-        taken_from_buffered = min(remaining_buffer_space, m_buffered_data.size());
-        memcpy(buffer_ptr, m_buffered_data.data(), taken_from_buffered);
-        Vector<u8> new_buffered_data;
-        new_buffered_data.append(m_buffered_data.data() + taken_from_buffered, m_buffered_data.size() - taken_from_buffered);
-        m_buffered_data = move(new_buffered_data);
-        remaining_buffer_space -= taken_from_buffered;
-        buffer_ptr += taken_from_buffered;
-    }
-    if (!remaining_buffer_space)
-        return buffer;
-    int nread = ::read(m_fd, buffer_ptr, remaining_buffer_space);
-    if (nread < 0) {
-        if (taken_from_buffered) {
-            buffer.resize(taken_from_buffered);
-            return buffer;
-        }
-        set_error(errno);
-        return {};
-    }
-    if (nread == 0) {
-        set_eof(true);
-        if (taken_from_buffered) {
-            buffer.resize(taken_from_buffered);
-            return buffer;
-        }
-        return {};
-    }
-    buffer.resize(taken_from_buffered + nread);
+
+    memcpy(buffer_ptr, m_buffered_data.data(), size);
+    m_buffered_data.remove(0, size);
+
     return buffer;
 }
 
@@ -128,8 +111,6 @@ bool IODevice::can_read_line() const
         if (m_buffered_data.contains_in_range('\n', previous_buffer_size, new_buffer_size - 1))
             return true;
     }
-
-    return true;
 }
 
 bool IODevice::can_read() const
@@ -166,7 +147,13 @@ ByteBuffer IODevice::read_all()
         }
         data.append((const u8*)read_buffer, nread);
     }
-    return ByteBuffer::copy(data.data(), data.size());
+
+    auto result = ByteBuffer::copy(data);
+    if (!result.is_error())
+        return result.release_value();
+
+    set_error(ENOMEM);
+    return {};
 }
 
 String IODevice::read_line(size_t max_size)
@@ -186,7 +173,12 @@ String IODevice::read_line(size_t max_size)
         m_buffered_data.clear();
         return line;
     }
-    auto line = ByteBuffer::create_uninitialized(max_size + 1);
+    auto line_result = ByteBuffer::create_uninitialized(max_size + 1);
+    if (line_result.is_error()) {
+        dbgln("IODevice::read_line: Not enough memory to allocate a buffer of {} bytes", max_size + 1);
+        return {};
+    }
+    auto line = line_result.release_value();
     size_t line_index = 0;
     while (line_index < max_size) {
         u8 ch = m_buffered_data[line_index];
@@ -202,12 +194,22 @@ String IODevice::read_line(size_t max_size)
     return {};
 }
 
-bool IODevice::populate_read_buffer() const
+bool IODevice::populate_read_buffer(size_t size) const
 {
     if (m_fd < 0)
         return false;
-    u8 buffer[1024];
-    int nread = ::read(m_fd, buffer, sizeof(buffer));
+    if (!size)
+        return false;
+
+    auto buffer_result = ByteBuffer::create_uninitialized(size);
+    if (buffer_result.is_error()) {
+        dbgln("IODevice::populate_read_buffer: Not enough memory to allocate a buffer of {} bytes", size);
+        return {};
+    }
+    auto buffer = buffer_result.release_value();
+    auto* buffer_ptr = (char*)buffer.data();
+
+    int nread = ::read(m_fd, buffer_ptr, size);
     if (nread < 0) {
         set_error(errno);
         return false;
@@ -216,7 +218,7 @@ bool IODevice::populate_read_buffer() const
         set_eof(true);
         return false;
     }
-    m_buffered_data.append(buffer, nread);
+    m_buffered_data.append(buffer.data(), nread);
     return true;
 }
 
@@ -243,6 +245,7 @@ bool IODevice::seek(i64 offset, SeekMode mode, off_t* pos)
         break;
     case SeekMode::FromCurrentPosition:
         m = SEEK_CUR;
+        offset -= m_buffered_data.size();
         break;
     case SeekMode::FromEndPosition:
         m = SEEK_END;
@@ -292,7 +295,7 @@ void IODevice::set_fd(int fd)
     did_update_fd(fd);
 }
 
-bool IODevice::write(const StringView& v)
+bool IODevice::write(StringView v)
 {
     return write((const u8*)v.characters_without_null_termination(), v.length());
 }
@@ -301,7 +304,9 @@ LineIterator::LineIterator(IODevice& device, bool is_end)
     : m_device(device)
     , m_is_end(is_end)
 {
-    ++*this;
+    if (!m_is_end) {
+        ++*this;
+    }
 }
 
 bool LineIterator::at_end() const
@@ -314,4 +319,8 @@ LineIterator& LineIterator::operator++()
     m_buffer = m_device->read_line();
     return *this;
 }
+
+LineIterator LineRange::begin() { return m_device.line_begin(); }
+LineIterator LineRange::end() { return m_device.line_end(); }
+
 }

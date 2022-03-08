@@ -1,3 +1,8 @@
+serenity_component(
+    ChessEngine
+    TARGETS ChessEngine
+)
+
 set(SOURCES
     ChessEngine.cpp
     main.cpp
@@ -5,4 +10,4 @@ set(SOURCES
 )
 
 serenity_bin(ChessEngine)
-target_link_libraries(ChessEngine LibChess LibCore)
+target_link_libraries(ChessEngine LibChess LibCore LibMain)

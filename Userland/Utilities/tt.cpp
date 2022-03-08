@@ -7,6 +7,7 @@
 #include <LibCore/ArgsParser.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal_numbers.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@ static int priority_test();
 static int stack_size_test();
 static int staying_alive_test();
 static int set_stack_test();
+static int kill_test();
 
 int main(int argc, char** argv)
 {
@@ -28,7 +30,7 @@ int main(int argc, char** argv)
     args_parser.set_general_help(
         "Exercise error-handling and edge-case paths of the execution environment "
         "(i.e., Kernel or UE) by doing unusual thread-related things.");
-    args_parser.add_positional_argument(test_name, "Test to run (m = mutex, d = detached, p = priority, s = stack size, t = simple thread test, x = set stack, nothing = join race)", "test-name", Core::ArgsParser::Required::No);
+    args_parser.add_positional_argument(test_name, "Test to run (m = mutex, d = detached, p = priority, s = stack size, t = simple thread test, x = set stack, k = kill, nothing = join race)", "test-name", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
 
     if (*test_name == 'm')
@@ -43,6 +45,8 @@ int main(int argc, char** argv)
         return staying_alive_test();
     if (*test_name == 'x')
         return set_stack_test();
+    if (*test_name == 'k')
+        return kill_test();
     if (*test_name != 'n') {
         args_parser.print_usage(stdout, argv[0]);
         return 1;
@@ -54,7 +58,6 @@ int main(int argc, char** argv)
         &thread_id, nullptr, [](void*) -> void* {
             outln("Hi there, from the second thread!");
             pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc < 0) {
@@ -92,8 +95,6 @@ int mutex_test()
                 pthread_mutex_unlock(&mutex);
                 sleep(1);
             }
-            pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc < 0) {
@@ -106,7 +107,6 @@ int mutex_test()
         pthread_mutex_unlock(&mutex);
         usleep(10000);
     }
-    return 0;
 }
 
 int detached_test()
@@ -140,7 +140,6 @@ int detached_test()
             outln("I'm the secondary thread :^)");
             sleep(1);
             pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc != 0) {
@@ -202,7 +201,6 @@ int priority_test()
             outln("I'm the secondary thread :^)");
             sleep(1);
             pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc < 0) {
@@ -256,7 +254,6 @@ int stack_size_test()
             outln("I'm the secondary thread :^)");
             sleep(1);
             pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc < 0) {
@@ -290,7 +287,6 @@ int staying_alive_test()
             sleep(3520);
             outln("Secondary thread exiting");
             pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc < 0) {
@@ -350,7 +346,6 @@ int set_stack_test()
             outln("I'm the secondary thread :^)");
             sleep(1);
             pthread_exit((void*)0xDEADBEEF);
-            return nullptr;
         },
         nullptr);
     if (rc < 0) {
@@ -371,4 +366,38 @@ int set_stack_test()
     }
 
     return 0;
+}
+
+int kill_test()
+{
+    pthread_t thread_id;
+    int rc = pthread_create(
+        &thread_id, nullptr, [](void*) -> void* {
+            outln("I'm the secondary thread :^)");
+            sleep(100);
+            outln("Secondary thread is still alive :^(");
+            pthread_exit((void*)0xDEADBEEF);
+        },
+        nullptr);
+    if (rc < 0) {
+        perror("pthread_create");
+        return 1;
+    }
+
+    int result = 0;
+
+    sleep(1);
+    outln("I'm the main thread :^)");
+    if (pthread_kill(thread_id, 0) != 0) {
+        perror("pthread_kill");
+        result = 1;
+    }
+
+    if (pthread_kill(thread_id, SIGKILL) != 0) {
+        perror("pthread_kill(SIGKILL)");
+        result = 1;
+    }
+
+    outln("Main thread exiting");
+    return result;
 }

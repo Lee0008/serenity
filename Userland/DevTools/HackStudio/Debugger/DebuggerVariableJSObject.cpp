@@ -1,16 +1,17 @@
 /*
  * Copyright (c) 2021, Matthew Olsson <matthewcolsson@gmail.com>
  * Copyright (c) 2021, Hunter Salyer <thefalsehonesty@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "DebuggerVariableJSObject.h"
 #include "Debugger.h"
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/Error.h>
-#include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/PrimitiveString.h>
-#include <LibJS/Runtime/PropertyName.h>
+#include <LibJS/Runtime/PropertyKey.h>
 
 namespace HackStudio {
 
@@ -25,38 +26,27 @@ DebuggerVariableJSObject::DebuggerVariableJSObject(const Debug::DebugInfo::Varia
 {
 }
 
-DebuggerVariableJSObject::~DebuggerVariableJSObject()
+JS::ThrowCompletionOr<bool> DebuggerVariableJSObject::internal_set(const JS::PropertyKey& property_key, JS::Value value, JS::Value)
 {
-}
+    auto& vm = this->vm();
 
-bool DebuggerVariableJSObject::put(const JS::PropertyName& name, JS::Value value, JS::Value receiver)
-{
-    if (m_is_writing_properties)
-        return JS::Object::put(name, value, receiver);
+    if (!property_key.is_string())
+        return vm.throw_completion<JS::TypeError>(global_object(), String::formatted("Invalid variable name {}", property_key.to_string()));
 
-    if (!name.is_string()) {
-        vm().throw_exception<JS::TypeError>(global_object(), String::formatted("Invalid variable name {}", name.to_string()));
-        return false;
-    }
-
-    auto property_name = name.as_string();
+    auto name = property_key.as_string();
     auto it = m_variable_info.members.find_if([&](auto& variable) {
-        return variable->name == property_name;
+        return variable->name == name;
     });
 
-    if (it.is_end()) {
-        vm().throw_exception<JS::TypeError>(global_object(), String::formatted("Variable of type {} has no property {}", m_variable_info.type_name, property_name));
-        return false;
-    }
+    if (it.is_end())
+        return vm.throw_completion<JS::TypeError>(global_object(), String::formatted("Variable of type {} has no property {}", m_variable_info.type_name, property_key));
 
     auto& member = **it;
     auto new_value = debugger_object().js_to_debugger(value, member);
-    if (!new_value.has_value()) {
-        auto string_error = String::formatted("Cannot convert JS value {} to variable {} of type {}", value.to_string_without_side_effects(), name.as_string(), member.type_name);
-        vm().throw_exception<JS::TypeError>(global_object(), string_error);
-        return false;
-    }
-    Debugger::the().session()->poke((u32*)member.location_data.address, new_value.value());
+    if (!new_value.has_value())
+        return vm.throw_completion<JS::TypeError>(global_object(), String::formatted("Cannot convert JS value {} to variable {} of type {}", value.to_string_without_side_effects(), name, member.type_name));
+
+    Debugger::the().session()->poke(member.location_data.address, new_value.value());
     return true;
 }
 

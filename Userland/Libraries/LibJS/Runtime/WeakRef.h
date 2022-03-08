@@ -20,14 +20,14 @@ class WeakRef final
 public:
     static WeakRef* create(GlobalObject&, Object*);
 
-    explicit WeakRef(Object& prototype, Object*);
+    explicit WeakRef(Object*, Object& prototype);
     virtual ~WeakRef() override;
 
     Object* value() const { return m_value; };
 
     void update_execution_generation() { m_last_execution_generation = vm().execution_generation(); };
 
-    virtual void remove_sweeped_cells(Badge<Heap>, Vector<Cell*>&) override;
+    virtual void remove_dead_cells(Badge<Heap>) override;
 
 private:
     virtual void visit_edges(Visitor&) override;

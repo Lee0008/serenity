@@ -7,31 +7,32 @@
 #pragma once
 
 #include <Kernel/FileSystem/File.h>
+#include <Kernel/Memory/AnonymousVMObject.h>
 
 namespace Kernel {
 
 class AnonymousFile final : public File {
 public:
-    static RefPtr<AnonymousFile> create(NonnullRefPtr<AnonymousVMObject> vmobject)
+    static ErrorOr<NonnullRefPtr<AnonymousFile>> try_create(NonnullRefPtr<Memory::AnonymousVMObject> vmobject)
     {
-        return adopt_ref_if_nonnull(new AnonymousFile(move(vmobject)));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) AnonymousFile(move(vmobject)));
     }
 
     virtual ~AnonymousFile() override;
 
-    virtual KResultOr<Region*> mmap(Process&, FileDescription&, const Range&, u64 offset, int prot, bool shared) override;
+    virtual ErrorOr<Memory::Region*> mmap(Process&, OpenFileDescription&, Memory::VirtualRange const&, u64 offset, int prot, bool shared) override;
 
 private:
-    virtual const char* class_name() const override { return "AnonymousFile"; }
-    virtual String absolute_path(const FileDescription&) const override { return ":anonymous-file:"; }
-    virtual bool can_read(const FileDescription&, size_t) const override { return false; }
-    virtual bool can_write(const FileDescription&, size_t) const override { return false; }
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override { return ENOTSUP; }
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return ENOTSUP; }
+    virtual StringView class_name() const override { return "AnonymousFile"sv; }
+    virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override { return false; }
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return false; }
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override { return ENOTSUP; }
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return ENOTSUP; }
 
-    explicit AnonymousFile(NonnullRefPtr<AnonymousVMObject>);
+    explicit AnonymousFile(NonnullRefPtr<Memory::AnonymousVMObject>);
 
-    NonnullRefPtr<AnonymousVMObject> m_vmobject;
+    NonnullRefPtr<Memory::AnonymousVMObject> m_vmobject;
 };
 
 }

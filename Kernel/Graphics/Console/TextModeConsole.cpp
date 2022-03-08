@@ -4,19 +4,20 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <Kernel/Arch/x86/IO.h>
 #include <Kernel/Graphics/Console/TextModeConsole.h>
 #include <Kernel/Graphics/GraphicsManagement.h>
-#include <Kernel/IO.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel::Graphics {
 
-UNMAP_AFTER_INIT NonnullRefPtr<TextModeConsole> TextModeConsole::initialize(const VGACompatibleAdapter& adapter)
+UNMAP_AFTER_INIT NonnullRefPtr<TextModeConsole> TextModeConsole::initialize()
 {
-    return adopt_ref(*new TextModeConsole(adapter));
+    return adopt_ref(*new TextModeConsole());
 }
 
-UNMAP_AFTER_INIT TextModeConsole::TextModeConsole(const VGACompatibleAdapter& adapter)
-    : VGAConsole(adapter, VGAConsole::Mode::TextMode, 80, 25)
+UNMAP_AFTER_INIT TextModeConsole::TextModeConsole()
+    : VGAConsole(VGAConsole::Mode::TextMode, 80, 25)
     , m_current_vga_window(m_vga_region->vaddr().offset(0x18000).as_ptr())
 {
     for (size_t index = 0; index < height(); index++) {
@@ -44,7 +45,7 @@ enum VGAColor : u8 {
     White,
 };
 
-static inline VGAColor convert_standard_color_to_vga_color(Console::Color color)
+[[maybe_unused]] static inline VGAColor convert_standard_color_to_vga_color(Console::Color color)
 {
     switch (color) {
     case Console::Color::Black:
@@ -86,11 +87,9 @@ static inline VGAColor convert_standard_color_to_vga_color(Console::Color color)
 
 void TextModeConsole::set_cursor(size_t x, size_t y)
 {
-    ScopedSpinLock main_lock(GraphicsManagement::the().main_vga_lock());
-    ScopedSpinLock lock(m_vga_lock);
-    m_cursor_x = x;
-    m_cursor_y = y;
-    u16 value = m_current_vga_start_address + (y * width() + x);
+    SpinlockLocker main_lock(GraphicsManagement::the().main_vga_lock());
+    SpinlockLocker lock(m_vga_lock);
+    u16 value = y * width() + x;
     IO::out8(0x3d4, 0x0e);
     IO::out8(0x3d5, MSB(value));
     IO::out8(0x3d4, 0x0f);
@@ -98,40 +97,40 @@ void TextModeConsole::set_cursor(size_t x, size_t y)
 }
 void TextModeConsole::hide_cursor()
 {
-    ScopedSpinLock main_lock(GraphicsManagement::the().main_vga_lock());
-    ScopedSpinLock lock(m_vga_lock);
+    SpinlockLocker main_lock(GraphicsManagement::the().main_vga_lock());
+    SpinlockLocker lock(m_vga_lock);
     IO::out8(0x3D4, 0xA);
     IO::out8(0x3D5, 0x20);
 }
 void TextModeConsole::show_cursor()
 {
-    ScopedSpinLock main_lock(GraphicsManagement::the().main_vga_lock());
-    ScopedSpinLock lock(m_vga_lock);
+    SpinlockLocker main_lock(GraphicsManagement::the().main_vga_lock());
+    SpinlockLocker lock(m_vga_lock);
     IO::out8(0x3D4, 0xA);
     IO::out8(0x3D5, 0x20);
 }
 
-void TextModeConsole::clear(size_t x, size_t y, size_t length) const
+void TextModeConsole::clear(size_t x, size_t y, size_t length)
 {
-    ScopedSpinLock lock(m_vga_lock);
-    auto* buf = (u16*)(m_current_vga_window + (x * 2) + (y * width() * 2));
+    SpinlockLocker lock(m_vga_lock);
+    auto* buf = (u16*)m_current_vga_window.offset((x * 2) + (y * width() * 2)).as_ptr();
     for (size_t index = 0; index < length; index++) {
         buf[index] = 0x0720;
     }
 }
-void TextModeConsole::write(size_t x, size_t y, char ch, bool critical) const
+void TextModeConsole::write(size_t x, size_t y, char ch, bool critical)
 {
     write(x, y, ch, m_default_background_color, m_default_foreground_color, critical);
 }
 
-void TextModeConsole::write(size_t x, size_t y, char ch, Color background, Color foreground, bool critical) const
+void TextModeConsole::write(size_t x, size_t y, char ch, Color background, Color foreground, bool critical)
 {
-    ScopedSpinLock lock(m_vga_lock);
+    SpinlockLocker lock(m_vga_lock);
     // If we are in critical printing mode, we need to handle new lines here
     // because there's no other responsible object to do that in the print call path
     if (critical && (ch == '\r' || ch == '\n')) {
         // Disable hardware VGA cursor
-        ScopedSpinLock main_lock(GraphicsManagement::the().main_vga_lock());
+        SpinlockLocker main_lock(GraphicsManagement::the().main_vga_lock());
         IO::out8(0x3D4, 0xA);
         IO::out8(0x3D5, 0x20);
 
@@ -142,7 +141,7 @@ void TextModeConsole::write(size_t x, size_t y, char ch, Color background, Color
         return;
     }
 
-    auto* buf = (u16*)(m_current_vga_window + (x * 2) + (y * width() * 2));
+    auto* buf = (u16*)m_current_vga_window.offset((x * 2) + (y * width() * 2)).as_ptr();
     *buf = foreground << 8 | background << 12 | ch;
     m_x = x + 1;
 
@@ -156,22 +155,10 @@ void TextModeConsole::write(size_t x, size_t y, char ch, Color background, Color
 
 void TextModeConsole::clear_vga_row(u16 row)
 {
-    clear(row * width(), width(), width());
+    clear(0, row, width());
 }
 
-void TextModeConsole::set_vga_start_row(u16 row)
-{
-    ScopedSpinLock lock(m_vga_lock);
-    m_vga_start_row = row;
-    m_current_vga_start_address = row * width();
-    m_current_vga_window = m_current_vga_window + row * width() * bytes_per_base_glyph();
-    IO::out8(0x3d4, 0x0c);
-    IO::out8(0x3d5, MSB(m_current_vga_start_address));
-    IO::out8(0x3d4, 0x0d);
-    IO::out8(0x3d5, LSB(m_current_vga_start_address));
-}
-
-void TextModeConsole::write(char ch, bool critical) const
+void TextModeConsole::write(char ch, bool critical)
 {
     write(m_x, m_y, ch, critical);
 }

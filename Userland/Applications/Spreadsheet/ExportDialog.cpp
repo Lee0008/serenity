@@ -8,8 +8,6 @@
 #include "Spreadsheet.h"
 #include "Workbook.h"
 #include <AK/JsonArray.h>
-#include <AK/JsonObject.h>
-#include <AK/JsonParser.h>
 #include <AK/LexicalPath.h>
 #include <AK/String.h>
 #include <Applications/Spreadsheet/CSVExportGML.h>
@@ -21,11 +19,10 @@
 #include <LibGUI/ComboBox.h>
 #include <LibGUI/ItemListModel.h>
 #include <LibGUI/RadioButton.h>
-#include <LibGUI/TableView.h>
 #include <LibGUI/TextBox.h>
-#include <LibGUI/Wizards/AbstractWizardPage.h>
 #include <LibGUI/Wizards/WizardDialog.h>
 #include <LibGUI/Wizards/WizardPage.h>
+#include <string.h>
 #include <unistd.h>
 
 // This is defined in ImportDialog.cpp, we can't include it twice, since the generated symbol is exported.
@@ -39,7 +36,7 @@ CSVExportDialogPage::CSVExportDialogPage(const Sheet& sheet)
     m_headers.extend(m_data.take_first());
 
     auto temp_template = String::formatted("{}/spreadsheet-csv-export.{}.XXXXXX", Core::StandardPaths::tempfile_directory(), getpid());
-    auto temp_path = ByteBuffer::create_uninitialized(temp_template.length() + 1);
+    auto temp_path = ByteBuffer::create_uninitialized(temp_template.length() + 1).release_value_but_fixme_should_propagate_errors();
     auto buf = reinterpret_cast<char*>(temp_path.data());
     auto copy_ok = temp_template.copy_characters_to_buffer(buf, temp_path.size());
     VERIFY(copy_ok);
@@ -158,17 +155,17 @@ auto CSVExportDialogPage::make_writer() -> Optional<XSV>
         quote_escape,
     };
 
-    auto behaviours = Writer::default_behaviours();
+    auto behaviors = Writer::default_behaviors();
     Vector<String> empty_headers;
     auto* headers = &empty_headers;
 
     if (should_export_headers) {
-        behaviours = behaviours | Writer::WriterBehaviour::WriteHeaders;
+        behaviors = behaviors | Writer::WriterBehavior::WriteHeaders;
         headers = &m_headers;
     }
 
     if (should_quote_all_fields)
-        behaviours = behaviours | Writer::WriterBehaviour::QuoteAll;
+        behaviors = behaviors | Writer::WriterBehavior::QuoteAll;
 
     // Note that the stream is used only by the ctor.
     auto stream = Core::OutputFileStream::open(m_temp_output_file_path);
@@ -176,7 +173,7 @@ auto CSVExportDialogPage::make_writer() -> Optional<XSV>
         dbgln("Cannot open {} for writing: {}", m_temp_output_file_path, stream.error());
         return {};
     }
-    XSV writer(stream.value(), m_data, traits, *headers, behaviours);
+    XSV writer(stream.value(), m_data, traits, *headers, behaviors);
 
     if (stream.value().has_any_error()) {
         dbgln("Write error when making preview");
@@ -235,7 +232,7 @@ Result<void, String> CSVExportDialogPage::move_into(const String& target)
             Core::File::AddDuplicateFileMarker::No);
 
         if (result.is_error())
-            return String { result.error().error_code.string() };
+            return String::formatted("{}", static_cast<Error const&>(result.error()));
 
         return {};
     }
@@ -300,7 +297,7 @@ Result<void, String> ExportDialog::make_and_run_for(StringView mime, Core::File&
     } else {
         auto page = GUI::WizardPage::construct(
             "Export File Format",
-            String::formatted("Select the format you wish to export to '{}' as", LexicalPath { file.filename() }.basename()));
+            String::formatted("Select the format you wish to export to '{}' as", LexicalPath::basename(file.filename())));
 
         page->on_next_page = [] { return nullptr; };
 

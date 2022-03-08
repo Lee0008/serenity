@@ -1,13 +1,13 @@
 @GUI::Widget {
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
-        margins: [10, 10, 10, 10]
+        margins: [4]
     }
 
     @GUI::Widget {
+        max_height: 32
         layout: @GUI::HorizontalBoxLayout {
-            spacing: 10
+            spacing: 16
         }
 
         @GUI::ImageWidget {
@@ -22,7 +22,9 @@
     }
 
     @GUI::Widget {
-        layout: @GUI::HorizontalBoxLayout
+        layout: @GUI::HorizontalBoxLayout {
+            margins: [4]
+        }
 
         @GUI::Label {
             text: "Open:"
@@ -36,27 +38,28 @@
     }
 
     @GUI::Widget {
-        layout: @GUI::HorizontalBoxLayout
+        layout: @GUI::HorizontalBoxLayout {}
+        fixed_height: 22
 
         // HACK: using an empty widget as a spacer
-        @GUI::Widget
+        @GUI::Widget {}
 
         @GUI::Button {
             name: "ok_button"
             text: "OK"
-            fixed_width: 75
+            fixed_width: 80
         }
 
         @GUI::Button {
             name: "cancel_button"
             text: "Cancel"
-            fixed_width: 75
+            fixed_width: 80
         }
 
         @GUI::Button {
             name: "browse_button"
             text: "Browse..."
-            fixed_width: 75
+            fixed_width: 80
         }
     }
 }

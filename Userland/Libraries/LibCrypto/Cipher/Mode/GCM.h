@@ -7,12 +7,15 @@
 #pragma once
 
 #include <AK/OwnPtr.h>
-#include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <LibCrypto/Authentication/GHash.h>
 #include <LibCrypto/Cipher/Mode/CTR.h>
 #include <LibCrypto/Verification.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#endif
 
 namespace Crypto {
 namespace Cipher {
@@ -24,7 +27,7 @@ class GCM : public CTR<T, IncrementFunction> {
 public:
     constexpr static size_t IVSizeInBits = 128;
 
-    virtual ~GCM() { }
+    virtual ~GCM() = default;
 
     template<typename... Args>
     explicit constexpr GCM<T>(Args... args)
@@ -40,6 +43,7 @@ public:
         m_ghash = Authentication::GHash(m_auth_key);
     }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         StringBuilder builder;
@@ -47,8 +51,12 @@ public:
         builder.append("_GCM");
         return builder.build();
     }
+#endif
 
-    virtual size_t IV_length() const override { return IVSizeInBits / 8; }
+    virtual size_t IV_length() const override
+    {
+        return IVSizeInBits / 8;
+    }
 
     // FIXME: This overload throws away the auth stuff, think up a better way to return more than a single bytebuffer.
     virtual void encrypt(ReadonlyBytes in, Bytes& out, ReadonlyBytes ivec = {}, Bytes* = nullptr) override
@@ -64,10 +72,16 @@ public:
         encrypt(in, out, ivec);
     }
 
-    void encrypt(const ReadonlyBytes& in, Bytes out, const ReadonlyBytes& iv_in, const ReadonlyBytes& aad, Bytes tag)
+    void encrypt(ReadonlyBytes in, Bytes out, ReadonlyBytes iv_in, ReadonlyBytes aad, Bytes tag)
     {
-        auto iv_buf = ByteBuffer::copy(iv_in.data(), iv_in.size());
-        auto iv = iv_buf.bytes();
+        auto iv_buf_result = ByteBuffer::copy(iv_in);
+        // Not enough memory to figure out :shrug:
+        if (iv_buf_result.is_error()) {
+            dbgln("GCM::encrypt: Not enough memory to allocate {} bytes for IV", iv_in.size());
+            return;
+        }
+
+        auto iv = iv_buf_result.value().bytes();
 
         // Increment the IV for block 0
         CTR<T>::increment(iv);
@@ -90,8 +104,12 @@ public:
 
     VerificationConsistency decrypt(ReadonlyBytes in, Bytes out, ReadonlyBytes iv_in, ReadonlyBytes aad, ReadonlyBytes tag)
     {
-        auto iv_buf = ByteBuffer::copy(iv_in.data(), iv_in.size());
-        auto iv = iv_buf.bytes();
+        auto iv_buf_result = ByteBuffer::copy(iv_in);
+        // Not enough memory to figure out :shrug:
+        if (iv_buf_result.is_error())
+            return VerificationConsistency::Inconsistent;
+
+        auto iv = iv_buf_result.value().bytes();
 
         // Increment the IV for block 0
         CTR<T>::increment(iv);

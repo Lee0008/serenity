@@ -7,11 +7,12 @@
 #pragma once
 
 #include <LibJS/Runtime/DataView.h>
+#include <LibJS/Runtime/PrototypeObject.h>
 
 namespace JS {
 
-class DataViewPrototype final : public Object {
-    JS_OBJECT(DataViewPrototype, Object);
+class DataViewPrototype final : public PrototypeObject<DataViewPrototype, DataView> {
+    JS_PROTOTYPE_OBJECT(DataViewPrototype, DataView, DataView);
 
 public:
     DataViewPrototype(GlobalObject&);
@@ -40,9 +41,9 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(set_uint_16);
     JS_DECLARE_NATIVE_FUNCTION(set_uint_32);
 
-    JS_DECLARE_NATIVE_GETTER(buffer_getter);
-    JS_DECLARE_NATIVE_GETTER(byte_length_getter);
-    JS_DECLARE_NATIVE_GETTER(byte_offset_getter);
+    JS_DECLARE_NATIVE_FUNCTION(buffer_getter);
+    JS_DECLARE_NATIVE_FUNCTION(byte_length_getter);
+    JS_DECLARE_NATIVE_FUNCTION(byte_offset_getter);
 };
 
 }

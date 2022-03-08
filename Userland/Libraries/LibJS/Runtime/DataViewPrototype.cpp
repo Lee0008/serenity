@@ -4,12 +4,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Checked.h>
+#include <AK/TypeCasts.h>
 #include <LibJS/Runtime/DataViewPrototype.h>
 
 namespace JS {
 
 DataViewPrototype::DataViewPrototype(GlobalObject& global_object)
-    : Object(*global_object.object_prototype())
+    : PrototypeObject(*global_object.object_prototype())
 {
 }
 
@@ -45,96 +47,78 @@ void DataViewPrototype::initialize(GlobalObject& global_object)
     define_native_accessor(vm.names.byteOffset, byte_offset_getter, {}, Attribute::Configurable);
 
     // 25.3.4.25 DataView.prototype [ @@toStringTag ], https://tc39.es/ecma262/#sec-dataview.prototype-@@tostringtag
-    define_property(vm.well_known_symbol_to_string_tag(), js_string(global_object.heap(), vm.names.DataView.as_string()), Attribute::Configurable);
+    define_direct_property(*vm.well_known_symbol_to_string_tag(), js_string(global_object.heap(), vm.names.DataView.as_string()), Attribute::Configurable);
 }
 
 DataViewPrototype::~DataViewPrototype()
 {
 }
 
-static DataView* typed_this(VM& vm, GlobalObject& global_object)
-{
-    auto this_value = vm.this_value(global_object);
-    if (!this_value.is_object() || !is<DataView>(this_value.as_object())) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotA, vm.names.DataView);
-        return nullptr;
-    }
-    return static_cast<DataView*>(&this_value.as_object());
-}
-
 // 25.3.1.1 GetViewValue ( view, requestIndex, isLittleEndian, type ), https://tc39.es/ecma262/#sec-getviewvalue
 template<typename T>
-static Value get_view_value(GlobalObject& global_object, Value request_index, Value is_little_endian)
+static ThrowCompletionOr<Value> get_view_value(GlobalObject& global_object, Value request_index, Value is_little_endian)
 {
     auto& vm = global_object.vm();
-    auto* view = typed_this(vm, global_object);
-    if (!view)
-        return {};
-
-    auto get_index = request_index.to_index(global_object);
-    if (vm.exception())
-        return {};
+    auto* view = TRY(DataViewPrototype::typed_this_value(global_object));
+    auto get_index = TRY(request_index.to_index(global_object));
     auto little_endian = is_little_endian.to_boolean();
 
     auto buffer = view->viewed_array_buffer();
-    if (buffer->is_detached()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
-        return {};
-    }
+    if (buffer->is_detached())
+        return vm.template throw_completion<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
 
     auto view_offset = view->byte_offset();
     auto view_size = view->byte_length();
 
     auto element_size = sizeof(T);
-    if (get_index + element_size > view_size) {
-        vm.throw_exception<RangeError>(global_object, ErrorType::DataViewOutOfRangeByteOffset, get_index, view_size);
-        return {};
-    }
 
-    auto buffer_index = get_index + view_offset;
-    return buffer->get_value<T>(buffer_index, false, ArrayBuffer::Order::Unordered, little_endian);
+    Checked<size_t> buffer_index = get_index;
+    buffer_index += view_offset;
+
+    Checked<size_t> end_index = get_index;
+    end_index += element_size;
+
+    if (buffer_index.has_overflow() || end_index.has_overflow() || end_index.value() > view_size)
+        return vm.throw_completion<RangeError>(global_object, ErrorType::DataViewOutOfRangeByteOffset, get_index, view_size);
+
+    return buffer->get_value<T>(buffer_index.value(), false, ArrayBuffer::Order::Unordered, little_endian);
 }
 
 // 25.3.1.2 SetViewValue ( view, requestIndex, isLittleEndian, type, value ), https://tc39.es/ecma262/#sec-setviewvalue
 template<typename T>
-static Value set_view_value(GlobalObject& global_object, Value request_index, Value is_little_endian, Value value)
+static ThrowCompletionOr<Value> set_view_value(GlobalObject& global_object, Value request_index, Value is_little_endian, Value value)
 {
     auto& vm = global_object.vm();
-    auto* view = typed_this(vm, global_object);
-    if (!view)
-        return {};
-
-    auto get_index = request_index.to_index(global_object);
-    if (vm.exception())
-        return {};
+    auto* view = TRY(DataViewPrototype::typed_this_value(global_object));
+    auto get_index = TRY(request_index.to_index(global_object));
 
     Value number_value;
     if constexpr (IsIntegral<T> && sizeof(T) == 8)
-        number_value = value.to_bigint(global_object);
+        number_value = TRY(value.to_bigint(global_object));
     else
-        number_value = value.to_number(global_object);
-    if (vm.exception())
-        return {};
+        number_value = TRY(value.to_number(global_object));
 
     auto little_endian = is_little_endian.to_boolean();
 
     auto buffer = view->viewed_array_buffer();
-    if (buffer->is_detached()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
-        return {};
-    }
+    if (buffer->is_detached())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
 
     auto view_offset = view->byte_offset();
     auto view_size = view->byte_length();
 
     auto element_size = sizeof(T);
-    if (get_index + element_size > view_size) {
-        vm.throw_exception<RangeError>(global_object, ErrorType::DataViewOutOfRangeByteOffset, get_index, view_size);
-        return {};
-    }
 
-    auto buffer_index = get_index + view_offset;
-    return buffer->set_value<T>(buffer_index, number_value, false, ArrayBuffer::Order::Unordered, little_endian);
+    Checked<size_t> buffer_index = get_index;
+    buffer_index += view_offset;
+
+    Checked<size_t> end_index = get_index;
+    end_index += element_size;
+
+    if (buffer_index.has_overflow() || end_index.has_overflow() || end_index.value() > view_size)
+        return vm.throw_completion<RangeError>(global_object, ErrorType::DataViewOutOfRangeByteOffset, get_index, view_size);
+
+    return buffer->set_value<T>(buffer_index.value(), number_value, false, ArrayBuffer::Order::Unordered, little_endian);
 }
 
 // 25.3.4.5 DataView.prototype.getBigInt64 ( byteOffset [ , littleEndian ] ), https://tc39.es/ecma262/#sec-dataview.prototype.getbigint64
@@ -249,37 +233,27 @@ JS_DEFINE_NATIVE_FUNCTION(DataViewPrototype::set_uint_32)
 }
 
 // 25.3.4.1 get DataView.prototype.buffer, https://tc39.es/ecma262/#sec-get-dataview.prototype.buffer
-JS_DEFINE_NATIVE_GETTER(DataViewPrototype::buffer_getter)
+JS_DEFINE_NATIVE_FUNCTION(DataViewPrototype::buffer_getter)
 {
-    auto* data_view = typed_this(vm, global_object);
-    if (!data_view)
-        return {};
+    auto* data_view = TRY(typed_this_value(global_object));
     return data_view->viewed_array_buffer();
 }
 
 // 25.3.4.2 get DataView.prototype.byteLength, https://tc39.es/ecma262/#sec-get-dataview.prototype.bytelength
-JS_DEFINE_NATIVE_GETTER(DataViewPrototype::byte_length_getter)
+JS_DEFINE_NATIVE_FUNCTION(DataViewPrototype::byte_length_getter)
 {
-    auto* data_view = typed_this(vm, global_object);
-    if (!data_view)
-        return {};
-    if (data_view->viewed_array_buffer()->is_detached()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
-        return {};
-    }
+    auto* data_view = TRY(typed_this_value(global_object));
+    if (data_view->viewed_array_buffer()->is_detached())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
     return Value(data_view->byte_length());
 }
 
 // 25.3.4.3 get DataView.prototype.byteOffset, https://tc39.es/ecma262/#sec-get-dataview.prototype.byteoffset
-JS_DEFINE_NATIVE_GETTER(DataViewPrototype::byte_offset_getter)
+JS_DEFINE_NATIVE_FUNCTION(DataViewPrototype::byte_offset_getter)
 {
-    auto* data_view = typed_this(vm, global_object);
-    if (!data_view)
-        return {};
-    if (data_view->viewed_array_buffer()->is_detached()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
-        return {};
-    }
+    auto* data_view = TRY(typed_this_value(global_object));
+    if (data_view->viewed_array_buffer()->is_detached())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
     return Value(data_view->byte_offset());
 }
 

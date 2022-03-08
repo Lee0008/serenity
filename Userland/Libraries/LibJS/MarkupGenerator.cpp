@@ -6,16 +6,19 @@
 
 #include <AK/HashTable.h>
 #include <AK/StringBuilder.h>
+#include <AK/TypeCasts.h>
 #include <LibJS/Lexer.h>
 #include <LibJS/MarkupGenerator.h>
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/Date.h>
+#include <LibJS/Runtime/DatePrototype.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/Object.h>
+#include <LibJS/Runtime/VM.h>
 
 namespace JS {
 
-String MarkupGenerator::html_from_source(const StringView& source)
+String MarkupGenerator::html_from_source(StringView source)
 {
     StringBuilder builder;
     auto lexer = Lexer(source);
@@ -60,7 +63,7 @@ void MarkupGenerator::value_to_html(Value value, StringBuilder& output_html, Has
 
     if (value.is_object()) {
         auto& object = value.as_object();
-        if (object.is_array())
+        if (is<Array>(object))
             return array_to_html(static_cast<const Array&>(object), output_html, seen_objects);
         output_html.append(wrap_string_in_style(object.class_name(), StyleType::ObjectType));
         if (object.is_function())
@@ -97,7 +100,7 @@ void MarkupGenerator::array_to_html(const Array& array, StringBuilder& html_outp
             html_output.append(wrap_string_in_style(", ", StyleType::Punctuation));
         first = false;
         // FIXME: Exception check
-        value_to_html(it.value_and_attributes(const_cast<Array*>(&array)).value, html_output, seen_objects);
+        value_to_html(array.get(it.index()).release_value(), html_output, seen_objects);
     }
     html_output.append(wrap_string_in_style(" ]", StyleType::Punctuation));
 }
@@ -113,7 +116,7 @@ void MarkupGenerator::object_to_html(const Object& object, StringBuilder& html_o
         html_output.append(wrap_string_in_style(String::number(entry.index()), StyleType::Number));
         html_output.append(wrap_string_in_style(": ", StyleType::Punctuation));
         // FIXME: Exception check
-        value_to_html(entry.value_and_attributes(const_cast<Object*>(&object)).value, html_output, seen_objects);
+        value_to_html(object.get(entry.index()).release_value(), html_output, seen_objects);
     }
 
     if (!object.indexed_properties().is_empty() && object.shape().property_count())
@@ -139,14 +142,15 @@ void MarkupGenerator::function_to_html(const Object& function, StringBuilder& ht
 
 void MarkupGenerator::date_to_html(const Object& date, StringBuilder& html_output, HashTable<Object*>&)
 {
-    html_output.appendff("Date {}", static_cast<const JS::Date&>(date).string());
+    html_output.appendff("Date {}", JS::to_date_string(static_cast<JS::Date const&>(date).date_value()));
 }
 
 void MarkupGenerator::error_to_html(const Object& object, StringBuilder& html_output, HashTable<Object*>&)
 {
-    auto name = object.get_without_side_effects(PropertyName("name")).value_or(JS::js_undefined());
-    auto message = object.get_without_side_effects(PropertyName("message")).value_or(JS::js_undefined());
-    if (name.is_accessor() || name.is_native_property() || message.is_accessor() || message.is_native_property()) {
+    auto& vm = object.vm();
+    auto name = object.get_without_side_effects(vm.names.name).value_or(JS::js_undefined());
+    auto message = object.get_without_side_effects(vm.names.message).value_or(JS::js_undefined());
+    if (name.is_accessor() || message.is_accessor()) {
         html_output.append(wrap_string_in_style(JS::Value(&object).to_string_without_side_effects(), StyleType::Invalid));
     } else {
         auto name_string = name.to_string_without_side_effects();

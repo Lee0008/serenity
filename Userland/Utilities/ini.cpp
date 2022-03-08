@@ -7,15 +7,12 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath wpath cpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath wpath cpath"));
 
     const char* path = nullptr;
     const char* group = nullptr;
@@ -27,18 +24,18 @@ int main(int argc, char** argv)
     args_parser.add_positional_argument(group, "Group name", "group");
     args_parser.add_positional_argument(key, "Key name", "key");
     args_parser.add_positional_argument(value_to_write, "Value to write", "value", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     if (!Core::File::exists(path)) {
         warnln("File does not exist: '{}'", path);
         return 1;
     }
 
-    auto config = Core::ConfigFile::open(path);
+    auto config = TRY(Core::ConfigFile::open(path, value_to_write ? Core::ConfigFile::AllowWriting::Yes : Core::ConfigFile::AllowWriting::No));
 
     if (value_to_write) {
         config->write_entry(group, key, value_to_write);
-        config->sync();
+        TRY(config->sync());
         return 0;
     }
 

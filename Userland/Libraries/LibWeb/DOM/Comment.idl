@@ -1,3 +1,5 @@
-interface Comment : CharacterData {
+#import <DOM/CharacterData.idl>
 
+interface Comment : CharacterData {
+    constructor(optional DOMString data = "");
 };

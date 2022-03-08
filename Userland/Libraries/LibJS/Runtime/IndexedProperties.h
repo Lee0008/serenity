@@ -30,13 +30,12 @@ public:
     virtual void put(u32 index, Value value, PropertyAttributes attributes = default_attributes) = 0;
     virtual void remove(u32 index) = 0;
 
-    virtual void insert(u32 index, Value value, PropertyAttributes attributes = default_attributes) = 0;
     virtual ValueAndAttributes take_first() = 0;
     virtual ValueAndAttributes take_last() = 0;
 
     virtual size_t size() const = 0;
     virtual size_t array_like_size() const = 0;
-    virtual void set_array_like_size(size_t new_size) = 0;
+    virtual bool set_array_like_size(size_t new_size) = 0;
 
     virtual bool is_simple_storage() const { return false; }
 };
@@ -51,13 +50,12 @@ public:
     virtual void put(u32 index, Value value, PropertyAttributes attributes = default_attributes) override;
     virtual void remove(u32 index) override;
 
-    virtual void insert(u32 index, Value value, PropertyAttributes attributes = default_attributes) override;
     virtual ValueAndAttributes take_first() override;
     virtual ValueAndAttributes take_last() override;
 
     virtual size_t size() const override { return m_packed_elements.size(); }
     virtual size_t array_like_size() const override { return m_array_size; }
-    virtual void set_array_like_size(size_t new_size) override;
+    virtual bool set_array_like_size(size_t new_size) override;
 
     virtual bool is_simple_storage() const override { return true; }
     const Vector<Value>& elements() const { return m_packed_elements; }
@@ -74,19 +72,19 @@ private:
 class GenericIndexedPropertyStorage final : public IndexedPropertyStorage {
 public:
     explicit GenericIndexedPropertyStorage(SimpleIndexedPropertyStorage&&);
+    explicit GenericIndexedPropertyStorage();
 
     virtual bool has_index(u32 index) const override;
     virtual Optional<ValueAndAttributes> get(u32 index) const override;
     virtual void put(u32 index, Value value, PropertyAttributes attributes = default_attributes) override;
     virtual void remove(u32 index) override;
 
-    virtual void insert(u32 index, Value value, PropertyAttributes attributes = default_attributes) override;
     virtual ValueAndAttributes take_first() override;
     virtual ValueAndAttributes take_last() override;
 
     virtual size_t size() const override { return m_sparse_elements.size(); }
     virtual size_t array_like_size() const override { return m_array_size; }
-    virtual void set_array_like_size(size_t new_size) override;
+    virtual bool set_array_like_size(size_t new_size) override;
 
     const HashMap<u32, ValueAndAttributes>& sparse_elements() const { return m_sparse_elements; }
 
@@ -104,14 +102,14 @@ public:
     bool operator!=(const IndexedPropertyIterator&) const;
 
     u32 index() const { return m_index; };
-    ValueAndAttributes value_and_attributes(Object* this_object, bool evaluate_accessors = true);
 
 private:
     void skip_empty_indices();
 
     const IndexedProperties& m_indexed_properties;
-    u32 m_index;
-    bool m_skip_empty;
+    Vector<u32> m_cached_indices;
+    u32 m_index { 0 };
+    bool m_skip_empty { false };
 };
 
 class IndexedProperties {
@@ -119,34 +117,34 @@ public:
     IndexedProperties() = default;
 
     explicit IndexedProperties(Vector<Value> values)
-        : m_storage(make<SimpleIndexedPropertyStorage>(move(values)))
     {
+        if (!values.is_empty())
+            m_storage = make<SimpleIndexedPropertyStorage>(move(values));
     }
 
-    bool has_index(u32 index) const { return m_storage->has_index(index); }
-    Optional<ValueAndAttributes> get(Object* this_object, u32 index, bool evaluate_accessors = true) const;
-    void put(Object* this_object, u32 index, Value value, PropertyAttributes attributes = default_attributes, bool evaluate_accessors = true);
-    bool remove(u32 index);
+    bool has_index(u32 index) const { return m_storage ? m_storage->has_index(index) : false; }
+    Optional<ValueAndAttributes> get(u32 index) const;
+    void put(u32 index, Value value, PropertyAttributes attributes = default_attributes);
+    void remove(u32 index);
 
-    void insert(u32 index, Value value, PropertyAttributes attributes = default_attributes);
-    ValueAndAttributes take_first(Object* this_object);
-    ValueAndAttributes take_last(Object* this_object);
-
-    void append(Value value, PropertyAttributes attributes = default_attributes) { put(nullptr, array_like_size(), value, attributes, false); }
-    void append_all(Object* this_object, const IndexedProperties& properties, bool evaluate_accessors = true);
+    void append(Value value, PropertyAttributes attributes = default_attributes) { put(array_like_size(), value, attributes); }
 
     IndexedPropertyIterator begin(bool skip_empty = true) const { return IndexedPropertyIterator(*this, 0, skip_empty); };
     IndexedPropertyIterator end() const { return IndexedPropertyIterator(*this, array_like_size(), false); };
 
     bool is_empty() const { return array_like_size() == 0; }
-    size_t array_like_size() const { return m_storage->array_like_size(); }
-    void set_array_like_size(size_t);
+    size_t array_like_size() const { return m_storage ? m_storage->array_like_size() : 0; }
+    bool set_array_like_size(size_t);
+
+    size_t real_size() const;
 
     Vector<u32> indices() const;
 
     template<typename Callback>
     void for_each_value(Callback callback)
     {
+        if (!m_storage)
+            return;
         if (m_storage->is_simple_storage()) {
             for (auto& value : static_cast<SimpleIndexedPropertyStorage&>(*m_storage).elements())
                 callback(value);
@@ -158,8 +156,9 @@ public:
 
 private:
     void switch_to_generic_storage();
+    void ensure_storage();
 
-    NonnullOwnPtr<IndexedPropertyStorage> m_storage { make<SimpleIndexedPropertyStorage>() };
+    OwnPtr<IndexedPropertyStorage> m_storage;
 };
 
 }

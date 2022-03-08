@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -29,6 +29,7 @@ public:
     String get_cookie(const URL& url, Web::Cookie::Source source);
     void set_cookie(const URL& url, const Web::Cookie::ParsedCookie& parsed_cookie, Web::Cookie::Source source);
     void dump_cookies() const;
+    Vector<Web::Cookie::Cookie> get_all_cookies() const;
 
 private:
     static Optional<String> canonicalize_domain(const URL& url);

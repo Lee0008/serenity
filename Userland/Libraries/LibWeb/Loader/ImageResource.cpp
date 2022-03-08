@@ -4,9 +4,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Function.h>
 #include <LibGfx/Bitmap.h>
-#include <LibImageDecoderClient/Client.h>
+#include <LibWeb/ImageDecoding.h>
 #include <LibWeb/Loader/ImageResource.h>
 
 namespace Web {
@@ -26,18 +25,6 @@ int ImageResource::frame_duration(size_t frame_index) const
     if (frame_index >= m_decoded_frames.size())
         return 0;
     return m_decoded_frames[frame_index].duration;
-}
-
-static ImageDecoderClient::Client& image_decoder_client()
-{
-    static RefPtr<ImageDecoderClient::Client> image_decoder_client;
-    if (!image_decoder_client) {
-        image_decoder_client = ImageDecoderClient::Client::construct();
-        image_decoder_client->on_death = [&] {
-            image_decoder_client = nullptr;
-        };
-    }
-    return *image_decoder_client;
 }
 
 void ImageResource::decode_if_needed() const
@@ -97,8 +84,9 @@ void ImageResource::update_volatility()
         if (!frame.bitmap) {
             still_has_decoded_image = false;
         } else {
-            bool still_has_frame = frame.bitmap->set_nonvolatile();
-            if (!still_has_frame)
+            bool was_purged = false;
+            bool bitmap_has_memory = frame.bitmap->set_nonvolatile(was_purged);
+            if (!bitmap_has_memory || was_purged)
                 still_has_decoded_image = false;
         }
     }

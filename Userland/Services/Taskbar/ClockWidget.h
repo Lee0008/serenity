@@ -30,7 +30,11 @@ private:
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void mousedown_event(GUI::MouseEvent&) override;
 
-    void tick_clock() { update(); }
+    void tick_clock()
+    {
+        tzset();
+        update();
+    }
 
     void open();
     void close();
@@ -47,6 +51,7 @@ private:
     RefPtr<GUI::Button> m_calendar_launcher;
     RefPtr<Core::Timer> m_timer;
     int m_time_width { 0 };
+    Gfx::IntSize m_window_size { 158, 186 };
 };
 
 }

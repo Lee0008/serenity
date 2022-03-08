@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <Kernel/Locking/MutexProtected.h>
 #include <Kernel/Net/NetworkAdapter.h>
 #include <Kernel/Thread.h>
 
@@ -18,9 +19,20 @@ struct RoutingDecision {
     bool is_zero() const;
 };
 
-void update_arp_table(const IPv4Address&, const MACAddress&);
-RoutingDecision route_to(const IPv4Address& target, const IPv4Address& source, const RefPtr<NetworkAdapter> through = nullptr);
+enum class UpdateArp {
+    Set,
+    Delete,
+};
 
-Lockable<HashMap<IPv4Address, MACAddress>>& arp_table();
+void update_arp_table(IPv4Address const&, MACAddress const&, UpdateArp update);
+
+enum class AllowUsingGateway {
+    Yes,
+    No,
+};
+
+RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, RefPtr<NetworkAdapter> const through = nullptr, AllowUsingGateway = AllowUsingGateway::Yes);
+
+SpinlockProtected<HashMap<IPv4Address, MACAddress>>& arp_table();
 
 }

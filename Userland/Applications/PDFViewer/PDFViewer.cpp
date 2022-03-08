@@ -1,15 +1,38 @@
 /*
- * Copyright (c) 2021, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2021-2022, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "PDFViewer.h"
+#include <AK/Array.h>
 #include <LibGUI/Action.h>
+#include <LibGUI/MessageBox.h>
 #include <LibGUI/Painter.h>
 #include <LibPDF/Renderer.h>
 
 static constexpr int PAGE_PADDING = 25;
+
+static constexpr Array zoom_levels = {
+    17,
+    21,
+    26,
+    33,
+    41,
+    51,
+    64,
+    80,
+    100,
+    120,
+    144,
+    173,
+    207,
+    249,
+    299,
+    358,
+    430
+};
 
 PDFViewer::PDFViewer()
 {
@@ -29,20 +52,21 @@ void PDFViewer::set_document(RefPtr<PDF::Document> document)
 
     m_rendered_page_list.ensure_capacity(document->get_page_count());
     for (u32 i = 0; i < document->get_page_count(); i++)
-        m_rendered_page_list.unchecked_append(HashMap<u32, RefPtr<Gfx::Bitmap>>());
+        m_rendered_page_list.unchecked_append(HashMap<u32, RenderedPage>());
 
     update();
 }
 
-RefPtr<Gfx::Bitmap> PDFViewer::get_rendered_page(u32 index)
+PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> PDFViewer::get_rendered_page(u32 index)
 {
     auto& rendered_page_map = m_rendered_page_list[index];
     auto existing_rendered_page = rendered_page_map.get(m_zoom_level);
-    if (existing_rendered_page.has_value())
-        return existing_rendered_page.value();
+    if (existing_rendered_page.has_value() && existing_rendered_page.value().rotation == m_rotations)
+        return existing_rendered_page.value().bitmap;
 
-    auto rendered_page = render_page(m_document->get_page(index));
-    rendered_page_map.set(m_zoom_level, rendered_page);
+    auto page = TRY(m_document->get_page(index));
+    auto rendered_page = TRY(render_page(page));
+    rendered_page_map.set(m_zoom_level, { rendered_page, m_rotations });
     return rendered_page;
 }
 
@@ -58,7 +82,14 @@ void PDFViewer::paint_event(GUI::PaintEvent& event)
     if (!m_document)
         return;
 
-    auto page = get_rendered_page(m_current_page_index);
+    auto maybe_page = get_rendered_page(m_current_page_index);
+    if (maybe_page.is_error()) {
+        auto error = maybe_page.release_error();
+        GUI::MessageBox::show_error(nullptr, String::formatted("Error rendering page:\n{}", error.message()));
+        return;
+    }
+
+    auto page = maybe_page.release_value();
     set_content_size(page->size());
 
     painter.translate(frame_thickness(), frame_thickness());
@@ -75,7 +106,7 @@ void PDFViewer::mousewheel_event(GUI::MouseEvent& event)
     if (!m_document)
         return;
 
-    bool scrolled_down = event.wheel_delta() > 0;
+    bool scrolled_down = event.wheel_delta_y() > 0;
 
     if (event.ctrl()) {
         if (scrolled_down) {
@@ -90,24 +121,50 @@ void PDFViewer::mousewheel_event(GUI::MouseEvent& event)
             if (scrollbar.value() == scrollbar.max()) {
                 if (m_current_page_index < m_document->get_page_count() - 1) {
                     m_current_page_index++;
+                    if (on_page_change)
+                        on_page_change(m_current_page_index);
                     scrollbar.set_value(0);
                 }
             } else {
-                scrollbar.set_value(scrollbar.value() + 20);
+                scrollbar.increase_slider_by(20);
             }
         } else {
             if (scrollbar.value() == 0) {
                 if (m_current_page_index > 0) {
                     m_current_page_index--;
+                    if (on_page_change)
+                        on_page_change(m_current_page_index);
                     scrollbar.set_value(scrollbar.max());
                 }
             } else {
-                scrollbar.set_value(scrollbar.value() - 20);
+                scrollbar.decrease_slider_by(20);
             }
         }
+        update();
     }
+}
 
-    update();
+void PDFViewer::mousedown_event(GUI::MouseEvent& event)
+{
+    if (event.button() == GUI::MouseButton::Middle) {
+        m_pan_starting_position = to_content_position(event.position());
+        set_override_cursor(Gfx::StandardCursor::Drag);
+    }
+}
+
+void PDFViewer::mouseup_event(GUI::MouseEvent&)
+{
+    set_override_cursor(Gfx::StandardCursor::None);
+}
+
+void PDFViewer::mousemove_event(GUI::MouseEvent& event)
+{
+    if (event.buttons() & GUI::MouseButton::Middle) {
+        auto delta = to_content_position(event.position()) - m_pan_starting_position;
+        horizontal_scrollbar().decrease_slider_by(delta.x());
+        vertical_scrollbar().decrease_slider_by(delta.y());
+        update();
+    }
 }
 
 void PDFViewer::timer_event(Core::TimerEvent&)
@@ -121,17 +178,33 @@ void PDFViewer::timer_event(Core::TimerEvent&)
 
 void PDFViewer::zoom_in()
 {
-    if (m_zoom_level < number_of_zoom_levels - 1)
+    if (m_zoom_level < zoom_levels.size() - 1) {
         m_zoom_level++;
+        update();
+    }
 }
 
 void PDFViewer::zoom_out()
 {
-    if (m_zoom_level > 0)
+    if (m_zoom_level > 0) {
         m_zoom_level--;
+        update();
+    }
 }
 
-RefPtr<Gfx::Bitmap> PDFViewer::render_page(const PDF::Page& page)
+void PDFViewer::reset_zoom()
+{
+    m_zoom_level = initial_zoom_level;
+    update();
+}
+
+void PDFViewer::rotate(int degrees)
+{
+    m_rotations = (m_rotations + degrees + 360) % 360;
+    update();
+}
+
+PDF::PDFErrorOr<NonnullRefPtr<Gfx::Bitmap>> PDFViewer::render_page(const PDF::Page& page)
 {
     auto zoom_scale_factor = static_cast<float>(zoom_levels[m_zoom_level]) / 100.0f;
 
@@ -141,17 +214,17 @@ RefPtr<Gfx::Bitmap> PDFViewer::render_page(const PDF::Page& page)
 
     auto height = static_cast<float>(this->height() - 2 * frame_thickness() - PAGE_PADDING * 2) * zoom_scale_factor;
     auto width = height / page_scale_factor;
-    auto bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::BGRA8888, { width, height });
+    auto bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRA8888, { width, height }).release_value_but_fixme_should_propagate_errors();
 
-    PDF::Renderer::render(*m_document, page, bitmap);
+    TRY(PDF::Renderer::render(*m_document, page, bitmap));
 
-    if (page.rotate != 0) {
-        int rotation_count = (page.rotate / 90) % 4;
+    if (page.rotate + m_rotations != 0) {
+        int rotation_count = ((page.rotate + m_rotations) / 90) % 4;
         if (rotation_count == 3) {
-            bitmap = bitmap->rotated(Gfx::RotationDirection::CounterClockwise);
+            bitmap = bitmap->rotated(Gfx::RotationDirection::CounterClockwise).release_value_but_fixme_should_propagate_errors();
         } else {
             for (int i = 0; i < rotation_count; i++)
-                bitmap = bitmap->rotated(Gfx::RotationDirection::Clockwise);
+                bitmap = bitmap->rotated(Gfx::RotationDirection::Clockwise).release_value_but_fixme_should_propagate_errors();
         }
     }
 

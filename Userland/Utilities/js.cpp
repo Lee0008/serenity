@@ -13,10 +13,12 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
+#include <LibCore/System.h>
 #include <LibJS/AST.h>
 #include <LibJS/Bytecode/BasicBlock.h>
 #include <LibJS/Bytecode/Generator.h>
 #include <LibJS/Bytecode/Interpreter.h>
+#include <LibJS/Bytecode/PassManager.h>
 #include <LibJS/Console.h>
 #include <LibJS/Interpreter.h>
 #include <LibJS/Parser.h>
@@ -25,9 +27,22 @@
 #include <LibJS/Runtime/BooleanObject.h>
 #include <LibJS/Runtime/DataView.h>
 #include <LibJS/Runtime/Date.h>
+#include <LibJS/Runtime/DatePrototype.h>
+#include <LibJS/Runtime/ECMAScriptFunctionObject.h>
 #include <LibJS/Runtime/Error.h>
-#include <LibJS/Runtime/Function.h>
+#include <LibJS/Runtime/FunctionObject.h>
 #include <LibJS/Runtime/GlobalObject.h>
+#include <LibJS/Runtime/Intl/Collator.h>
+#include <LibJS/Runtime/Intl/DateTimeFormat.h>
+#include <LibJS/Runtime/Intl/DisplayNames.h>
+#include <LibJS/Runtime/Intl/ListFormat.h>
+#include <LibJS/Runtime/Intl/Locale.h>
+#include <LibJS/Runtime/Intl/NumberFormat.h>
+#include <LibJS/Runtime/Intl/PluralRules.h>
+#include <LibJS/Runtime/Intl/RelativeTimeFormat.h>
+#include <LibJS/Runtime/Intl/Segmenter.h>
+#include <LibJS/Runtime/Intl/Segments.h>
+#include <LibJS/Runtime/JSONObject.h>
 #include <LibJS/Runtime/Map.h>
 #include <LibJS/Runtime/NativeFunction.h>
 #include <LibJS/Runtime/NumberObject.h>
@@ -36,13 +51,25 @@
 #include <LibJS/Runtime/Promise.h>
 #include <LibJS/Runtime/ProxyObject.h>
 #include <LibJS/Runtime/RegExpObject.h>
-#include <LibJS/Runtime/ScriptFunction.h>
 #include <LibJS/Runtime/Set.h>
+#include <LibJS/Runtime/ShadowRealm.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/StringObject.h>
+#include <LibJS/Runtime/Temporal/Calendar.h>
+#include <LibJS/Runtime/Temporal/Duration.h>
+#include <LibJS/Runtime/Temporal/Instant.h>
+#include <LibJS/Runtime/Temporal/PlainDate.h>
+#include <LibJS/Runtime/Temporal/PlainDateTime.h>
+#include <LibJS/Runtime/Temporal/PlainMonthDay.h>
+#include <LibJS/Runtime/Temporal/PlainTime.h>
+#include <LibJS/Runtime/Temporal/PlainYearMonth.h>
+#include <LibJS/Runtime/Temporal/TimeZone.h>
+#include <LibJS/Runtime/Temporal/ZonedDateTime.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibJS/Runtime/Value.h>
+#include <LibJS/SourceTextModule.h>
 #include <LibLine/Editor.h>
+#include <LibMain/Main.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -50,6 +77,7 @@
 
 RefPtr<JS::VM> vm;
 Vector<String> repl_statements;
+JS::Handle<JS::Value> last_value = JS::make_handle(JS::js_undefined());
 
 class ReplObject final : public JS::GlobalObject {
     JS_OBJECT(ReplObject, JS::GlobalObject);
@@ -64,6 +92,9 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(repl_help);
     JS_DECLARE_NATIVE_FUNCTION(load_file);
     JS_DECLARE_NATIVE_FUNCTION(save_to_file);
+    JS_DECLARE_NATIVE_FUNCTION(load_json);
+    JS_DECLARE_NATIVE_FUNCTION(last_value_getter);
+    JS_DECLARE_NATIVE_FUNCTION(print);
 };
 
 class ScriptObject final : public JS::GlobalObject {
@@ -76,12 +107,17 @@ public:
 
 private:
     JS_DECLARE_NATIVE_FUNCTION(load_file);
+    JS_DECLARE_NATIVE_FUNCTION(load_json);
+    JS_DECLARE_NATIVE_FUNCTION(print);
 };
 
 static bool s_dump_ast = false;
-static bool s_dump_bytecode = false;
 static bool s_run_bytecode = false;
+static bool s_opt_bytecode = false;
+static bool s_as_module = false;
 static bool s_print_last_result = false;
+static bool s_strip_ansi = false;
+static bool s_disable_source_location_hints = false;
 static RefPtr<Line::Editor> s_editor;
 static String s_history_path = String::formatted("{}/.js-history", Core::StandardPaths::home_directory());
 static int s_repl_line_level = 0;
@@ -119,6 +155,7 @@ static String read_next_piece()
         s_editor->add_to_history(line);
 
         piece.append(line);
+        piece.append('\n');
         auto lexer = JS::Lexer(line);
 
         enum {
@@ -170,169 +207,207 @@ static String read_next_piece()
     return piece.to_string();
 }
 
+static String strip_ansi(StringView format_string)
+{
+    if (format_string.is_empty())
+        return String::empty();
+
+    StringBuilder builder;
+    size_t i;
+    for (i = 0; i < format_string.length() - 1; ++i) {
+        if (format_string[i] == '\033' && format_string[i + 1] == '[') {
+            while (i < format_string.length() && format_string[i] != 'm')
+                ++i;
+        } else {
+            builder.append(format_string[i]);
+        }
+    }
+    if (i < format_string.length())
+        builder.append(format_string[i]);
+    return builder.to_string();
+}
+
+template<typename... Parameters>
+static void js_out(CheckedFormatString<Parameters...>&& fmtstr, const Parameters&... parameters)
+{
+    if (!s_strip_ansi)
+        return out(move(fmtstr), parameters...);
+    auto stripped_fmtstr = strip_ansi(fmtstr.view());
+    out(stripped_fmtstr, parameters...);
+}
+
+template<typename... Parameters>
+static void js_outln(CheckedFormatString<Parameters...>&& fmtstr, const Parameters&... parameters)
+{
+    if (!s_strip_ansi)
+        return outln(move(fmtstr), parameters...);
+    auto stripped_fmtstr = strip_ansi(fmtstr.view());
+    outln(stripped_fmtstr, parameters...);
+}
+
+inline void js_outln() { outln(); }
+
 static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects);
 
-static void print_type(const FlyString& name)
+static void print_type(FlyString const& name)
 {
-    out("[\033[36;1m{}\033[0m]", name);
+    js_out("[\033[36;1m{}\033[0m]", name);
 }
 
 static void print_separator(bool& first)
 {
-    out(first ? " " : ", ");
+    js_out(first ? " " : ", ");
     first = false;
 }
 
 static void print_array(JS::Array& array, HashTable<JS::Object*>& seen_objects)
 {
-    out("[");
+    js_out("[");
     bool first = true;
     for (auto it = array.indexed_properties().begin(false); it != array.indexed_properties().end(); ++it) {
         print_separator(first);
-        auto value = it.value_and_attributes(&array).value;
+        auto value_or_error = array.get(it.index());
         // The V8 repl doesn't throw an exception here, and instead just
         // prints 'undefined'. We may choose to replicate that behavior in
         // the future, but for now lets just catch the error
-        if (vm->exception())
+        if (value_or_error.is_error())
             return;
+        auto value = value_or_error.release_value();
         print_value(value, seen_objects);
     }
     if (!first)
-        out(" ");
-    out("]");
+        js_out(" ");
+    js_out("]");
 }
 
 static void print_object(JS::Object& object, HashTable<JS::Object*>& seen_objects)
 {
-    out("{{");
+    js_out("{{");
     bool first = true;
     for (auto& entry : object.indexed_properties()) {
         print_separator(first);
-        out("\"\033[33;1m{}\033[0m\": ", entry.index());
-        auto value = entry.value_and_attributes(&object).value;
+        js_out("\"\033[33;1m{}\033[0m\": ", entry.index());
+        auto value_or_error = object.get(entry.index());
         // The V8 repl doesn't throw an exception here, and instead just
         // prints 'undefined'. We may choose to replicate that behavior in
         // the future, but for now lets just catch the error
-        if (vm->exception())
+        if (value_or_error.is_error())
             return;
+        auto value = value_or_error.release_value();
         print_value(value, seen_objects);
     }
     for (auto& it : object.shape().property_table_ordered()) {
         print_separator(first);
         if (it.key.is_string()) {
-            out("\"\033[33;1m{}\033[0m\": ", it.key.to_display_string());
+            js_out("\"\033[33;1m{}\033[0m\": ", it.key.to_display_string());
         } else {
-            out("[\033[33;1m{}\033[0m]: ", it.key.to_display_string());
+            js_out("[\033[33;1m{}\033[0m]: ", it.key.to_display_string());
         }
         print_value(object.get_direct(it.value.offset), seen_objects);
     }
     if (!first)
-        out(" ");
-    out("}}");
+        js_out(" ");
+    js_out("}}");
 }
 
-static void print_function(const JS::Object& object, HashTable<JS::Object*>&)
+static void print_function(JS::Object const& object, HashTable<JS::Object*>&)
 {
     print_type(object.class_name());
-    if (is<JS::ScriptFunction>(object))
-        out(" {}", static_cast<const JS::ScriptFunction&>(object).name());
+    if (is<JS::ECMAScriptFunctionObject>(object))
+        js_out(" {}", static_cast<JS::ECMAScriptFunctionObject const&>(object).name());
     else if (is<JS::NativeFunction>(object))
-        out(" {}", static_cast<const JS::NativeFunction&>(object).name());
+        js_out(" {}", static_cast<JS::NativeFunction const&>(object).name());
 }
 
-static void print_date(const JS::Object& object, HashTable<JS::Object*>&)
+static void print_date(JS::Object const& object, HashTable<JS::Object*>&)
 {
     print_type("Date");
-    out(" \033[34;1m{}\033[0m", static_cast<const JS::Date&>(object).string());
+    js_out(" \033[34;1m{}\033[0m", JS::to_date_string(static_cast<JS::Date const&>(object).date_value()));
 }
 
-static void print_error(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_error(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
     auto name = object.get_without_side_effects(vm->names.name).value_or(JS::js_undefined());
     auto message = object.get_without_side_effects(vm->names.message).value_or(JS::js_undefined());
-    if (name.is_accessor() || name.is_native_property() || message.is_accessor() || message.is_native_property()) {
+    if (name.is_accessor() || message.is_accessor()) {
         print_value(&object, seen_objects);
     } else {
         auto name_string = name.to_string_without_side_effects();
         auto message_string = message.to_string_without_side_effects();
         print_type(name_string);
         if (!message_string.is_empty())
-            out(" \033[31;1m{}\033[0m", message_string);
+            js_out(" \033[31;1m{}\033[0m", message_string);
     }
 }
 
-static void print_regexp_object(const JS::Object& object, HashTable<JS::Object*>&)
+static void print_regexp_object(JS::Object const& object, HashTable<JS::Object*>&)
 {
-    auto& regexp_object = static_cast<const JS::RegExpObject&>(object);
-    // Use RegExp.prototype.source rather than RegExpObject::pattern() so we get proper escaping
-    auto source = regexp_object.get("source").to_primitive_string(object.global_object())->string();
+    auto& regexp_object = static_cast<JS::RegExpObject const&>(object);
     print_type("RegExp");
-    out(" \033[34;1m/{}/{}\033[0m", source, regexp_object.flags());
+    js_out(" \033[34;1m/{}/{}\033[0m", regexp_object.escape_regexp_pattern(), regexp_object.flags());
 }
 
-static void print_proxy_object(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_proxy_object(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
-    auto& proxy_object = static_cast<const JS::ProxyObject&>(object);
+    auto& proxy_object = static_cast<JS::ProxyObject const&>(object);
     print_type("Proxy");
-    out("\n  target: ");
+    js_out("\n  target: ");
     print_value(&proxy_object.target(), seen_objects);
-    out("\n  handler: ");
+    js_out("\n  handler: ");
     print_value(&proxy_object.handler(), seen_objects);
 }
 
-static void print_map(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_map(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
-    auto& map = static_cast<const JS::Map&>(object);
-    auto& entries = map.entries();
+    auto& map = static_cast<JS::Map const&>(object);
     print_type("Map");
-    out(" {{");
+    js_out(" {{");
     bool first = true;
-    for (auto& entry : entries) {
+    for (auto& entry : map) {
         print_separator(first);
         print_value(entry.key, seen_objects);
-        out(" => ");
+        js_out(" => ");
         print_value(entry.value, seen_objects);
     }
     if (!first)
-        out(" ");
-    out("}}");
+        js_out(" ");
+    js_out("}}");
 }
 
-static void print_set(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_set(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
-    auto& set = static_cast<const JS::Set&>(object);
-    auto& values = set.values();
+    auto& set = static_cast<JS::Set const&>(object);
     print_type("Set");
-    out(" {{");
+    js_out(" {{");
     bool first = true;
-    for (auto& value : values) {
+    for (auto& entry : set) {
         print_separator(first);
-        print_value(value, seen_objects);
+        print_value(entry.key, seen_objects);
     }
     if (!first)
-        out(" ");
-    out("}}");
+        js_out(" ");
+    js_out("}}");
 }
 
-static void print_promise(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_promise(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
-    auto& promise = static_cast<const JS::Promise&>(object);
+    auto& promise = static_cast<JS::Promise const&>(object);
     print_type("Promise");
     switch (promise.state()) {
     case JS::Promise::State::Pending:
-        out("\n  state: ");
-        out("\033[36;1mPending\033[0m");
+        js_out("\n  state: ");
+        js_out("\033[36;1mPending\033[0m");
         break;
     case JS::Promise::State::Fulfilled:
-        out("\n  state: ");
-        out("\033[32;1mFulfilled\033[0m");
-        out("\n  result: ");
+        js_out("\n  state: ");
+        js_out("\033[32;1mFulfilled\033[0m");
+        js_out("\n  result: ");
         print_value(promise.result(), seen_objects);
         break;
     case JS::Promise::State::Rejected:
-        out("\n  state: ");
-        out("\033[31;1mRejected\033[0m");
-        out("\n  result: ");
+        js_out("\n  state: ");
+        js_out("\033[31;1mRejected\033[0m");
+        js_out("\n  result: ");
         print_value(promise.result(), seen_objects);
         break;
     default:
@@ -340,57 +415,78 @@ static void print_promise(const JS::Object& object, HashTable<JS::Object*>& seen
     }
 }
 
-static void print_array_buffer(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_array_buffer(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
-    auto& array_buffer = static_cast<const JS::ArrayBuffer&>(object);
+    auto& array_buffer = static_cast<JS::ArrayBuffer const&>(object);
     auto& buffer = array_buffer.buffer();
     auto byte_length = array_buffer.byte_length();
     print_type("ArrayBuffer");
-    out("\n  byteLength: ");
+    js_out("\n  byteLength: ");
     print_value(JS::Value((double)byte_length), seen_objects);
+    if (array_buffer.is_resizable_array_buffer()) {
+        js_out("\n  maxByteLength: ");
+        print_value(JS::Value((double)array_buffer.max_byte_length()), seen_objects);
+    }
     if (!byte_length)
         return;
-    outln();
+    js_outln();
     for (size_t i = 0; i < byte_length; ++i) {
-        out("{:02x}", buffer[i]);
+        js_out("{:02x}", buffer[i]);
         if (i + 1 < byte_length) {
             if ((i + 1) % 32 == 0)
-                outln();
+                js_outln();
             else if ((i + 1) % 16 == 0)
-                out("  ");
+                js_out("  ");
             else
-                out(" ");
+                js_out(" ");
         }
     }
 }
 
-static void print_typed_array(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_shadow_realm(JS::Object const&, HashTable<JS::Object*>&)
 {
-    auto& typed_array_base = static_cast<const JS::TypedArrayBase&>(object);
+    // Not much we can show here that would be useful. Realm pointer address?!
+    print_type("ShadowRealm");
+}
+
+template<typename T>
+static void print_number(T number) requires IsArithmetic<T>
+{
+    js_out("\033[35;1m");
+    js_out("{}", number);
+    js_out("\033[0m");
+}
+
+static void print_typed_array(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& typed_array_base = static_cast<JS::TypedArrayBase const&>(object);
+    auto& array_buffer = *typed_array_base.viewed_array_buffer();
     auto length = typed_array_base.array_length();
     print_type(object.class_name());
-    out("\n  length: ");
+    js_out("\n  length: ");
     print_value(JS::Value(length), seen_objects);
-    out("\n  byteLength: ");
+    js_out("\n  byteLength: ");
     print_value(JS::Value(typed_array_base.byte_length()), seen_objects);
-    out("\n  buffer: ");
+    js_out("\n  buffer: ");
     print_type("ArrayBuffer");
-    out(" @ {:p}", typed_array_base.viewed_array_buffer());
-    if (!length)
+    if (array_buffer.is_detached())
+        js_out(" (detached)");
+    js_out(" @ {:p}", &array_buffer);
+    if (!length || array_buffer.is_detached())
         return;
-    outln();
+    js_outln();
     // FIXME: This kinda sucks.
 #define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
     if (is<JS::ClassName>(object)) {                                                     \
-        out("[ ");                                                                       \
-        auto& typed_array = static_cast<const JS::ClassName&>(typed_array_base);         \
+        js_out("[ ");                                                                    \
+        auto& typed_array = static_cast<JS::ClassName const&>(typed_array_base);         \
         auto data = typed_array.data();                                                  \
         for (size_t i = 0; i < length; ++i) {                                            \
             if (i > 0)                                                                   \
-                out(", ");                                                               \
-            print_value(JS::Value(data[i]), seen_objects);                               \
+                js_out(", ");                                                            \
+            print_number(data[i]);                                                       \
         }                                                                                \
-        out(" ]");                                                                       \
+        js_out(" ]");                                                                    \
         return;                                                                          \
     }
     JS_ENUMERATE_TYPED_ARRAYS
@@ -398,31 +494,380 @@ static void print_typed_array(const JS::Object& object, HashTable<JS::Object*>& 
     VERIFY_NOT_REACHED();
 }
 
-static void print_data_view(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_data_view(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
-    auto& data_view = static_cast<const JS::DataView&>(object);
+    auto& data_view = static_cast<JS::DataView const&>(object);
     print_type("DataView");
-    out("\n  byteLength: ");
+    js_out("\n  byteLength: ");
     print_value(JS::Value(data_view.byte_length()), seen_objects);
-    out("\n  byteOffset: ");
+    js_out("\n  byteOffset: ");
     print_value(JS::Value(data_view.byte_offset()), seen_objects);
-    out("\n  buffer: ");
+    js_out("\n  buffer: ");
     print_type("ArrayBuffer");
-    out(" @ {:p}", data_view.viewed_array_buffer());
+    js_out(" @ {:p}", data_view.viewed_array_buffer());
 }
 
-static void print_primitive_wrapper_object(const FlyString& name, const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_temporal_calendar(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& calendar = static_cast<JS::Temporal::Calendar const&>(object);
+    print_type("Temporal.Calendar");
+    js_out(" ");
+    print_value(JS::js_string(object.vm(), calendar.identifier()), seen_objects);
+}
+
+static void print_temporal_duration(JS::Object const& object, HashTable<JS::Object*>&)
+{
+    auto& duration = static_cast<JS::Temporal::Duration const&>(object);
+    print_type("Temporal.Duration");
+    js_out(" \033[34;1m{} y, {} M, {} w, {} d, {} h, {} m, {} s, {} ms, {} us, {} ns\033[0m", duration.years(), duration.months(), duration.weeks(), duration.days(), duration.hours(), duration.minutes(), duration.seconds(), duration.milliseconds(), duration.microseconds(), duration.nanoseconds());
+}
+
+static void print_temporal_instant(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& instant = static_cast<JS::Temporal::Instant const&>(object);
+    print_type("Temporal.Instant");
+    js_out(" ");
+    // FIXME: Print human readable date and time, like in print_date() - ideally handling arbitrarily large values since we get a bigint.
+    print_value(&instant.nanoseconds(), seen_objects);
+}
+
+static void print_temporal_plain_date(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& plain_date = static_cast<JS::Temporal::PlainDate const&>(object);
+    print_type("Temporal.PlainDate");
+    js_out(" \033[34;1m{:04}-{:02}-{:02}\033[0m", plain_date.iso_year(), plain_date.iso_month(), plain_date.iso_day());
+    js_out("\n  calendar: ");
+    print_value(&plain_date.calendar(), seen_objects);
+}
+
+static void print_temporal_plain_date_time(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& plain_date_time = static_cast<JS::Temporal::PlainDateTime const&>(object);
+    print_type("Temporal.PlainDateTime");
+    js_out(" \033[34;1m{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}{:03}{:03}\033[0m", plain_date_time.iso_year(), plain_date_time.iso_month(), plain_date_time.iso_day(), plain_date_time.iso_hour(), plain_date_time.iso_minute(), plain_date_time.iso_second(), plain_date_time.iso_millisecond(), plain_date_time.iso_microsecond(), plain_date_time.iso_nanosecond());
+    js_out("\n  calendar: ");
+    print_value(&plain_date_time.calendar(), seen_objects);
+}
+
+static void print_temporal_plain_month_day(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& plain_month_day = static_cast<JS::Temporal::PlainMonthDay const&>(object);
+    print_type("Temporal.PlainMonthDay");
+    // Also has an [[ISOYear]] internal slot, but showing that here seems rather unexpected.
+    js_out(" \033[34;1m{:02}-{:02}\033[0m", plain_month_day.iso_month(), plain_month_day.iso_day());
+    js_out("\n  calendar: ");
+    print_value(&plain_month_day.calendar(), seen_objects);
+}
+
+static void print_temporal_plain_time(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& plain_time = static_cast<JS::Temporal::PlainTime const&>(object);
+    print_type("Temporal.PlainTime");
+    js_out(" \033[34;1m{:02}:{:02}:{:02}.{:03}{:03}{:03}\033[0m", plain_time.iso_hour(), plain_time.iso_minute(), plain_time.iso_second(), plain_time.iso_millisecond(), plain_time.iso_microsecond(), plain_time.iso_nanosecond());
+    js_out("\n  calendar: ");
+    print_value(&plain_time.calendar(), seen_objects);
+}
+
+static void print_temporal_plain_year_month(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& plain_year_month = static_cast<JS::Temporal::PlainYearMonth const&>(object);
+    print_type("Temporal.PlainYearMonth");
+    // Also has an [[ISODay]] internal slot, but showing that here seems rather unexpected.
+    js_out(" \033[34;1m{:04}-{:02}\033[0m", plain_year_month.iso_year(), plain_year_month.iso_month());
+    js_out("\n  calendar: ");
+    print_value(&plain_year_month.calendar(), seen_objects);
+}
+
+static void print_temporal_time_zone(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& time_zone = static_cast<JS::Temporal::TimeZone const&>(object);
+    print_type("Temporal.TimeZone");
+    js_out(" ");
+    print_value(JS::js_string(object.vm(), time_zone.identifier()), seen_objects);
+    if (time_zone.offset_nanoseconds().has_value()) {
+        js_out("\n  offset (ns): ");
+        print_value(JS::Value(*time_zone.offset_nanoseconds()), seen_objects);
+    }
+}
+
+static void print_temporal_zoned_date_time(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& zoned_date_time = static_cast<JS::Temporal::ZonedDateTime const&>(object);
+    print_type("Temporal.ZonedDateTime");
+    js_out("\n  epochNanoseconds: ");
+    print_value(&zoned_date_time.nanoseconds(), seen_objects);
+    js_out("\n  timeZone: ");
+    print_value(&zoned_date_time.time_zone(), seen_objects);
+    js_out("\n  calendar: ");
+    print_value(&zoned_date_time.calendar(), seen_objects);
+}
+
+static void print_intl_display_names(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& display_names = static_cast<JS::Intl::DisplayNames const&>(object);
+    print_type("Intl.DisplayNames");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), display_names.locale()), seen_objects);
+    js_out("\n  type: ");
+    print_value(js_string(object.vm(), display_names.type_string()), seen_objects);
+    js_out("\n  style: ");
+    print_value(js_string(object.vm(), display_names.style_string()), seen_objects);
+    js_out("\n  fallback: ");
+    print_value(js_string(object.vm(), display_names.fallback_string()), seen_objects);
+    if (display_names.has_language_display()) {
+        js_out("\n  languageDisplay: ");
+        print_value(js_string(object.vm(), display_names.language_display_string()), seen_objects);
+    }
+}
+
+static void print_intl_locale(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& locale = static_cast<JS::Intl::Locale const&>(object);
+    print_type("Intl.Locale");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), locale.locale()), seen_objects);
+    if (locale.has_calendar()) {
+        js_out("\n  calendar: ");
+        print_value(js_string(object.vm(), locale.calendar()), seen_objects);
+    }
+    if (locale.has_case_first()) {
+        js_out("\n  caseFirst: ");
+        print_value(js_string(object.vm(), locale.case_first()), seen_objects);
+    }
+    if (locale.has_collation()) {
+        js_out("\n  collation: ");
+        print_value(js_string(object.vm(), locale.collation()), seen_objects);
+    }
+    if (locale.has_hour_cycle()) {
+        js_out("\n  hourCycle: ");
+        print_value(js_string(object.vm(), locale.hour_cycle()), seen_objects);
+    }
+    if (locale.has_numbering_system()) {
+        js_out("\n  numberingSystem: ");
+        print_value(js_string(object.vm(), locale.numbering_system()), seen_objects);
+    }
+    js_out("\n  numeric: ");
+    print_value(JS::Value(locale.numeric()), seen_objects);
+}
+
+static void print_intl_list_format(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& list_format = static_cast<JS::Intl::ListFormat const&>(object);
+    print_type("Intl.ListFormat");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), list_format.locale()), seen_objects);
+    js_out("\n  type: ");
+    print_value(js_string(object.vm(), list_format.type_string()), seen_objects);
+    js_out("\n  style: ");
+    print_value(js_string(object.vm(), list_format.style_string()), seen_objects);
+}
+
+static void print_intl_number_format(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& number_format = static_cast<JS::Intl::NumberFormat const&>(object);
+    print_type("Intl.NumberFormat");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), number_format.locale()), seen_objects);
+    js_out("\n  dataLocale: ");
+    print_value(js_string(object.vm(), number_format.data_locale()), seen_objects);
+    js_out("\n  numberingSystem: ");
+    print_value(js_string(object.vm(), number_format.numbering_system()), seen_objects);
+    js_out("\n  style: ");
+    print_value(js_string(object.vm(), number_format.style_string()), seen_objects);
+    if (number_format.has_currency()) {
+        js_out("\n  currency: ");
+        print_value(js_string(object.vm(), number_format.currency()), seen_objects);
+    }
+    if (number_format.has_currency_display()) {
+        js_out("\n  currencyDisplay: ");
+        print_value(js_string(object.vm(), number_format.currency_display_string()), seen_objects);
+    }
+    if (number_format.has_currency_sign()) {
+        js_out("\n  currencySign: ");
+        print_value(js_string(object.vm(), number_format.currency_sign_string()), seen_objects);
+    }
+    if (number_format.has_unit()) {
+        js_out("\n  unit: ");
+        print_value(js_string(object.vm(), number_format.unit()), seen_objects);
+    }
+    if (number_format.has_unit_display()) {
+        js_out("\n  unitDisplay: ");
+        print_value(js_string(object.vm(), number_format.unit_display_string()), seen_objects);
+    }
+    js_out("\n  minimumIntegerDigits: ");
+    print_value(JS::Value(number_format.min_integer_digits()), seen_objects);
+    if (number_format.has_min_fraction_digits()) {
+        js_out("\n  minimumFractionDigits: ");
+        print_value(JS::Value(number_format.min_fraction_digits()), seen_objects);
+    }
+    if (number_format.has_max_fraction_digits()) {
+        js_out("\n  maximumFractionDigits: ");
+        print_value(JS::Value(number_format.max_fraction_digits()), seen_objects);
+    }
+    if (number_format.has_min_significant_digits()) {
+        js_out("\n  minimumSignificantDigits: ");
+        print_value(JS::Value(number_format.min_significant_digits()), seen_objects);
+    }
+    if (number_format.has_max_significant_digits()) {
+        js_out("\n  maximumSignificantDigits: ");
+        print_value(JS::Value(number_format.max_significant_digits()), seen_objects);
+    }
+    js_out("\n  useGrouping: ");
+    print_value(JS::Value(number_format.use_grouping()), seen_objects);
+    js_out("\n  roundingType: ");
+    print_value(js_string(object.vm(), number_format.rounding_type_string()), seen_objects);
+    js_out("\n  notation: ");
+    print_value(js_string(object.vm(), number_format.notation_string()), seen_objects);
+    if (number_format.has_compact_display()) {
+        js_out("\n  compactDisplay: ");
+        print_value(js_string(object.vm(), number_format.compact_display_string()), seen_objects);
+    }
+    js_out("\n  signDisplay: ");
+    print_value(js_string(object.vm(), number_format.sign_display_string()), seen_objects);
+}
+
+static void print_intl_date_time_format(JS::Object& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& date_time_format = static_cast<JS::Intl::DateTimeFormat&>(object);
+    print_type("Intl.DateTimeFormat");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), date_time_format.locale()), seen_objects);
+    js_out("\n  pattern: ");
+    print_value(js_string(object.vm(), date_time_format.pattern()), seen_objects);
+    js_out("\n  calendar: ");
+    print_value(js_string(object.vm(), date_time_format.calendar()), seen_objects);
+    js_out("\n  numberingSystem: ");
+    print_value(js_string(object.vm(), date_time_format.numbering_system()), seen_objects);
+    if (date_time_format.has_hour_cycle()) {
+        js_out("\n  hourCycle: ");
+        print_value(js_string(object.vm(), date_time_format.hour_cycle_string()), seen_objects);
+    }
+    js_out("\n  timeZone: ");
+    print_value(js_string(object.vm(), date_time_format.time_zone()), seen_objects);
+    if (date_time_format.has_date_style()) {
+        js_out("\n  dateStyle: ");
+        print_value(js_string(object.vm(), date_time_format.date_style_string()), seen_objects);
+    }
+    if (date_time_format.has_time_style()) {
+        js_out("\n  timeStyle: ");
+        print_value(js_string(object.vm(), date_time_format.time_style_string()), seen_objects);
+    }
+
+    JS::Intl::for_each_calendar_field(date_time_format.global_object(), date_time_format, [&](auto& option, auto const& property, auto const&) -> JS::ThrowCompletionOr<void> {
+        using ValueType = typename RemoveReference<decltype(option)>::ValueType;
+
+        if (!option.has_value())
+            return {};
+
+        js_out("\n  {}: ", property);
+
+        if constexpr (IsIntegral<ValueType>) {
+            print_value(JS::Value(*option), seen_objects);
+        } else {
+            auto name = Unicode::calendar_pattern_style_to_string(*option);
+            print_value(js_string(object.vm(), name), seen_objects);
+        }
+
+        return {};
+    });
+}
+
+static void print_intl_relative_time_format(JS::Object& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& date_time_format = static_cast<JS::Intl::RelativeTimeFormat&>(object);
+    print_type("Intl.RelativeTimeFormat");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), date_time_format.locale()), seen_objects);
+    js_out("\n  numberingSystem: ");
+    print_value(js_string(object.vm(), date_time_format.numbering_system()), seen_objects);
+    js_out("\n  style: ");
+    print_value(js_string(object.vm(), date_time_format.style_string()), seen_objects);
+    js_out("\n  numeric: ");
+    print_value(js_string(object.vm(), date_time_format.numeric_string()), seen_objects);
+}
+
+static void print_intl_plural_rules(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& plural_rules = static_cast<JS::Intl::PluralRules const&>(object);
+    print_type("Intl.PluralRules");
+    js_out("\n  locale: ");
+    print_value(js_string(object.vm(), plural_rules.locale()), seen_objects);
+    js_out("\n  type: ");
+    print_value(js_string(object.vm(), plural_rules.type_string()), seen_objects);
+    js_out("\n  minimumIntegerDigits: ");
+    print_value(JS::Value(plural_rules.min_integer_digits()), seen_objects);
+    if (plural_rules.has_min_fraction_digits()) {
+        js_out("\n  minimumFractionDigits: ");
+        print_value(JS::Value(plural_rules.min_fraction_digits()), seen_objects);
+    }
+    if (plural_rules.has_max_fraction_digits()) {
+        js_out("\n  maximumFractionDigits: ");
+        print_value(JS::Value(plural_rules.max_fraction_digits()), seen_objects);
+    }
+    if (plural_rules.has_min_significant_digits()) {
+        js_out("\n  minimumSignificantDigits: ");
+        print_value(JS::Value(plural_rules.min_significant_digits()), seen_objects);
+    }
+    if (plural_rules.has_max_significant_digits()) {
+        js_out("\n  maximumSignificantDigits: ");
+        print_value(JS::Value(plural_rules.max_significant_digits()), seen_objects);
+    }
+    js_out("\n  roundingType: ");
+    print_value(js_string(object.vm(), plural_rules.rounding_type_string()), seen_objects);
+}
+
+static void print_intl_collator(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& collator = static_cast<JS::Intl::Collator const&>(object);
+    print_type("Intl.Collator");
+    out("\n  locale: ");
+    print_value(js_string(object.vm(), collator.locale()), seen_objects);
+    out("\n  usage: ");
+    print_value(js_string(object.vm(), collator.usage_string()), seen_objects);
+    out("\n  sensitivity: ");
+    print_value(js_string(object.vm(), collator.sensitivity_string()), seen_objects);
+    out("\n  caseFirst: ");
+    print_value(js_string(object.vm(), collator.case_first_string()), seen_objects);
+    out("\n  collation: ");
+    print_value(js_string(object.vm(), collator.collation()), seen_objects);
+    out("\n  ignorePunctuation: ");
+    print_value(JS::Value(collator.ignore_punctuation()), seen_objects);
+    out("\n  numeric: ");
+    print_value(JS::Value(collator.numeric()), seen_objects);
+}
+
+static void print_intl_segmenter(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& segmenter = static_cast<JS::Intl::Segmenter const&>(object);
+    print_type("Intl.Segmenter");
+    out("\n  locale: ");
+    print_value(js_string(object.vm(), segmenter.locale()), seen_objects);
+    out("\n  granularity: ");
+    print_value(js_string(object.vm(), segmenter.segmenter_granularity_string()), seen_objects);
+}
+
+static void print_intl_segments(JS::Object const& object, HashTable<JS::Object*>& seen_objects)
+{
+    auto& segments = static_cast<JS::Intl::Segments const&>(object);
+    print_type("Segments");
+    out("\n  string: ");
+    print_value(js_string(object.vm(), segments.segments_string()), seen_objects);
+    out("\n  segmenter: ");
+    print_value(&segments.segments_segmenter(), seen_objects);
+}
+
+static void print_primitive_wrapper_object(FlyString const& name, JS::Object const& object, HashTable<JS::Object*>& seen_objects)
 {
     // BooleanObject, NumberObject, StringObject
     print_type(name);
-    out(" ");
-    print_value(object.value_of(), seen_objects);
+    js_out(" ");
+    print_value(&object, seen_objects);
 }
 
 static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
 {
     if (value.is_empty()) {
-        out("\033[34;1m<empty>\033[0m");
+        js_out("\033[34;1m<empty>\033[0m");
         return;
     }
 
@@ -430,7 +875,7 @@ static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
         if (seen_objects.contains(&value.as_object())) {
             // FIXME: Maybe we should only do this for circular references,
             //        not for all reoccurring objects.
-            out("<already printed Object {}>", &value.as_object());
+            js_out("<already printed Object {}>", &value.as_object());
             return;
         }
         seen_objects.set(&value.as_object());
@@ -438,7 +883,7 @@ static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
 
     if (value.is_object()) {
         auto& object = value.as_object();
-        if (object.is_array())
+        if (is<JS::Array>(object))
             return print_array(static_cast<JS::Array&>(object), seen_objects);
         if (object.is_function())
             return print_function(object, seen_objects);
@@ -446,6 +891,11 @@ static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
             return print_date(object, seen_objects);
         if (is<JS::Error>(object))
             return print_error(object, seen_objects);
+
+        auto prototype_or_error = object.internal_get_prototype_of();
+        if (prototype_or_error.has_value() && prototype_or_error.value() == object.global_object().error_prototype())
+            return print_error(object, seen_objects);
+
         if (is<JS::RegExpObject>(object))
             return print_regexp_object(object, seen_objects);
         if (is<JS::Map>(object))
@@ -460,6 +910,8 @@ static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
             return print_promise(object, seen_objects);
         if (is<JS::ArrayBuffer>(object))
             return print_array_buffer(object, seen_objects);
+        if (is<JS::ShadowRealm>(object))
+            return print_shadow_realm(object, seen_objects);
         if (object.is_typed_array())
             return print_typed_array(object, seen_objects);
         if (is<JS::StringObject>(object))
@@ -468,54 +920,77 @@ static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
             return print_primitive_wrapper_object("Number", object, seen_objects);
         if (is<JS::BooleanObject>(object))
             return print_primitive_wrapper_object("Boolean", object, seen_objects);
+        if (is<JS::Temporal::Calendar>(object))
+            return print_temporal_calendar(object, seen_objects);
+        if (is<JS::Temporal::Duration>(object))
+            return print_temporal_duration(object, seen_objects);
+        if (is<JS::Temporal::Instant>(object))
+            return print_temporal_instant(object, seen_objects);
+        if (is<JS::Temporal::PlainDate>(object))
+            return print_temporal_plain_date(object, seen_objects);
+        if (is<JS::Temporal::PlainDateTime>(object))
+            return print_temporal_plain_date_time(object, seen_objects);
+        if (is<JS::Temporal::PlainMonthDay>(object))
+            return print_temporal_plain_month_day(object, seen_objects);
+        if (is<JS::Temporal::PlainTime>(object))
+            return print_temporal_plain_time(object, seen_objects);
+        if (is<JS::Temporal::PlainYearMonth>(object))
+            return print_temporal_plain_year_month(object, seen_objects);
+        if (is<JS::Temporal::TimeZone>(object))
+            return print_temporal_time_zone(object, seen_objects);
+        if (is<JS::Temporal::ZonedDateTime>(object))
+            return print_temporal_zoned_date_time(object, seen_objects);
+        if (is<JS::Intl::DisplayNames>(object))
+            return print_intl_display_names(object, seen_objects);
+        if (is<JS::Intl::Locale>(object))
+            return print_intl_locale(object, seen_objects);
+        if (is<JS::Intl::ListFormat>(object))
+            return print_intl_list_format(object, seen_objects);
+        if (is<JS::Intl::NumberFormat>(object))
+            return print_intl_number_format(object, seen_objects);
+        if (is<JS::Intl::DateTimeFormat>(object))
+            return print_intl_date_time_format(object, seen_objects);
+        if (is<JS::Intl::RelativeTimeFormat>(object))
+            return print_intl_relative_time_format(object, seen_objects);
+        if (is<JS::Intl::PluralRules>(object))
+            return print_intl_plural_rules(object, seen_objects);
+        if (is<JS::Intl::Collator>(object))
+            return print_intl_collator(object, seen_objects);
+        if (is<JS::Intl::Segmenter>(object))
+            return print_intl_segmenter(object, seen_objects);
+        if (is<JS::Intl::Segments>(object))
+            return print_intl_segments(object, seen_objects);
         return print_object(object, seen_objects);
     }
 
     if (value.is_string())
-        out("\033[32;1m");
+        js_out("\033[32;1m");
     else if (value.is_number() || value.is_bigint())
-        out("\033[35;1m");
+        js_out("\033[35;1m");
     else if (value.is_boolean())
-        out("\033[33;1m");
+        js_out("\033[33;1m");
     else if (value.is_null())
-        out("\033[33;1m");
+        js_out("\033[33;1m");
     else if (value.is_undefined())
-        out("\033[34;1m");
+        js_out("\033[34;1m");
     if (value.is_string())
-        out("\"");
+        js_out("\"");
     else if (value.is_negative_zero())
-        out("-");
-    out("{}", value.to_string_without_side_effects());
+        js_out("-");
+    js_out("{}", value.to_string_without_side_effects());
     if (value.is_string())
-        out("\"");
-    out("\033[0m");
+        js_out("\"");
+    js_out("\033[0m");
 }
 
 static void print(JS::Value value)
 {
     HashTable<JS::Object*> seen_objects;
     print_value(value, seen_objects);
-    outln();
+    js_outln();
 }
 
-static bool file_has_shebang(ByteBuffer const& file_contents)
-{
-    if (file_contents.size() >= 2 && file_contents[0] == '#' && file_contents[1] == '!')
-        return true;
-    return false;
-}
-
-static StringView strip_shebang(ByteBuffer const& file_contents)
-{
-    size_t i = 0;
-    for (i = 2; i < file_contents.size(); ++i) {
-        if (file_contents[i] == '\n')
-            break;
-    }
-    return StringView((const char*)file_contents.data() + i, file_contents.size() - i);
-}
-
-static bool write_to_file(const String& path)
+static bool write_to_file(String const& path)
 {
     int fd = open(path.characters(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
     for (size_t i = 0; i < repl_statements.size(); i++) {
@@ -541,49 +1016,87 @@ static bool write_to_file(const String& path)
     return true;
 }
 
-static bool parse_and_run(JS::Interpreter& interpreter, const StringView& source)
+static bool parse_and_run(JS::Interpreter& interpreter, StringView source, StringView source_name)
 {
-    auto parser = JS::Parser(JS::Lexer(source));
-    auto program = parser.parse_program();
+    enum class ReturnEarly {
+        No,
+        Yes,
+    };
 
-    if (s_dump_ast)
-        program->dump(0);
+    JS::ThrowCompletionOr<JS::Value> result { JS::js_undefined() };
 
-    if (parser.has_errors()) {
-        auto error = parser.errors()[0];
-        auto hint = error.source_location_hint(source);
-        if (!hint.is_empty())
-            outln("{}", hint);
-        vm->throw_exception<JS::SyntaxError>(interpreter.global_object(), error.to_string());
-    } else {
-        if (s_dump_bytecode || s_run_bytecode) {
-            auto unit = JS::Bytecode::Generator::generate(*program);
-            if (s_dump_bytecode) {
-                for (auto& block : unit.basic_blocks)
-                    block.dump(unit);
-                if (!unit.string_table->is_empty()) {
-                    outln();
-                    unit.string_table->dump();
-                }
+    auto run_script_or_module = [&](auto& script_or_module) {
+        if (s_dump_ast)
+            script_or_module->parse_node().dump(0);
+
+        if (JS::Bytecode::g_dump_bytecode || s_run_bytecode) {
+            auto executable_result = JS::Bytecode::Generator::generate(script_or_module->parse_node());
+            if (executable_result.is_error()) {
+                result = vm->throw_completion<JS::InternalError>(interpreter.global_object(), executable_result.error().to_string());
+                return ReturnEarly::No;
             }
+
+            auto executable = executable_result.release_value();
+            executable->name = source_name;
+            if (s_opt_bytecode) {
+                auto& passes = JS::Bytecode::Interpreter::optimization_pipeline();
+                passes.perform(*executable);
+                dbgln("Optimisation passes took {}us", passes.elapsed());
+            }
+
+            if (JS::Bytecode::g_dump_bytecode)
+                executable->dump();
 
             if (s_run_bytecode) {
-                JS::Bytecode::Interpreter bytecode_interpreter(interpreter.global_object());
-                bytecode_interpreter.run(unit);
+                JS::Bytecode::Interpreter bytecode_interpreter(interpreter.global_object(), interpreter.realm());
+                result = bytecode_interpreter.run(*executable);
             } else {
-                return true;
+                return ReturnEarly::Yes;
             }
         } else {
-            interpreter.run(interpreter.global_object(), *program);
+            result = interpreter.run(*script_or_module);
+        }
+
+        return ReturnEarly::No;
+    };
+
+    if (!s_as_module) {
+        auto script_or_error = JS::Script::parse(source, interpreter.realm(), source_name);
+        if (script_or_error.is_error()) {
+            auto error = script_or_error.error()[0];
+            auto hint = error.source_location_hint(source);
+            if (!hint.is_empty())
+                outln("{}", hint);
+            outln(error.to_string());
+            result = JS::SyntaxError::create(interpreter.global_object(), error.to_string());
+        } else {
+            auto return_early = run_script_or_module(script_or_error.value());
+            if (return_early == ReturnEarly::Yes)
+                return true;
+        }
+    } else {
+        auto module_or_error = JS::SourceTextModule::parse(source, interpreter.realm(), source_name);
+        if (module_or_error.is_error()) {
+            auto error = module_or_error.error()[0];
+            auto hint = error.source_location_hint(source);
+            if (!hint.is_empty())
+                outln("{}", hint);
+            outln(error.to_string());
+            result = JS::SyntaxError::create(interpreter.global_object(), error.to_string());
+        } else {
+            auto return_early = run_script_or_module(module_or_error.value());
+            if (return_early == ReturnEarly::Yes)
+                return true;
         }
     }
 
-    auto handle_exception = [&] {
-        auto* exception = vm->exception();
-        vm->clear_exception();
-        out("Uncaught exception: ");
-        print(exception->value());
-        auto& traceback = exception->traceback();
+    auto handle_exception = [&](JS::Value thrown_value) {
+        js_out("Uncaught exception: ");
+        print(thrown_value);
+
+        if (!thrown_value.is_object() || !is<JS::Error>(thrown_value.as_object()))
+            return;
+        auto& traceback = static_cast<JS::Error const&>(thrown_value.as_object()).traceback();
         if (traceback.size() > 1) {
             unsigned repetitions = 0;
             for (size_t i = 0; i < traceback.size(); ++i) {
@@ -599,64 +1112,90 @@ static bool parse_and_run(JS::Interpreter& interpreter, const StringView& source
                     // If more than 5 (1 + >4) consecutive function calls with the same name, print
                     // the name only once and show the number of repetitions instead. This prevents
                     // printing ridiculously large call stacks of recursive functions.
-                    outln(" -> {}", traceback_frame.function_name);
-                    outln(" {} more calls", repetitions);
+                    js_outln(" -> {}", traceback_frame.function_name);
+                    js_outln(" {} more calls", repetitions);
                 } else {
                     for (size_t j = 0; j < repetitions + 1; ++j)
-                        outln(" -> {}", traceback_frame.function_name);
+                        js_outln(" -> {}", traceback_frame.function_name);
                 }
                 repetitions = 0;
             }
         }
     };
 
-    if (vm->exception()) {
-        handle_exception();
+    if (!result.is_error())
+        last_value = JS::make_handle(result.value());
+
+    if (result.is_error()) {
+        VERIFY(result.throw_completion().value().has_value());
+        handle_exception(*result.release_error().value());
         return false;
-    }
-    if (s_print_last_result)
-        print(vm->last_value());
-    if (vm->exception()) {
-        handle_exception();
-        return false;
+    } else if (s_print_last_result) {
+        print(result.value());
     }
     return true;
 }
 
-static JS::Value load_file_impl(JS::VM& vm, JS::GlobalObject& global_object)
+static JS::ThrowCompletionOr<JS::Value> load_file_impl(JS::VM& vm, JS::GlobalObject& global_object)
 {
-    auto filename = vm.argument(0).to_string(global_object);
-    if (vm.exception())
-        return {};
+    auto filename = TRY(vm.argument(0).to_string(global_object));
     auto file = Core::File::construct(filename);
-    if (!file->open(Core::OpenMode::ReadOnly)) {
-        vm.throw_exception<JS::Error>(global_object, String::formatted("Failed to open '{}': {}", filename, file->error_string()));
-        return {};
-    }
+    if (!file->open(Core::OpenMode::ReadOnly))
+        return vm.throw_completion<JS::Error>(global_object, String::formatted("Failed to open '{}': {}", filename, file->error_string()));
     auto file_contents = file->read_all();
-    auto source = file_has_shebang(file_contents)
-        ? strip_shebang(file_contents)
-        : StringView { file_contents };
-    auto parser = JS::Parser(JS::Lexer(source));
-    auto program = parser.parse_program();
-    if (parser.has_errors()) {
-        auto& error = parser.errors()[0];
-        vm.throw_exception<JS::SyntaxError>(global_object, error.to_string());
-        return {};
+    auto source = StringView { file_contents };
+    auto script_or_error = JS::Script::parse(source, vm.interpreter().realm(), filename);
+    if (script_or_error.is_error()) {
+        auto& error = script_or_error.error()[0];
+        return vm.throw_completion<JS::SyntaxError>(global_object, error.to_string());
     }
     // FIXME: Use eval()-like semantics and execute in current scope?
-    vm.interpreter().run(global_object, *program);
+    TRY(vm.interpreter().run(script_or_error.value()));
     return JS::js_undefined();
+}
+
+static JS::ThrowCompletionOr<JS::Value> load_json_impl(JS::VM& vm, JS::GlobalObject& global_object)
+{
+    auto filename = TRY(vm.argument(0).to_string(global_object));
+    auto file = Core::File::construct(filename);
+    if (!file->open(Core::OpenMode::ReadOnly))
+        return vm.throw_completion<JS::Error>(global_object, String::formatted("Failed to open '{}': {}", filename, file->error_string()));
+    auto file_contents = file->read_all();
+    auto json = JsonValue::from_string(file_contents);
+    if (json.is_error())
+        return vm.throw_completion<JS::SyntaxError>(global_object, JS::ErrorType::JsonMalformed);
+    return JS::JSONObject::parse_json_value(global_object, json.value());
 }
 
 void ReplObject::initialize_global_object()
 {
     Base::initialize_global_object();
-    define_property("global", this, JS::Attribute::Enumerable);
-    define_native_function("exit", exit_interpreter);
-    define_native_function("help", repl_help);
-    define_native_function("load", load_file, 1);
-    define_native_function("save", save_to_file, 1);
+    define_direct_property("global", this, JS::Attribute::Enumerable);
+    u8 attr = JS::Attribute::Configurable | JS::Attribute::Writable | JS::Attribute::Enumerable;
+    define_native_function("exit", exit_interpreter, 0, attr);
+    define_native_function("help", repl_help, 0, attr);
+    define_native_function("load", load_file, 1, attr);
+    define_native_function("save", save_to_file, 1, attr);
+    define_native_function("loadJSON", load_json, 1, attr);
+    define_native_function("print", print, 1, attr);
+
+    define_native_accessor(
+        "_",
+        [](JS::VM&, JS::GlobalObject&) {
+            return last_value.value();
+        },
+        [](JS::VM& vm, JS::GlobalObject& global_object) -> JS::ThrowCompletionOr<JS::Value> {
+            VERIFY(is<ReplObject>(global_object));
+            outln("Disable writing last value to '_'");
+
+            // We must delete first otherwise this setter gets called recursively.
+            TRY(global_object.internal_delete(JS::PropertyKey { "_" }));
+
+            auto value = vm.argument(0);
+            TRY(global_object.internal_set(JS::PropertyKey { "_" }, value, &global_object));
+            return value;
+        },
+        attr);
 }
 
 JS_DEFINE_NATIVE_FUNCTION(ReplObject::save_to_file)
@@ -675,19 +1214,16 @@ JS_DEFINE_NATIVE_FUNCTION(ReplObject::exit_interpreter)
 {
     if (!vm.argument_count())
         exit(0);
-    auto exit_code = vm.argument(0).to_number(global_object);
-    if (::vm->exception())
-        return {};
-    exit(exit_code.as_double());
+    exit(TRY(vm.argument(0).to_number(global_object)).as_double());
 }
 
 JS_DEFINE_NATIVE_FUNCTION(ReplObject::repl_help)
 {
-    outln("REPL commands:");
-    outln("    exit(code): exit the REPL with specified code. Defaults to 0.");
-    outln("    help(): display this menu");
-    outln("    load(file): load given JS file into running session. For example: load(\"foo.js\")");
-    outln("    save(file): write REPL input history to the given file. For example: save(\"foo.txt\")");
+    js_outln("REPL commands:");
+    js_outln("    exit(code): exit the REPL with specified code. Defaults to 0.");
+    js_outln("    help(): display this menu");
+    js_outln("    load(file): load given JS file into running session. For example: load(\"foo.js\")");
+    js_outln("    save(file): write REPL input history to the given file. For example: save(\"foo.txt\")");
     return JS::js_undefined();
 }
 
@@ -696,16 +1232,41 @@ JS_DEFINE_NATIVE_FUNCTION(ReplObject::load_file)
     return load_file_impl(vm, global_object);
 }
 
+JS_DEFINE_NATIVE_FUNCTION(ReplObject::load_json)
+{
+    return load_json_impl(vm, global_object);
+}
+
+JS_DEFINE_NATIVE_FUNCTION(ReplObject::print)
+{
+    ::print(vm.argument(0));
+    return JS::js_undefined();
+}
+
 void ScriptObject::initialize_global_object()
 {
     Base::initialize_global_object();
-    define_property("global", this, JS::Attribute::Enumerable);
-    define_native_function("load", load_file, 1);
+    define_direct_property("global", this, JS::Attribute::Enumerable);
+    u8 attr = JS::Attribute::Configurable | JS::Attribute::Writable | JS::Attribute::Enumerable;
+    define_native_function("load", load_file, 1, attr);
+    define_native_function("loadJSON", load_json, 1, attr);
+    define_native_function("print", print, 1, attr);
 }
 
 JS_DEFINE_NATIVE_FUNCTION(ScriptObject::load_file)
 {
     return load_file_impl(vm, global_object);
+}
+
+JS_DEFINE_NATIVE_FUNCTION(ScriptObject::load_json)
+{
+    return load_json_impl(vm, global_object);
+}
+
+JS_DEFINE_NATIVE_FUNCTION(ScriptObject::print)
+{
+    ::print(vm.argument(0));
+    return JS::js_undefined();
 }
 
 static void repl(JS::Interpreter& interpreter)
@@ -715,7 +1276,7 @@ static void repl(JS::Interpreter& interpreter)
         if (piece.is_empty())
             continue;
         repl_statements.append(piece);
-        parse_and_run(interpreter, piece);
+        parse_and_run(interpreter, piece, "REPL");
     }
 }
 
@@ -732,142 +1293,140 @@ public:
     {
     }
 
-    virtual JS::Value log() override
+    virtual void clear() override
     {
-        outln("{}", vm().join_arguments());
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value info() override
-    {
-        outln("(i) {}", vm().join_arguments());
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value debug() override
-    {
-        outln("\033[36;1m{}\033[0m", vm().join_arguments());
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value warn() override
-    {
-        outln("\033[33;1m{}\033[0m", vm().join_arguments());
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value error() override
-    {
-        outln("\033[31;1m{}\033[0m", vm().join_arguments());
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value clear() override
-    {
-        out("\033[3J\033[H\033[2J");
+        js_out("\033[3J\033[H\033[2J");
+        m_group_stack_depth = 0;
         fflush(stdout);
-        return JS::js_undefined();
     }
 
-    virtual JS::Value trace() override
+    virtual void end_group() override
     {
-        outln("{}", vm().join_arguments());
-        auto trace = get_trace();
-        for (auto& function_name : trace) {
-            if (function_name.is_empty())
-                function_name = "<anonymous>";
-            outln(" -> {}", function_name);
+        if (m_group_stack_depth > 0)
+            m_group_stack_depth--;
+    }
+
+    // 2.3. Printer(logLevel, args[, options]), https://console.spec.whatwg.org/#printer
+    virtual JS::ThrowCompletionOr<JS::Value> printer(JS::Console::LogLevel log_level, PrinterArguments arguments) override
+    {
+        String indent = String::repeated("  ", m_group_stack_depth);
+
+        if (log_level == JS::Console::LogLevel::Trace) {
+            auto trace = arguments.get<JS::Console::Trace>();
+            StringBuilder builder;
+            if (!trace.label.is_empty())
+                builder.appendff("{}\033[36;1m{}\033[0m\n", indent, trace.label);
+
+            for (auto& function_name : trace.stack)
+                builder.appendff("{}-> {}\n", indent, function_name);
+
+            js_outln("{}", builder.string_view());
+            return JS::js_undefined();
+        }
+
+        if (log_level == JS::Console::LogLevel::Group || log_level == JS::Console::LogLevel::GroupCollapsed) {
+            auto group = arguments.get<JS::Console::Group>();
+            js_outln("{}\033[36;1m{}\033[0m", indent, group.label);
+            m_group_stack_depth++;
+            return JS::js_undefined();
+        }
+
+        auto output = String::join(" ", arguments.get<Vector<JS::Value>>());
+        m_console.output_debug_message(log_level, output);
+
+        switch (log_level) {
+        case JS::Console::LogLevel::Debug:
+            js_outln("{}\033[36;1m{}\033[0m", indent, output);
+            break;
+        case JS::Console::LogLevel::Error:
+        case JS::Console::LogLevel::Assert:
+            js_outln("{}\033[31;1m{}\033[0m", indent, output);
+            break;
+        case JS::Console::LogLevel::Info:
+            js_outln("{}(i) {}", indent, output);
+            break;
+        case JS::Console::LogLevel::Log:
+            js_outln("{}{}", indent, output);
+            break;
+        case JS::Console::LogLevel::Warn:
+        case JS::Console::LogLevel::CountReset:
+            js_outln("{}\033[33;1m{}\033[0m", indent, output);
+            break;
+        default:
+            js_outln("{}{}", indent, output);
+            break;
         }
         return JS::js_undefined();
     }
 
-    virtual JS::Value count() override
-    {
-        auto label = vm().argument_count() ? vm().argument(0).to_string_without_side_effects() : "default";
-        auto counter_value = m_console.counter_increment(label);
-        outln("{}: {}", label, counter_value);
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value count_reset() override
-    {
-        auto label = vm().argument_count() ? vm().argument(0).to_string_without_side_effects() : "default";
-        if (m_console.counter_reset(label))
-            outln("{}: 0", label);
-        else
-            outln("\033[33;1m\"{}\" doesn't have a count\033[0m", label);
-        return JS::js_undefined();
-    }
-
-    virtual JS::Value assert_() override
-    {
-        auto& vm = this->vm();
-        if (!vm.argument(0).to_boolean()) {
-            if (vm.argument_count() > 1) {
-                out("\033[31;1mAssertion failed:\033[0m");
-                outln(" {}", vm.join_arguments(1));
-            } else {
-                outln("\033[31;1mAssertion failed\033[0m");
-            }
-        }
-        return JS::js_undefined();
-    }
+private:
+    int m_group_stack_depth { 0 };
 };
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
+#ifdef __serenity__
+    TRY(Core::System::pledge("stdio rpath wpath cpath tty sigaction"));
+#endif
+
     bool gc_on_every_allocation = false;
     bool disable_syntax_highlight = false;
-    const char* script_path = nullptr;
+    StringView evaluate_script;
+    Vector<StringView> script_paths;
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help("This is a JavaScript interpreter.");
     args_parser.add_option(s_dump_ast, "Dump the AST", "dump-ast", 'A');
-    args_parser.add_option(s_dump_bytecode, "Dump the bytecode", "dump-bytecode", 'd');
+    args_parser.add_option(JS::Bytecode::g_dump_bytecode, "Dump the bytecode", "dump-bytecode", 'd');
     args_parser.add_option(s_run_bytecode, "Run the bytecode", "run-bytecode", 'b');
+    args_parser.add_option(s_opt_bytecode, "Optimize the bytecode", "optimize-bytecode", 'p');
+    args_parser.add_option(s_as_module, "Treat as module", "as-module", 'm');
     args_parser.add_option(s_print_last_result, "Print last result", "print-last-result", 'l');
+    args_parser.add_option(s_strip_ansi, "Disable ANSI colors", "disable-ansi-colors", 'i');
+    args_parser.add_option(s_disable_source_location_hints, "Disable source location hints", "disable-source-location-hints", 'h');
     args_parser.add_option(gc_on_every_allocation, "GC on every allocation", "gc-on-every-allocation", 'g');
     args_parser.add_option(disable_syntax_highlight, "Disable live syntax highlighting", "no-syntax-highlight", 's');
-    args_parser.add_positional_argument(script_path, "Path to script file", "script", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.add_option(evaluate_script, "Evaluate argument as a script", "evaluate", 'c', "script");
+    args_parser.add_positional_argument(script_paths, "Path to script files", "scripts", Core::ArgsParser::Required::No);
+    args_parser.parse(arguments);
 
     bool syntax_highlight = !disable_syntax_highlight;
 
     vm = JS::VM::create();
+    vm->enable_default_host_import_module_dynamically_hook();
+
     // NOTE: These will print out both warnings when using something like Promise.reject().catch(...) -
     // which is, as far as I can tell, correct - a promise is created, rejected without handler, and a
     // handler then attached to it. The Node.js REPL doesn't warn in this case, so it's something we
     // might want to revisit at a later point and disable warnings for promises created this way.
     vm->on_promise_unhandled_rejection = [](auto& promise) {
         // FIXME: Optionally make print_value() to print to stderr
-        out("WARNING: A promise was rejected without any handlers");
-        out(" (result: ");
+        js_out("WARNING: A promise was rejected without any handlers");
+        js_out(" (result: ");
         HashTable<JS::Object*> seen_objects;
         print_value(promise.result(), seen_objects);
-        outln(")");
+        js_outln(")");
     };
     vm->on_promise_rejection_handled = [](auto& promise) {
         // FIXME: Optionally make print_value() to print to stderr
-        out("WARNING: A handler was added to an already rejected promise");
-        out(" (result: ");
+        js_out("WARNING: A handler was added to an already rejected promise");
+        js_out(" (result: ");
         HashTable<JS::Object*> seen_objects;
         print_value(promise.result(), seen_objects);
-        outln(")");
+        js_outln(")");
     };
     OwnPtr<JS::Interpreter> interpreter;
 
-    interrupt_interpreter = [&] {
-        auto error = JS::Error::create(interpreter->global_object(), "Received SIGINT");
-        vm->throw_exception(interpreter->global_object(), error);
-    };
+    // FIXME: Figure out some way to interrupt the interpreter now that vm.exception() is gone.
 
-    if (script_path == nullptr) {
+    if (evaluate_script.is_empty() && script_paths.is_empty()) {
         s_print_last_result = true;
         interpreter = JS::Interpreter::create<ReplObject>(*vm);
         ReplConsoleClient console_client(interpreter->global_object().console());
         interpreter->global_object().console().set_client(console_client);
         interpreter->heap().set_should_collect_on_every_allocation(gc_on_every_allocation);
-        interpreter->vm().set_underscore_is_last_value(true);
+
+        auto& global_environment = interpreter->realm().global_environment();
 
         s_editor = Line::Editor::construct();
         s_editor->load_history(s_history_path);
@@ -891,8 +1450,8 @@ int main(int argc, char** argv)
             JS::Lexer lexer(line);
             bool indenters_starting_line = true;
             for (JS::Token token = lexer.next(); token.type() != JS::TokenType::Eof; token = lexer.next()) {
-                auto length = token.value().length();
-                auto start = token.line_column() - 1;
+                auto length = Utf8View { token.value() }.length();
+                auto start = token.offset();
                 auto end = start + length;
                 if (indenters_starting_line) {
                     if (token.type() != JS::TokenType::ParenClose && token.type() != JS::TokenType::BracketClose && token.type() != JS::TokenType::CurlyClose) {
@@ -904,13 +1463,13 @@ int main(int argc, char** argv)
 
                 switch (token.category()) {
                 case JS::TokenCategory::Invalid:
-                    stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Red), Line::Style::Underline });
+                    stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::Red), Line::Style::Underline });
                     break;
                 case JS::TokenCategory::Number:
-                    stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Magenta) });
+                    stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::Magenta) });
                     break;
                 case JS::TokenCategory::String:
-                    stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Green), Line::Style::Bold });
+                    stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::Green), Line::Style::Bold });
                     break;
                 case JS::TokenCategory::Punctuation:
                     break;
@@ -920,18 +1479,19 @@ int main(int argc, char** argv)
                     switch (token.type()) {
                     case JS::TokenType::BoolLiteral:
                     case JS::TokenType::NullLiteral:
-                        stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Yellow), Line::Style::Bold });
+                        stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::Yellow), Line::Style::Bold });
                         break;
                     default:
-                        stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Blue), Line::Style::Bold });
+                        stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::Blue), Line::Style::Bold });
                         break;
                     }
                     break;
                 case JS::TokenCategory::ControlKeyword:
-                    stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Cyan), Line::Style::Italic });
+                    stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::Cyan), Line::Style::Italic });
                     break;
                 case JS::TokenCategory::Identifier:
-                    stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::White), Line::Style::Bold });
+                    stylize({ start, end, Line::Span::CodepointOriented }, { Line::Style::Foreground(Line::Style::XtermColor::White), Line::Style::Bold });
+                    break;
                 default:
                     break;
                 }
@@ -940,7 +1500,7 @@ int main(int argc, char** argv)
             editor.set_prompt(prompt_for_level(open_indents));
         };
 
-        auto complete = [&interpreter](const Line::Editor& editor) -> Vector<Line::CompletionSuggestion> {
+        auto complete = [&interpreter, &global_environment](Line::Editor const& editor) -> Vector<Line::CompletionSuggestion> {
             auto line = editor.line(editor.cursor());
 
             JS::Lexer lexer { line };
@@ -987,7 +1547,7 @@ int main(int argc, char** argv)
                 case CompleteProperty:
                     // something came after the property access, reset to initial
                 case Initial:
-                    if (js_token.is_identifier_name()) {
+                    if (js_token.type() == JS::TokenType::Identifier) {
                         // ...<name>...
                         mode = CompleteVariable;
                         variable_name = js_token.value();
@@ -1011,8 +1571,8 @@ int main(int argc, char** argv)
 
             Vector<Line::CompletionSuggestion> results;
 
-            Function<void(const JS::Shape&, const StringView&)> list_all_properties = [&results, &list_all_properties](const JS::Shape& shape, auto& property_pattern) {
-                for (const auto& descriptor : shape.property_table()) {
+            Function<void(JS::Shape const&, StringView)> list_all_properties = [&results, &list_all_properties](JS::Shape const& shape, auto property_pattern) {
+                for (auto const& descriptor : shape.property_table()) {
                     if (!descriptor.key.is_string())
                         continue;
                     auto key = descriptor.key.as_string();
@@ -1020,39 +1580,45 @@ int main(int argc, char** argv)
                         Line::CompletionSuggestion completion { key, Line::CompletionSuggestion::ForSearch };
                         if (!results.contains_slow(completion)) { // hide duplicates
                             results.append(String(key));
+                            results.last().invariant_offset = property_pattern.length();
                         }
                     }
                 }
-                if (const auto* prototype = shape.prototype()) {
+                if (auto const* prototype = shape.prototype()) {
                     list_all_properties(prototype->shape(), property_pattern);
                 }
             };
 
             switch (mode) {
             case CompleteProperty: {
-                auto maybe_variable = vm->get_variable(variable_name, interpreter->global_object());
-                if (maybe_variable.is_empty()) {
-                    maybe_variable = interpreter->global_object().get(FlyString(variable_name));
-                    if (maybe_variable.is_empty())
-                        break;
-                }
+                auto reference_or_error = vm->resolve_binding(variable_name, &global_environment);
+                if (reference_or_error.is_error())
+                    return {};
+                auto value_or_error = reference_or_error.value().get_value(interpreter->global_object());
+                if (value_or_error.is_error())
+                    return {};
+                auto variable = value_or_error.value();
+                VERIFY(!variable.is_empty());
 
-                auto variable = maybe_variable;
                 if (!variable.is_object())
                     break;
 
-                const auto* object = variable.to_object(interpreter->global_object());
-                const auto& shape = object->shape();
+                auto const* object = MUST(variable.to_object(interpreter->global_object()));
+                auto const& shape = object->shape();
                 list_all_properties(shape, property_name);
-                if (results.size())
-                    editor.suggest(property_name.length());
                 break;
             }
             case CompleteVariable: {
-                const auto& variable = interpreter->global_object();
+                auto const& variable = interpreter->global_object();
                 list_all_properties(variable.shape(), variable_name);
-                if (results.size())
-                    editor.suggest(variable_name.length());
+
+                for (auto const& name : global_environment.declarative_record().bindings()) {
+                    if (name.starts_with(variable_name)) {
+                        results.empend(name);
+                        results.last().invariant_offset = variable_name.length();
+                    }
+                }
+
                 break;
             }
             default:
@@ -1074,21 +1640,29 @@ int main(int argc, char** argv)
             sigint_handler();
         });
 
-        auto file = Core::File::construct(script_path);
-        if (!file->open(Core::OpenMode::ReadOnly)) {
-            warnln("Failed to open {}: {}", script_path, file->error_string());
-            return 1;
-        }
-        auto file_contents = file->read_all();
+        StringBuilder builder;
+        StringView source_name;
 
-        StringView source;
-        if (file_has_shebang(file_contents)) {
-            source = strip_shebang(file_contents);
+        if (evaluate_script.is_empty()) {
+            if (script_paths.size() > 1)
+                warnln("Warning: Multiple files supplied, this will concatenate the sources and resolve modules as if it was the first file");
+
+            for (auto& path : script_paths) {
+                auto file = TRY(Core::File::open(path, Core::OpenMode::ReadOnly));
+                auto file_contents = file->read_all();
+                auto source = StringView { file_contents };
+                builder.append(source);
+            }
+
+            source_name = script_paths[0];
         } else {
-            source = file_contents;
+            builder.append(evaluate_script);
+            source_name = "eval"sv;
         }
 
-        if (!parse_and_run(*interpreter, source))
+        // We resolve modules as if it is the first file
+
+        if (!parse_and_run(*interpreter, builder.string_view(), source_name))
             return 1;
     }
 

@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibGemini/GeminiJob.h>
+#include "ConnectionCache.h"
 #include <LibGemini/GeminiRequest.h>
+#include <LibGemini/Job.h>
 #include <RequestServer/GeminiProtocol.h>
 #include <RequestServer/GeminiRequest.h>
-#include <fcntl.h>
 
 namespace RequestServer {
 
@@ -21,7 +21,7 @@ GeminiProtocol::~GeminiProtocol()
 {
 }
 
-OwnPtr<Request> GeminiProtocol::start_request(ClientConnection& client, const String&, const URL& url, const HashMap<String, String>&, ReadonlyBytes)
+OwnPtr<Request> GeminiProtocol::start_request(ConnectionFromClient& client, const String&, const URL& url, const HashMap<String, String>&, ReadonlyBytes)
 {
     Gemini::GeminiRequest request;
     request.set_url(url);
@@ -30,12 +30,13 @@ OwnPtr<Request> GeminiProtocol::start_request(ClientConnection& client, const St
     if (pipe_result.is_error())
         return {};
 
-    auto output_stream = make<OutputFileStream>(pipe_result.value().write_fd);
-    output_stream->make_unbuffered();
-    auto job = Gemini::GeminiJob::construct(request, *output_stream);
-    auto protocol_request = GeminiRequest::create_with_job({}, client, (Gemini::GeminiJob&)*job, move(output_stream));
+    auto output_stream = MUST(Core::Stream::File::adopt_fd(pipe_result.value().write_fd, Core::Stream::OpenMode::Write));
+    auto job = Gemini::Job::construct(request, *output_stream);
+    auto protocol_request = GeminiRequest::create_with_job({}, client, *job, move(output_stream));
     protocol_request->set_request_fd(pipe_result.value().read_fd);
-    job->start();
+
+    ConnectionCache::get_or_create_connection(ConnectionCache::g_tls_connection_cache, url, *job);
+
     return protocol_request;
 }
 

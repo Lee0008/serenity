@@ -44,10 +44,12 @@ public:
 
     bool has_encoded_data() const { return !m_encoded_data.is_empty(); }
 
-    const URL& url() const { return m_request.url(); }
+    const AK::URL& url() const { return m_request.url(); }
     const ByteBuffer& encoded_data() const { return m_encoded_data; }
 
     const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers() const { return m_response_headers; }
+
+    [[nodiscard]] Optional<u32> status_code() const { return m_status_code; }
 
     void register_client(Badge<ResourceClient>, ResourceClient&);
     void unregister_client(Badge<ResourceClient>, ResourceClient&);

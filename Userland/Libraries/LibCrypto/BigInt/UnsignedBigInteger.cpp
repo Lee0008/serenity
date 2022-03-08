@@ -5,6 +5,7 @@
  */
 
 #include "UnsignedBigInteger.h"
+#include <AK/BuiltinWrappers.h>
 #include <AK/CharacterTypes.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringHash.h>
@@ -66,52 +67,23 @@ size_t UnsignedBigInteger::export_data(Bytes data, bool remove_leading_zeros) co
     return out;
 }
 
-UnsignedBigInteger UnsignedBigInteger::from_base10(const String& str)
+UnsignedBigInteger UnsignedBigInteger::from_base(u16 N, StringView str)
 {
+    VERIFY(N <= 36);
     UnsignedBigInteger result;
-    UnsignedBigInteger ten { 10 };
+    UnsignedBigInteger base { N };
 
     for (auto& c : str) {
-        result = result.multiplied_by(ten).plus(parse_ascii_digit(c));
+        if (c == '_')
+            continue;
+        result = result.multiplied_by(base).plus(parse_ascii_base36_digit(c));
     }
     return result;
 }
 
-UnsignedBigInteger UnsignedBigInteger::from_base2(const String& str)
+String UnsignedBigInteger::to_base(u16 N) const
 {
-    UnsignedBigInteger result;
-    UnsignedBigInteger two { 2 };
-
-    for (auto& c : str) {
-        result = result.multiplied_by(two).plus(parse_ascii_digit(c));
-    }
-    return result;
-}
-
-UnsignedBigInteger UnsignedBigInteger::from_base8(const String& str)
-{
-    UnsignedBigInteger result;
-    UnsignedBigInteger eight { 8 };
-
-    for (auto& c : str) {
-        result = result.multiplied_by(eight).plus(parse_ascii_digit(c));
-    }
-    return result;
-}
-
-UnsignedBigInteger UnsignedBigInteger::from_base16(const String& str)
-{
-    UnsignedBigInteger result;
-    UnsignedBigInteger sixteen { 16 };
-
-    for (auto& c : str) {
-        result = result.multiplied_by(sixteen).plus(parse_ascii_hex_digit(c));
-    }
-    return result;
-}
-
-String UnsignedBigInteger::to_base10() const
-{
+    VERIFY(N <= 36);
     if (*this == UnsignedBigInteger { 0 })
         return "0";
 
@@ -121,19 +93,13 @@ String UnsignedBigInteger::to_base10() const
     UnsignedBigInteger remainder;
 
     while (temp != UnsignedBigInteger { 0 }) {
-        UnsignedBigIntegerAlgorithms::divide_u16_without_allocation(temp, 10, quotient, remainder);
-        VERIFY(remainder.words()[0] < 10);
-        builder.append(static_cast<char>(remainder.words()[0] + '0'));
+        UnsignedBigIntegerAlgorithms::divide_u16_without_allocation(temp, N, quotient, remainder);
+        VERIFY(remainder.words()[0] < N);
+        builder.append(to_ascii_base36_digit(remainder.words()[0]));
         temp.set_to(quotient);
     }
 
-    auto reversed_string = builder.to_string();
-    builder.clear();
-    for (int i = reversed_string.length() - 1; i >= 0; --i) {
-        builder.append(reversed_string[i]);
-    }
-
-    return builder.to_string();
+    return builder.to_string().reverse();
 }
 
 u64 UnsignedBigInteger::to_u64() const
@@ -145,6 +111,12 @@ u64 UnsignedBigInteger::to_u64() const
     if (length() > 1)
         value |= static_cast<u64>(m_words[1]) << 32;
     return value;
+}
+
+double UnsignedBigInteger::to_double() const
+{
+    // FIXME: I am naive
+    return static_cast<double>(to_u64());
 }
 
 void UnsignedBigInteger::set_to_0()
@@ -171,6 +143,16 @@ void UnsignedBigInteger::set_to(const UnsignedBigInteger& other)
     __builtin_memcpy(m_words.data(), other.m_words.data(), other.m_words.size() * sizeof(u32));
     m_cached_trimmed_length = {};
     m_cached_hash = 0;
+}
+
+bool UnsignedBigInteger::is_zero() const
+{
+    for (size_t i = 0; i < length(); ++i) {
+        if (m_words[i] != 0)
+            return false;
+    }
+
+    return true;
 }
 
 size_t UnsignedBigInteger::trimmed_length() const
@@ -200,6 +182,17 @@ void UnsignedBigInteger::resize_with_leading_zeros(size_t new_length)
         m_words.resize_and_keep_capacity(new_length);
         __builtin_memset(&m_words.data()[old_length], 0, (new_length - old_length) * sizeof(u32));
     }
+}
+
+size_t UnsignedBigInteger::one_based_index_of_highest_set_bit() const
+{
+    size_t number_of_words = trimmed_length();
+    size_t index = 0;
+    if (number_of_words > 0) {
+        index += (number_of_words - 1) * BITS_IN_WORD;
+        index += BITS_IN_WORD - count_leading_zeroes(m_words[number_of_words - 1]);
+    }
+    return index;
 }
 
 FLATTEN UnsignedBigInteger UnsignedBigInteger::plus(const UnsignedBigInteger& other) const
@@ -247,11 +240,11 @@ FLATTEN UnsignedBigInteger UnsignedBigInteger::bitwise_xor(const UnsignedBigInte
     return result;
 }
 
-FLATTEN UnsignedBigInteger UnsignedBigInteger::bitwise_not() const
+FLATTEN UnsignedBigInteger UnsignedBigInteger::bitwise_not_fill_to_one_based_index(size_t size) const
 {
     UnsignedBigInteger result;
 
-    UnsignedBigIntegerAlgorithms::bitwise_not_without_allocation(*this, result);
+    UnsignedBigIntegerAlgorithms::bitwise_not_fill_to_one_based_index_without_allocation(*this, size, result);
 
     return result;
 }
@@ -367,16 +360,26 @@ bool UnsignedBigInteger::operator<(const UnsignedBigInteger& other) const
     return false;
 }
 
+bool UnsignedBigInteger::operator>(const UnsignedBigInteger& other) const
+{
+    return *this != other && !(*this < other);
 }
 
-void AK::Formatter<Crypto::UnsignedBigInteger>::format(FormatBuilder& fmtbuilder, const Crypto::UnsignedBigInteger& value)
+bool UnsignedBigInteger::operator>=(UnsignedBigInteger const& other) const
+{
+    return *this > other || *this == other;
+}
+
+}
+
+ErrorOr<void> AK::Formatter<Crypto::UnsignedBigInteger>::format(FormatBuilder& fmtbuilder, const Crypto::UnsignedBigInteger& value)
 {
     if (value.is_invalid())
         return Formatter<StringView>::format(fmtbuilder, "invalid");
 
     StringBuilder builder;
     for (int i = value.length() - 1; i >= 0; --i)
-        builder.appendff("{}|", value.words()[i]);
+        TRY(builder.try_appendff("{}|", value.words()[i]));
 
     return Formatter<StringView>::format(fmtbuilder, builder.string_view());
 }

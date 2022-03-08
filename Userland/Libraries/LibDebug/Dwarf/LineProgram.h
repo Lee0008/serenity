@@ -102,16 +102,31 @@ inline InputStream& operator>>(InputStream& stream, LineProgramUnitHeader32& hea
 }
 
 class LineProgram {
+    AK_MAKE_NONCOPYABLE(LineProgram);
+    AK_MAKE_NONMOVABLE(LineProgram);
+
 public:
     explicit LineProgram(DwarfInfo& dwarf_info, InputMemoryStream& stream);
 
     struct LineInfo {
-        u32 address { 0 };
+        FlatPtr address { 0 };
         FlyString file;
         size_t line { 0 };
     };
 
-    const Vector<LineInfo>& lines() const { return m_lines; }
+    Vector<LineInfo> const& lines() const { return m_lines; }
+
+    struct DirectoryAndFile {
+        FlyString directory;
+        FlyString filename;
+    };
+    DirectoryAndFile get_directory_and_file(size_t file_index) const;
+
+    struct FileEntry {
+        FlyString name;
+        size_t directory_index { 0 };
+    };
+    Vector<FileEntry> const& source_files() const { return m_source_files; }
 
 private:
     void parse_unit_header();
@@ -138,7 +153,7 @@ private:
         SetBasicBlock,
         ConstAddPc,
         FixAdvancePc,
-        SetProlougeEnd,
+        SetPrologueEnd,
         SetEpilogueBegin,
         SetIsa
     };
@@ -148,11 +163,6 @@ private:
         SetAddress,
         DefineFile,
         SetDiscriminator,
-    };
-
-    struct FileEntry {
-        FlyString name;
-        size_t directory_index { 0 };
     };
 
     static constexpr u16 MIN_DWARF_VERSION = 3;
@@ -167,11 +177,12 @@ private:
     Vector<FileEntry> m_source_files;
 
     // The registers of the "line program" virtual machine
-    u32 m_address { 0 };
+    FlatPtr m_address { 0 };
     size_t m_line { 0 };
     size_t m_file_index { 0 };
     bool m_is_statement { false };
     bool m_basic_block { false };
+    bool m_prologue_end { false };
 
     Vector<LineInfo> m_lines;
 };

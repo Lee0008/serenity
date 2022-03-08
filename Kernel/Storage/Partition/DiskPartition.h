@@ -7,12 +7,15 @@
 #pragma once
 
 #include <AK/RefPtr.h>
+#include <AK/WeakPtr.h>
 #include <Kernel/Devices/BlockDevice.h>
 #include <Kernel/Storage/Partition/DiskPartitionMetadata.h>
 
 namespace Kernel {
 
 class DiskPartition final : public BlockDevice {
+    friend class DeviceManagement;
+
 public:
     static NonnullRefPtr<DiskPartition> create(BlockDevice&, unsigned, DiskPartitionMetadata);
     virtual ~DiskPartition();
@@ -20,23 +23,18 @@ public:
     virtual void start_request(AsyncBlockDeviceRequest&) override;
 
     // ^BlockDevice
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
-
-    // ^Device
-    virtual mode_t required_mode() const override { return 0600; }
-    virtual String device_name() const override;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
 
     const DiskPartitionMetadata& metadata() const;
 
 private:
-    virtual const char* class_name() const override;
-
     DiskPartition(BlockDevice&, unsigned, DiskPartitionMetadata);
+    virtual StringView class_name() const override;
 
-    NonnullRefPtr<BlockDevice> m_device;
+    WeakPtr<BlockDevice> m_device;
     DiskPartitionMetadata m_metadata;
 };
 

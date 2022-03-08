@@ -16,6 +16,11 @@ class Emoji;
 class Font;
 class GlyphBitmap;
 class ImageDecoder;
+struct FontMetrics;
+
+template<typename T>
+class Line;
+
 class Painter;
 class Palette;
 class PaletteImpl;
@@ -33,6 +38,9 @@ class Size;
 
 template<typename T>
 class Rect;
+
+using IntLine = Line<int>;
+using FloatLine = Line<float>;
 
 using IntRect = Rect<int>;
 using FloatRect = Rect<float>;

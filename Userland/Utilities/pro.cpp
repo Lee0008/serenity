@@ -12,6 +12,8 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <LibProtocol/Request.h>
 #include <LibProtocol/RequestClient.h>
 #include <ctype.h>
@@ -20,7 +22,7 @@
 // FIXME: Move this somewhere else when it's needed (e.g. in the Browser)
 class ContentDispositionParser {
 public:
-    ContentDispositionParser(const StringView& value)
+    ContentDispositionParser(StringView value)
     {
         GenericLexer lexer(value);
 
@@ -84,8 +86,8 @@ public:
         FormData,
     };
 
-    const StringView& filename() const { return m_filename; }
-    const StringView& name() const { return m_name; }
+    StringView filename() const { return m_filename; }
+    StringView name() const { return m_name; }
     Kind kind() const { return m_kind; }
     bool might_be_wrong() const { return m_might_be_wrong; }
 
@@ -122,7 +124,9 @@ private:
     {
         if (!m_condition()) {
         write_to_buffer:;
-            m_buffer.append(bytes.data(), bytes.size());
+            // FIXME: Propagate errors.
+            if (m_buffer.try_append(bytes.data(), bytes.size()).is_error())
+                return 0;
             return bytes.size();
         }
 
@@ -141,7 +145,7 @@ private:
     ByteBuffer m_buffer;
 };
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     const char* url_str = nullptr;
     bool save_at_provided_name = false;
@@ -163,14 +167,14 @@ int main(int argc, char** argv)
         .value_name = "header-value",
         .accept_value = [&](auto* s) {
             StringView header { s };
-            auto split = header.find_first_of(':');
+            auto split = header.find(':');
             if (!split.has_value())
                 return false;
             request_headers.set(header.substring_view(0, split.value()), header.substring_view(split.value() + 1));
             return true;
         } });
     args_parser.add_positional_argument(url_str, "URL to download from", "url");
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     if (data) {
         method = "POST";
@@ -184,7 +188,7 @@ int main(int argc, char** argv)
     }
 
     Core::EventLoop loop;
-    auto protocol_client = Protocol::RequestClient::construct();
+    auto protocol_client = TRY(Protocol::RequestClient::try_create());
 
     auto request = protocol_client->start_request(method, url, request_headers, data ? StringView { data }.bytes() : ReadonlyBytes {});
     if (!request) {

@@ -24,6 +24,7 @@ constexpr static Array<int, 7>
     rsa_md5_encryption_oid { 1, 2, 840, 113549, 1, 1, 4 },
     rsa_sha1_encryption_oid { 1, 2, 840, 113549, 1, 1, 5 },
     rsa_sha256_encryption_oid { 1, 2, 840, 113549, 1, 1, 11 },
+    rsa_sha384_encryption_oid { 1, 2, 840, 113549, 1, 1, 12 },
     rsa_sha512_encryption_oid { 1, 2, 840, 113549, 1, 1, 13 };
 
 constexpr static Array<int, 4>
@@ -106,8 +107,8 @@ Optional<Certificate> Certificate::parse_asn1(ReadonlyBytes buffer, bool)
     //     validity                     Validity,
     //     subject                      Name,
     //     subject_public_key_info      SubjectPublicKeyInfo,
-    //     issuer_unique_id         (1) IMPLICIT UniqueIdentifer OPTIONAL (if present, version > v1),
-    //     subject_unique_id        (2) IMPLICIT UniqueIdentiier OPTIONAL (if present, version > v1),
+    //     issuer_unique_id         (1) IMPLICIT UniqueIdentifier OPTIONAL (if present, version > v1),
+    //     subject_unique_id        (2) IMPLICIT UniqueIdentifier OPTIONAL (if present, version > v1),
     //     extensions               (3) EXPLICIT Extensions OPTIONAL      (if present, version > v2)
     // }
     ENTER_SCOPE_OR_FAIL(Sequence, "Certificate::TBSCertificate");
@@ -119,7 +120,7 @@ Optional<Certificate> Certificate::parse_asn1(ReadonlyBytes buffer, bool)
             ENTER_SCOPE_WITHOUT_TYPECHECK("Certificate::version");
             READ_OBJECT_OR_FAIL(Integer, Crypto::UnsignedBigInteger, value, "Certificate::version");
             if (!(value < 3)) {
-                dbgln_if(TLS_DEBUG, "Certificate::version Invalid value for version: {}", value.to_base10());
+                dbgln_if(TLS_DEBUG, "Certificate::version Invalid value for version: {}", value.to_base(10));
                 return {};
             }
             certificate.version = value.words()[0];
@@ -151,6 +152,8 @@ Optional<Certificate> Certificate::parse_asn1(ReadonlyBytes buffer, bool)
             field = CertificateKeyAlgorithm ::RSA_SHA1;
         else if (identifier == rsa_sha256_encryption_oid)
             field = CertificateKeyAlgorithm ::RSA_SHA256;
+        else if (identifier == rsa_sha384_encryption_oid)
+            field = CertificateKeyAlgorithm ::RSA_SHA384;
         else if (identifier == rsa_sha512_encryption_oid)
             field = CertificateKeyAlgorithm ::RSA_SHA512;
         else
@@ -413,7 +416,7 @@ Optional<Certificate> Certificate::parse_asn1(ReadonlyBytes buffer, bool)
                             case 3:
                                 // x400Address
                                 // We don't know how to use this.
-                                DROP_OBJECT_OR_FAIL("Certificate::TBSCertificate::Extensions::$::Extension::extension_value::SubjectAlternativeName::$::X400Adress");
+                                DROP_OBJECT_OR_FAIL("Certificate::TBSCertificate::Extensions::$::Extension::extension_value::SubjectAlternativeName::$::X400Address");
                                 break;
                             case 4:
                                 // Directory name

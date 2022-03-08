@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,6 +16,7 @@
 namespace PixelPaint {
 
 class Image;
+class Selection;
 
 class Layer
     : public RefCounted<Layer>
@@ -24,11 +26,11 @@ class Layer
     AK_MAKE_NONMOVABLE(Layer);
 
 public:
-    static RefPtr<Layer> try_create_with_size(Image&, Gfx::IntSize const&, String name);
-    static RefPtr<Layer> try_create_with_bitmap(Image&, NonnullRefPtr<Gfx::Bitmap>, String name);
-    static RefPtr<Layer> try_create_snapshot(Image&, Layer const&);
+    static ErrorOr<NonnullRefPtr<Layer>> try_create_with_size(Image&, Gfx::IntSize const&, String name);
+    static ErrorOr<NonnullRefPtr<Layer>> try_create_with_bitmap(Image&, NonnullRefPtr<Gfx::Bitmap>, String name);
+    static ErrorOr<NonnullRefPtr<Layer>> try_create_snapshot(Image&, Layer const&);
 
-    ~Layer() { }
+    ~Layer() = default;
 
     Gfx::IntPoint const& location() const { return m_location; }
     void set_location(Gfx::IntPoint const& location) { m_location = location; }
@@ -45,7 +47,7 @@ public:
 
     void set_bitmap(NonnullRefPtr<Gfx::Bitmap> bitmap) { m_bitmap = move(bitmap); }
 
-    void did_modify_bitmap(Image&);
+    void did_modify_bitmap(Gfx::IntRect const& = {});
 
     void set_selected(bool selected) { m_selected = selected; }
     bool is_selected() const { return m_selected; }
@@ -55,6 +57,12 @@ public:
 
     int opacity_percent() const { return m_opacity_percent; }
     void set_opacity_percent(int);
+
+    RefPtr<Gfx::Bitmap> try_copy_bitmap(Selection const&) const;
+
+    Image const& image() const { return m_image; }
+
+    void erase_selection(Selection const&);
 
 private:
     Layer(Image&, NonnullRefPtr<Gfx::Bitmap>, String name);

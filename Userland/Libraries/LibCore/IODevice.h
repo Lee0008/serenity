@@ -12,6 +12,8 @@
 
 namespace Core {
 
+class IODevice;
+
 // This is not necessarily a valid iterator in all contexts,
 // if we had concepts, this would be InputIterator, not Copyable, Movable.
 class LineIterator {
@@ -32,6 +34,20 @@ private:
     NonnullRefPtr<IODevice> m_device;
     bool m_is_end { false };
     String m_buffer;
+};
+
+class LineRange {
+public:
+    LineRange() = delete;
+    explicit LineRange(IODevice& device)
+        : m_device(device)
+    {
+    }
+    LineIterator begin();
+    LineIterator end();
+
+private:
+    IODevice& m_device;
 };
 
 enum class OpenMode : unsigned {
@@ -75,13 +91,14 @@ public:
     String read_line(size_t max_size = 16384);
 
     bool write(const u8*, int size);
-    bool write(const StringView&);
+    bool write(StringView);
 
     bool truncate(off_t);
 
     bool can_read_line() const;
 
     bool can_read() const;
+    bool can_read_only_from_buffer() const { return !m_buffered_data.is_empty() && !can_read_from_fd(); }
 
     bool seek(i64, SeekMode = SeekMode::SetPosition, off_t* = nullptr);
 
@@ -90,6 +107,10 @@ public:
 
     LineIterator line_begin() & { return LineIterator(*this); }
     LineIterator line_end() { return LineIterator(*this, true); }
+    LineRange lines()
+    {
+        return LineRange(*this);
+    }
 
 protected:
     explicit IODevice(Object* parent = nullptr);
@@ -102,7 +123,7 @@ protected:
     virtual void did_update_fd(int) { }
 
 private:
-    bool populate_read_buffer() const;
+    bool populate_read_buffer(size_t size = 1024) const;
     bool can_read_from_fd() const;
 
     int m_fd { -1 };

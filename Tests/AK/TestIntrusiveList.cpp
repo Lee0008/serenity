@@ -15,7 +15,7 @@ public:
     IntrusiveTestItem() = default;
     IntrusiveListNode<IntrusiveTestItem> m_list_node;
 };
-using IntrusiveTestList = IntrusiveList<IntrusiveTestItem, RawPtr<IntrusiveTestItem>, &IntrusiveTestItem::m_list_node>;
+using IntrusiveTestList = IntrusiveList<&IntrusiveTestItem::m_list_node>;
 
 TEST_CASE(construct)
 {
@@ -31,6 +31,32 @@ TEST_CASE(insert)
     EXPECT(!list.is_empty());
 
     delete list.take_last();
+}
+
+TEST_CASE(insert_before)
+{
+    IntrusiveTestList list;
+    auto two = new IntrusiveTestItem();
+    list.append(*two);
+    auto zero = new IntrusiveTestItem();
+    list.append(*zero);
+    auto one = new IntrusiveTestItem();
+    list.insert_before(*zero, *one);
+
+    EXPECT_EQ(list.first(), two);
+    EXPECT_EQ(list.last(), zero);
+    EXPECT(list.contains(*zero));
+    EXPECT(list.contains(*one));
+    EXPECT(list.contains(*two));
+
+    EXPECT(zero->m_list_node.is_in_list());
+    EXPECT(one->m_list_node.is_in_list());
+    EXPECT(two->m_list_node.is_in_list());
+    EXPECT_EQ(list.size_slow(), 3u);
+
+    while (auto elem = list.take_first()) {
+        delete elem;
+    }
 }
 
 TEST_CASE(enumeration)
@@ -65,7 +91,7 @@ public:
     IntrusiveRefPtrItem() = default;
     IntrusiveListNode<IntrusiveRefPtrItem, RefPtr<IntrusiveRefPtrItem>> m_list_node;
 };
-using IntrusiveRefPtrList = IntrusiveList<IntrusiveRefPtrItem, RefPtr<IntrusiveRefPtrItem>, &IntrusiveRefPtrItem::m_list_node>;
+using IntrusiveRefPtrList = IntrusiveList<&IntrusiveRefPtrItem::m_list_node>;
 
 TEST_CASE(intrusive_ref_ptr_no_ref_leaks)
 {
@@ -112,7 +138,7 @@ public:
     IntrusiveNonnullRefPtrItem() = default;
     IntrusiveListNode<IntrusiveNonnullRefPtrItem, NonnullRefPtr<IntrusiveNonnullRefPtrItem>> m_list_node;
 };
-using IntrusiveNonnullRefPtrList = IntrusiveList<IntrusiveNonnullRefPtrItem, NonnullRefPtr<IntrusiveNonnullRefPtrItem>, &IntrusiveNonnullRefPtrItem::m_list_node>;
+using IntrusiveNonnullRefPtrList = IntrusiveList<&IntrusiveNonnullRefPtrItem::m_list_node>;
 
 TEST_CASE(intrusive_nonnull_ref_ptr_intrusive)
 {

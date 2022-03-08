@@ -12,7 +12,7 @@
 #include <AK/Vector.h>
 #include <LibGfx/BitmapFont.h>
 #include <LibGfx/Font.h>
-#include <LibTTF/Font.h>
+#include <LibGfx/TrueTypeFont/Font.h>
 
 namespace Gfx {
 
@@ -27,6 +27,7 @@ public:
     String family() const { return m_family; }
     String variant() const { return m_variant; }
     unsigned weight() const;
+    u8 slope() const;
 
     bool is_fixed_width() const;
     bool is_fixed_size() const { return !m_bitmap_fonts.is_empty(); }
@@ -35,7 +36,7 @@ public:
     void add_bitmap_font(RefPtr<BitmapFont>);
     void set_ttf_font(RefPtr<TTF::Font>);
 
-    RefPtr<Font> get_font(unsigned size);
+    RefPtr<Font> get_font(unsigned size, Font::AllowInexactSizeMatch = Font::AllowInexactSizeMatch::No) const;
 
 private:
     String m_family;

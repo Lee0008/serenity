@@ -6,13 +6,16 @@
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/RefCounted.h>
+
+#define OWNPTR_SCRUB_BYTE 0xf0
 
 namespace AK {
 
 template<typename T>
-class OwnPtr {
+class [[nodiscard]] OwnPtr {
 public:
     OwnPtr() = default;
 
@@ -40,10 +43,7 @@ public:
     {
         clear();
 #ifdef SANITIZE_PTRS
-        if constexpr (sizeof(T*) == 8)
-            m_ptr = (T*)(0xe1e1e1e1e1e1e1e1);
-        else
-            m_ptr = (T*)(0xe1e1e1e1);
+        m_ptr = (T*)(explode_byte(OWNPTR_SCRUB_BYTE));
 #endif
     }
 
@@ -184,8 +184,7 @@ protected:
         : m_ptr(ptr)
     {
         static_assert(
-            requires { requires typename T::AllowOwnPtr()(); } || !requires(T obj) { requires !typename T::AllowOwnPtr()(); obj.ref(); obj.unref(); },
-            "Use RefPtr<> for RefCounted types");
+            requires { requires typename T::AllowOwnPtr()(); } || !requires { requires !typename T::AllowOwnPtr()(); declval<T>().ref(); declval<T>().unref(); }, "Use RefPtr<> for RefCounted types");
     }
 
 private:
@@ -207,6 +206,29 @@ inline OwnPtr<T> adopt_own_if_nonnull(T* object)
 }
 
 template<typename T>
+inline ErrorOr<NonnullOwnPtr<T>> adopt_nonnull_own_or_enomem(T* object)
+{
+    auto result = adopt_own_if_nonnull(object);
+    if (!result)
+        return Error::from_errno(ENOMEM);
+    return result.release_nonnull();
+}
+
+template<typename T, class... Args>
+requires(IsConstructible<T, Args...>) inline ErrorOr<NonnullOwnPtr<T>> try_make(Args&&... args)
+{
+    return adopt_nonnull_own_or_enomem(new (nothrow) T(forward<Args>(args)...));
+}
+
+// FIXME: Remove once P0960R3 is available in Clang.
+template<typename T, class... Args>
+inline ErrorOr<NonnullOwnPtr<T>> try_make(Args&&... args)
+
+{
+    return adopt_nonnull_own_or_enomem(new (nothrow) T { forward<Args>(args)... });
+}
+
+template<typename T>
 struct Traits<OwnPtr<T>> : public GenericTraits<OwnPtr<T>> {
     using PeekType = T*;
     using ConstPeekType = const T*;
@@ -216,5 +238,7 @@ struct Traits<OwnPtr<T>> : public GenericTraits<OwnPtr<T>> {
 
 }
 
+using AK::adopt_nonnull_own_or_enomem;
 using AK::adopt_own_if_nonnull;
 using AK::OwnPtr;
+using AK::try_make;

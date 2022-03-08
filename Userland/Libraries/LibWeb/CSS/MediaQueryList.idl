@@ -1,0 +1,10 @@
+#import <DOM/EventTarget.idl>
+
+[Exposed=Window]
+interface MediaQueryList : EventTarget {
+    readonly attribute CSSOMString media;
+    readonly attribute boolean matches;
+    undefined addListener(EventListener? callback);
+    undefined removeListener(EventListener? callback);
+    attribute EventHandler onchange;
+};

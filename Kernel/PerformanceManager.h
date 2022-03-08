@@ -18,14 +18,14 @@ public:
     {
         if (g_profiling_all_threads) {
             VERIFY(g_global_perf_events);
-            g_global_perf_events->add_process(process, ProcessEventType::Create);
+            (void)g_global_perf_events->add_process(process, ProcessEventType::Create);
         }
     }
 
     inline static void add_process_exec_event(Process& process)
     {
         if (auto* event_buffer = process.current_perf_events_buffer()) {
-            event_buffer->add_process(process, ProcessEventType::Exec);
+            (void)event_buffer->add_process(process, ProcessEventType::Exec);
         }
     }
 
@@ -33,7 +33,7 @@ public:
     {
         if (g_profiling_all_threads) {
             VERIFY(g_global_perf_events);
-            [[maybe_unused]] auto rc = g_global_perf_events->append_with_eip_and_ebp(
+            [[maybe_unused]] auto rc = g_global_perf_events->append_with_ip_and_bp(
                 process.pid(), 0, 0, 0, PERF_EVENT_PROCESS_EXIT, 0, 0, 0, nullptr);
         }
     }
@@ -61,20 +61,19 @@ public:
         if (current_thread.is_profiling_suppressed())
             return;
         if (auto* event_buffer = current_thread.process().current_perf_events_buffer()) {
-            [[maybe_unused]] auto rc = event_buffer->append_with_eip_and_ebp(
-                current_thread.pid(), current_thread.tid(),
-                regs.eip, regs.ebp, PERF_EVENT_SAMPLE, lost_time, 0, 0, nullptr);
+            [[maybe_unused]] auto rc = event_buffer->append_with_ip_and_bp(
+                current_thread.pid(), current_thread.tid(), regs, PERF_EVENT_SAMPLE, lost_time, 0, 0, nullptr);
         }
     }
 
-    inline static void add_mmap_perf_event(Process& current_process, Region const& region)
+    inline static void add_mmap_perf_event(Process& current_process, Memory::Region const& region)
     {
         if (auto* event_buffer = current_process.current_perf_events_buffer()) {
             [[maybe_unused]] auto res = event_buffer->append(PERF_EVENT_MMAP, region.vaddr().get(), region.size(), region.name());
         }
     }
 
-    inline static void add_unmap_perf_event(Process& current_process, Range const& region)
+    inline static void add_unmap_perf_event(Process& current_process, Memory::VirtualRange const& region)
     {
         if (auto* event_buffer = current_process.current_perf_events_buffer()) {
             [[maybe_unused]] auto res = event_buffer->append(PERF_EVENT_MUNMAP, region.base().get(), region.size(), nullptr);
@@ -113,10 +112,53 @@ public:
         if (thread.is_profiling_suppressed())
             return;
         if (auto* event_buffer = thread.process().current_perf_events_buffer()) {
-            [[maybe_unused]] auto rc = event_buffer->append_with_eip_and_ebp(
-                thread.pid(), thread.tid(),
-                regs.eip, regs.ebp, PERF_EVENT_PAGE_FAULT, 0, 0, 0, nullptr);
+            [[maybe_unused]] auto rc = event_buffer->append_with_ip_and_bp(
+                thread.pid(), thread.tid(), regs, PERF_EVENT_PAGE_FAULT, 0, 0, 0, nullptr);
         }
+    }
+
+    inline static void add_syscall_event(Thread& thread, const RegisterState& regs)
+    {
+        if (thread.is_profiling_suppressed())
+            return;
+        if (auto* event_buffer = thread.process().current_perf_events_buffer()) {
+            [[maybe_unused]] auto rc = event_buffer->append_with_ip_and_bp(
+                thread.pid(), thread.tid(), regs, PERF_EVENT_SYSCALL, 0, 0, 0, nullptr);
+        }
+    }
+
+    inline static void add_read_event(Thread& thread, int fd, size_t size, const OpenFileDescription& file_description, u64 start_timestamp, ErrorOr<FlatPtr> result)
+    {
+        if (thread.is_profiling_suppressed())
+            return;
+
+        auto* event_buffer = thread.process().current_perf_events_buffer();
+        if (event_buffer == nullptr)
+            return;
+
+        size_t filepath_string_index;
+
+        if (auto path = file_description.original_absolute_path(); !path.is_error()) {
+            auto registered_result = event_buffer->register_string(move(path.value()));
+            if (registered_result.is_error())
+                return;
+            filepath_string_index = registered_result.value();
+        } else if (auto pseudo_path = file_description.pseudo_path(); !pseudo_path.is_error()) {
+            auto registered_result = event_buffer->register_string(move(pseudo_path.value()));
+            if (registered_result.is_error())
+                return;
+            filepath_string_index = registered_result.value();
+        } else {
+            auto invalid_path_string = KString::try_create("<INVALID_FILE_PATH>"); // TODO: Performance, unecessary allocations.
+            if (invalid_path_string.is_error())
+                return;
+            auto registered_result = event_buffer->register_string(move(invalid_path_string.value()));
+            if (registered_result.is_error())
+                return;
+            filepath_string_index = registered_result.value();
+        }
+
+        [[maybe_unused]] auto rc = event_buffer->append(PERF_EVENT_READ, fd, size, 0, &thread, filepath_string_index, start_timestamp, result); // wrong arguments
     }
 
     inline static void timer_tick(RegisterState const& regs)
@@ -127,10 +169,10 @@ public:
         auto expected_wakeup = last_wakeup + ideal_interval;
         auto delay = (now > expected_wakeup) ? now - expected_wakeup : Time::from_microseconds(0);
         last_wakeup = now;
-        auto current_thread = Thread::current();
+        auto* current_thread = Thread::current();
         // FIXME: We currently don't collect samples while idle.
         //        That will be an interesting mode to add in the future. :^)
-        if (!current_thread || current_thread == Processor::current().idle_thread())
+        if (!current_thread || current_thread == Processor::idle_thread())
             return;
 
         auto lost_samples = delay.to_microseconds() / ideal_interval.to_microseconds();

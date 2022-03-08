@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, ry755 <ryanst755@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -14,12 +15,6 @@ FileArgument::FileArgument(String file_argument)
 {
     m_line = {};
     m_column = {};
-
-    if (Core::File::exists(file_argument)) {
-        // A file exists with the full specified name, don't attempt to parse it.
-        m_filename = move(file_argument);
-        return;
-    }
 
     // A file doesn't exist with the full specified name, maybe the user entered line/column coordinates?
     Regex<PosixExtended> re("^(.+?)(:([0-9]+):?([0-9]+)?)?$");
@@ -54,9 +49,4 @@ FileArgument::FileArgument(String file_argument)
         m_filename = groups.at(0).view.to_string();
     }
 }
-
-FileArgument::~FileArgument()
-{
-}
-
 }

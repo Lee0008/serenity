@@ -14,9 +14,9 @@
 
 namespace Core {
 
-IntrusiveList<Object, RawPtr<Object>, &Object::m_all_objects_list_node>& Object::all_objects()
+IntrusiveList<&Object::m_all_objects_list_node>& Object::all_objects()
 {
-    static IntrusiveList<Object, RawPtr<Object>, &Object::m_all_objects_list_node> objects;
+    static IntrusiveList<&Object::m_all_objects_list_node> objects;
     return objects;
 }
 
@@ -73,14 +73,20 @@ void Object::event(Core::Event& event)
     }
 }
 
-void Object::add_child(Object& object)
+ErrorOr<void> Object::try_add_child(Object& object)
 {
     // FIXME: Should we support reparenting objects?
     VERIFY(!object.parent() || object.parent() == this);
+    TRY(m_children.try_append(object));
     object.m_parent = this;
-    m_children.append(object);
     Core::ChildEvent child_event(Core::Event::ChildAdded, object);
     event(child_event);
+    return {};
+}
+
+void Object::add_child(Object& object)
+{
+    MUST(try_add_child(object));
 }
 
 void Object::insert_child_before(Object& new_child, Object& before_child)
@@ -162,9 +168,9 @@ void Object::dump_tree(int indent)
     });
 }
 
-void Object::deferred_invoke(Function<void(Object&)> invokee)
+void Object::deferred_invoke(Function<void()> invokee)
 {
-    Core::EventLoop::current().post_event(*this, make<Core::DeferredInvocationEvent>(move(invokee)));
+    Core::deferred_invoke([invokee = move(invokee), strong_this = NonnullRefPtr(*this)] { invokee(); });
 }
 
 void Object::save_to(JsonObject& json)
@@ -250,15 +256,13 @@ void Object::set_event_filter(Function<bool(Core::Event&)> filter)
     m_event_filter = move(filter);
 }
 
-static HashMap<String, ObjectClassRegistration*>& object_classes()
+static HashMap<StringView, ObjectClassRegistration*>& object_classes()
 {
-    static HashMap<String, ObjectClassRegistration*>* map;
-    if (!map)
-        map = new HashMap<String, ObjectClassRegistration*>;
-    return *map;
+    static HashMap<StringView, ObjectClassRegistration*> s_map;
+    return s_map;
 }
 
-ObjectClassRegistration::ObjectClassRegistration(const String& class_name, Function<NonnullRefPtr<Object>()> factory, ObjectClassRegistration* parent_class)
+ObjectClassRegistration::ObjectClassRegistration(StringView class_name, Function<RefPtr<Object>()> factory, ObjectClassRegistration* parent_class)
     : m_class_name(class_name)
     , m_factory(move(factory))
     , m_parent_class(parent_class)
@@ -286,7 +290,7 @@ void ObjectClassRegistration::for_each(Function<void(const ObjectClassRegistrati
     }
 }
 
-const ObjectClassRegistration* ObjectClassRegistration::find(const String& class_name)
+const ObjectClassRegistration* ObjectClassRegistration::find(StringView class_name)
 {
     return object_classes().get(class_name).value_or(nullptr);
 }

@@ -8,7 +8,6 @@
 
 #include <AK/IntrusiveList.h>
 #include <AK/NonnullOwnPtr.h>
-#include <AK/Vector.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/HeapBlock.h>
 
@@ -17,7 +16,7 @@ namespace JS {
 class CellAllocator {
 public:
     explicit CellAllocator(size_t cell_size);
-    ~CellAllocator();
+    ~CellAllocator() = default;
 
     size_t cell_size() const { return m_cell_size; }
 
@@ -43,7 +42,7 @@ public:
 private:
     const size_t m_cell_size;
 
-    typedef IntrusiveList<HeapBlock, RawPtr<HeapBlock>, &HeapBlock::m_list_node> BlockList;
+    using BlockList = IntrusiveList<&HeapBlock::m_list_node>;
     BlockList m_full_blocks;
     BlockList m_usable_blocks;
 };

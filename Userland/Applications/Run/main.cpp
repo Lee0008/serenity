@@ -5,22 +5,19 @@
  */
 
 #include "RunWindow.h"
-#include <AK/StringBuilder.h>
+#include <LibCore/System.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Desktop.h>
-#include <unistd.h>
+#include <LibMain/Main.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd thread cpath rpath wpath unix proc exec", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd thread cpath rpath wpath unix proc exec"));
 
-    auto app = GUI::Application::construct(argc, argv);
-    auto window = RunWindow::construct();
+    auto app = TRY(GUI::Application::try_create(arguments));
+    auto window = TRY(RunWindow::try_create());
 
-    window->move_to(12, GUI::Desktop::the().rect().bottom() - GUI::Desktop::the().taskbar_height() - 12 - window->height());
+    window->move_to(16, GUI::Desktop::the().rect().bottom() - GUI::Desktop::the().taskbar_height() - 16 - window->height());
     window->show();
 
     return app->exec();

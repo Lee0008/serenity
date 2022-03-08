@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
@@ -14,6 +13,8 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/DateTime.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -59,7 +60,7 @@ private:
 static Vector<Quote> parse_all(const JsonArray& array)
 {
     Vector<Quote> quotes;
-    for (int i = 0; i < array.size(); ++i) {
+    for (size_t i = 0; i < array.size(); ++i) {
         Optional<Quote> q = Quote::try_parse(array[i]);
         if (!q.has_value()) {
             warnln("WARNING: Could not parse quote #{}!", i);
@@ -70,47 +71,30 @@ static Vector<Quote> parse_all(const JsonArray& array)
     return quotes;
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath"));
 
     const char* path = "/res/fortunes.json";
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help("Open a fortune cookie, receive a free quote for the day!");
     args_parser.add_positional_argument(path, "Path to JSON file with quotes (/res/fortunes.json by default)", "path", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
-    auto file = Core::File::construct(path);
-    if (!file->open(Core::OpenMode::ReadOnly)) {
-        warnln("Couldn't open {} for reading: {}", path, file->error_string());
-        return 1;
-    }
+    auto file = TRY(Core::File::open(path, Core::OpenMode::ReadOnly));
 
-    if (pledge("stdio", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil("/etc/timezone", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     auto file_contents = file->read_all();
-    auto json = JsonValue::from_string(file_contents);
-    if (!json.has_value()) {
-        warnln("Couldn't parse {} as JSON", path);
-        return 1;
-    }
-    if (!json->is_array()) {
+    auto json = TRY(JsonValue::from_string(file_contents));
+    if (!json.is_array()) {
         warnln("{} does not contain an array of quotes", path);
         return 1;
     }
 
-    const auto quotes = parse_all(json->as_array());
+    const auto quotes = parse_all(json.as_array());
     if (quotes.is_empty()) {
         warnln("{} does not contain any valid quotes", path);
         return 1;

@@ -17,13 +17,15 @@ namespace Kernel {
 class PS2MouseDevice : public IRQHandler
     , public MouseDevice
     , public I8042Device {
+    friend class DeviceManagement;
+
 public:
     static RefPtr<PS2MouseDevice> try_to_initialize(const I8042Controller&);
     bool initialize();
 
     virtual ~PS2MouseDevice() override;
 
-    virtual const char* purpose() const override { return class_name(); }
+    virtual StringView purpose() const override { return class_name(); }
 
     // ^I8042Device
     virtual void irq_handle_byte_read(u8 byte) override;
@@ -34,8 +36,9 @@ public:
 
 protected:
     explicit PS2MouseDevice(const I8042Controller&);
+
     // ^IRQHandler
-    virtual void handle_irq(const RegisterState&) override;
+    virtual bool handle_irq(const RegisterState&) override;
 
     struct RawPacket {
         union {

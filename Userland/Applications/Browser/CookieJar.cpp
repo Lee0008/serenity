@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,6 +8,7 @@
 #include "CookieJar.h"
 #include <AK/IPv4Address.h>
 #include <AK/StringBuilder.h>
+#include <AK/StringView.h>
 #include <AK/URL.h>
 #include <AK/Vector.h>
 #include <LibWeb/Cookie/ParsedCookie.h>
@@ -48,9 +50,9 @@ void CookieJar::set_cookie(const URL& url, const Web::Cookie::ParsedCookie& pars
 
 void CookieJar::dump_cookies() const
 {
-    static const char* key_color = "\033[34;1m";
-    static const char* attribute_color = "\033[33m";
-    static const char* no_color = "\033[0m";
+    constexpr StringView key_color = "\033[34;1m";
+    constexpr StringView attribute_color = "\033[33m";
+    constexpr StringView no_color = "\033[0m";
 
     StringBuilder builder;
     builder.appendff("{} cookies stored\n", m_cookies.size());
@@ -71,6 +73,17 @@ void CookieJar::dump_cookies() const
     }
 
     dbgln("{}", builder.build());
+}
+
+Vector<Web::Cookie::Cookie> CookieJar::get_all_cookies() const
+{
+    Vector<Web::Cookie::Cookie> cookies;
+    cookies.ensure_capacity(m_cookies.size());
+
+    for (auto const& cookie : m_cookies)
+        cookies.unchecked_append(cookie.value);
+
+    return cookies;
 }
 
 Optional<String> CookieJar::canonicalize_domain(const URL& url)
@@ -142,7 +155,7 @@ String CookieJar::default_path(const URL& url)
         return "/";
 
     StringView uri_path_view = uri_path;
-    std::size_t last_separator = uri_path_view.find_last_of('/').value();
+    size_t last_separator = uri_path_view.find_last('/').value();
 
     // 3. If the uri-path contains no more than one %x2F ("/") character, output %x2F ("/") and skip the remaining step.
     if (last_separator == 0)

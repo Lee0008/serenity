@@ -7,15 +7,6 @@ a {
     cursor: pointer;
 }
 
-head,
-link,
-meta,
-script,
-style,
-title {
-    display: none;
-}
-
 body {
     margin: 8px;
 }
@@ -41,7 +32,9 @@ pre {
     white-space: pre;
 }
 
-code {
+code,
+kbd,
+samp {
     font-family: monospace;
 }
 
@@ -50,9 +43,23 @@ ins {
     text-decoration: underline;
 }
 
+s,
+del {
+    text-decoration: line-through;
+}
+
 strong,
 b {
     font-weight: bold;
+}
+
+i,
+em,
+address,
+cite,
+dfn,
+var {
+    font-style: italic;
 }
 
 html,
@@ -186,10 +193,6 @@ colgroup {
     display: table-column-group;
 }
 
-basefont {
-    display: block;
-}
-
 blockquote {
     margin-left: 25px;
     margin-right: 25px;
@@ -224,12 +227,67 @@ ol ol ul {
 }
 
 /* FIXME: This is a temporary hack until we can render a native-looking frame for these. */
-input[type=text] {
+input {
     border: 1px solid black;
     min-width: 80px;
     min-height: 16px;
+    width: 120px;
+    cursor: text;
+    overflow: hidden;
+}
+
+input[type=submit], input[type=button], input[type=reset], input[type=checkbox], input[type=radio] {
+    border: none;
+    min-width: unset;
+    min-height: unset;
+    width: unset;
+    cursor: unset;
+}
+
+button, input[type=submit], input[type=button], input[type=reset] {
+    padding: 4px 8px;
+    background-color: -libweb-palette-button;
+    border: 1px solid -libweb-palette-threed-shadow1;
+}
+
+button:hover, input[type=submit]:hover, input[type=button]:hover, input[type=reset]:hover {
+    background-color: -libweb-palette-hover-highlight;
 }
 
 option {
     display: none;
 }
+
+details {
+    display: block;
+    padding-left: 1em;
+}
+
+summary {
+    display: block;
+    font-weight: bold;
+}
+
+/* 15.3.1 Hidden elements
+ * https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements
+ */
+/* FIXME: Add `noframes` once frames are implemented. */
+/* FIXME: Add `noembed` once <embed> is implemented. */
+/* FIXME: Add `rp` once <ruby> is implemented. */
+[hidden], area, base, basefont, datalist, head, link, meta, /*noembed,*/
+/*noframes,*/ param, /*rp,*/ script, style, template, title {
+  display: none;
+}
+
+embed[hidden] { display: inline; height: 0; width: 0; }
+
+input[type=hidden i] { display: none !important; }
+
+@media (scripting) {
+  noscript { display: none !important; }
+}
+
+/* 15.4.1 Embedded content
+ * https://html.spec.whatwg.org/multipage/rendering.html#embedded-content-rendering-rules
+ */
+iframe { border: 2px inset; }

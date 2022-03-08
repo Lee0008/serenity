@@ -1,8 +1,14 @@
+serenity_component(
+    InspectorServer
+    REQUIRED
+    TARGETS InspectorServer
+)
+
 compile_ipc(InspectorServer.ipc InspectorServerEndpoint.h)
 compile_ipc(InspectorClient.ipc InspectorClientEndpoint.h)
 
 set(SOURCES
-    ClientConnection.cpp
+    ConnectionFromClient.cpp
     main.cpp
     InspectableProcess.cpp
     InspectorServerEndpoint.h
@@ -10,4 +16,4 @@ set(SOURCES
 )
 
 serenity_bin(InspectorServer)
-target_link_libraries(InspectorServer LibIPC)
+target_link_libraries(InspectorServer LibIPC LibMain)

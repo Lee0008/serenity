@@ -27,10 +27,10 @@ PromiseResolvingFunction::PromiseResolvingFunction(Promise& promise, AlreadyReso
 void PromiseResolvingFunction::initialize(GlobalObject& global_object)
 {
     Base::initialize(global_object);
-    define_property(vm().names.length, Value(1));
+    define_direct_property(vm().names.length, Value(1), Attribute::Configurable);
 }
 
-Value PromiseResolvingFunction::call()
+ThrowCompletionOr<Value> PromiseResolvingFunction::call()
 {
     return m_native_function(vm(), global_object(), m_promise, m_already_resolved);
 }

@@ -6,7 +6,8 @@
 
 #include <AK/Utf8View.h>
 #include <LibGfx/Painter.h>
-#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/Layout/FormattingState.h>
+#include <LibWeb/Layout/InitialContainingBlock.h>
 #include <LibWeb/Layout/LineBoxFragment.h>
 #include <LibWeb/Layout/TextNode.h>
 #include <LibWeb/Painting/PaintContext.h>
@@ -41,7 +42,7 @@ StringView LineBoxFragment::text() const
 {
     if (!is<TextNode>(layout_node()))
         return {};
-    return downcast<TextNode>(layout_node()).text_for_rendering().substring_view(m_start, m_length);
+    return verify_cast<TextNode>(layout_node()).text_for_rendering().substring_view(m_start, m_length);
 }
 
 const Gfx::FloatRect LineBoxFragment::absolute_rect() const
@@ -56,7 +57,7 @@ int LineBoxFragment::text_index_at(float x) const
 {
     if (!is<TextNode>(layout_node()))
         return 0;
-    auto& layout_text = downcast<TextNode>(layout_node());
+    auto& layout_text = verify_cast<TextNode>(layout_node());
     auto& font = layout_text.font();
     Utf8View view(text());
 
@@ -137,7 +138,7 @@ Gfx::FloatRect LineBoxFragment::selection_rect(const Gfx::Font& font) const
             return {};
 
         auto selection_start_in_this_fragment = 0;
-        auto selection_end_in_this_fragment = min(selection.end().index_in_node, m_length);
+        auto selection_end_in_this_fragment = min(selection.end().index_in_node - m_start, m_length);
         auto pixel_distance_to_first_selected_character = font.width(text.substring_view(0, selection_start_in_this_fragment));
         auto pixel_width_of_selection = font.width(text.substring_view(selection_start_in_this_fragment, selection_end_in_this_fragment - selection_start_in_this_fragment)) + 1;
 

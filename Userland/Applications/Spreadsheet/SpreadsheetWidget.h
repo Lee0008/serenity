@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -17,17 +17,17 @@ class SpreadsheetWidget final : public GUI::Widget {
     C_OBJECT(SpreadsheetWidget);
 
 public:
-    ~SpreadsheetWidget();
+    virtual ~SpreadsheetWidget() override = default;
 
-    void save(const StringView& filename);
-    void load(const StringView& filename);
+    void save(StringView filename);
+    void load_file(Core::File&);
     bool request_close();
     void add_sheet();
     void add_sheet(NonnullRefPtr<Sheet>&&);
 
     const String& current_filename() const { return m_workbook->current_filename(); }
     Sheet* current_worksheet_if_available() { return m_selected_view ? m_selected_view->sheet_if_available() : nullptr; }
-    void set_filename(const String& filename);
+    void update_window_title();
 
     Workbook& workbook() { return *m_workbook; }
     const Workbook& workbook() const { return *m_workbook; }
@@ -40,10 +40,16 @@ public:
         return m_selected_view->cursor();
     }
 
+    void initialize_menubar(GUI::Window&);
+
+    void undo();
+    void redo();
+    auto& undo_stack() { return m_undo_stack; }
+
 private:
     virtual void resize_event(GUI::ResizeEvent&) override;
 
-    explicit SpreadsheetWidget(NonnullRefPtrVector<Sheet>&& sheets = {}, bool should_add_sheet_if_empty = true);
+    explicit SpreadsheetWidget(GUI::Window& window, NonnullRefPtrVector<Sheet>&& sheets = {}, bool should_add_sheet_if_empty = true);
 
     void setup_tabs(NonnullRefPtrVector<Sheet> new_sheets);
 
@@ -58,8 +64,27 @@ private:
     RefPtr<GUI::Menu> m_tab_context_menu;
     RefPtr<SpreadsheetView> m_tab_context_menu_sheet_view;
     bool m_should_change_selected_cells { false };
+    GUI::UndoStack m_undo_stack;
 
     OwnPtr<Workbook> m_workbook;
+
+    void clipboard_action(bool is_cut);
+    RefPtr<GUI::Action> m_new_action;
+    RefPtr<GUI::Action> m_open_action;
+    RefPtr<GUI::Action> m_save_action;
+    RefPtr<GUI::Action> m_save_as_action;
+    RefPtr<GUI::Action> m_quit_action;
+
+    RefPtr<GUI::Action> m_cut_action;
+    RefPtr<GUI::Action> m_copy_action;
+    RefPtr<GUI::Action> m_paste_action;
+    RefPtr<GUI::Action> m_undo_action;
+    RefPtr<GUI::Action> m_redo_action;
+
+    RefPtr<GUI::Action> m_functions_help_action;
+    RefPtr<GUI::Action> m_about_action;
+
+    RefPtr<GUI::Action> m_rename_action;
 };
 
 }

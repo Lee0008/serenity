@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, Filiph Sandström <filiph.sandstrom@filfatstudios.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -10,6 +11,7 @@
 #include <LibGUI/Icon.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/SystemTheme.h>
 
 namespace GUI {
 
@@ -23,7 +25,7 @@ public:
     Variant(u32);
     Variant(u64);
     Variant(const char*);
-    Variant(const StringView&);
+    Variant(StringView);
     Variant(const String&);
     Variant(const FlyString&);
     Variant(const Gfx::Bitmap&);
@@ -33,6 +35,11 @@ public:
     Variant(const Gfx::IntRect&);
     Variant(const Gfx::Font&);
     Variant(const Gfx::TextAlignment);
+    Variant(const Gfx::ColorRole);
+    Variant(const Gfx::AlignmentRole);
+    Variant(const Gfx::FlagRole);
+    Variant(const Gfx::MetricRole);
+    Variant(const Gfx::PathRole);
     Variant(const JsonValue&);
     Variant(Color);
 
@@ -62,6 +69,11 @@ public:
         Rect,
         Font,
         TextAlignment,
+        ColorRole,
+        AlignmentRole,
+        FlagRole,
+        MetricRole,
+        PathRole,
     };
 
     bool is_valid() const { return m_type != Type::Invalid; }
@@ -80,6 +92,11 @@ public:
     bool is_rect() const { return m_type == Type::Rect; }
     bool is_font() const { return m_type == Type::Font; }
     bool is_text_alignment() const { return m_type == Type::TextAlignment; }
+    bool is_color_role() const { return m_type == Type::ColorRole; }
+    bool is_alignment_role() const { return m_type == Type::AlignmentRole; }
+    bool is_flag_role() const { return m_type == Type::FlagRole; }
+    bool is_metric_role() const { return m_type == Type::MetricRole; }
+    bool is_path_role() const { return m_type == Type::PathRole; }
     Type type() const { return m_type; }
 
     bool as_bool() const
@@ -175,6 +192,13 @@ public:
         return m_value.as_float;
     }
 
+    float as_float_or(float fallback) const
+    {
+        if (is_float())
+            return as_float();
+        return fallback;
+    }
+
     Gfx::IntPoint as_point() const
     {
         return { m_value.as_point.x, m_value.as_point.y };
@@ -211,7 +235,7 @@ public:
     Color as_color() const
     {
         VERIFY(type() == Type::Color);
-        return Color::from_rgba(m_value.as_color);
+        return Color::from_argb(m_value.as_color);
     }
 
     const Gfx::Font& as_font() const
@@ -225,6 +249,41 @@ public:
         if (type() != Type::TextAlignment)
             return default_value;
         return m_value.as_text_alignment;
+    }
+
+    Gfx::ColorRole to_color_role() const
+    {
+        if (type() != Type::ColorRole)
+            return Gfx::ColorRole::NoRole;
+        return m_value.as_color_role;
+    }
+
+    Gfx::AlignmentRole to_alignment_role() const
+    {
+        if (type() != Type::AlignmentRole)
+            return Gfx::AlignmentRole::NoRole;
+        return m_value.as_alignment_role;
+    }
+
+    Gfx::FlagRole to_flag_role() const
+    {
+        if (type() != Type::FlagRole)
+            return Gfx::FlagRole::NoRole;
+        return m_value.as_flag_role;
+    }
+
+    Gfx::MetricRole to_metric_role() const
+    {
+        if (type() != Type::MetricRole)
+            return Gfx::MetricRole::NoRole;
+        return m_value.as_metric_role;
+    }
+
+    Gfx::PathRole to_path_role() const
+    {
+        if (type() != Type::PathRole)
+            return Gfx::PathRole::NoRole;
+        return m_value.as_path_role;
     }
 
     Color to_color(Color default_value = {}) const
@@ -274,8 +333,13 @@ private:
         u32 as_u32;
         u64 as_u64;
         float as_float;
-        Gfx::RGBA32 as_color;
+        Gfx::ARGB32 as_color;
         Gfx::TextAlignment as_text_alignment;
+        Gfx::ColorRole as_color_role;
+        Gfx::AlignmentRole as_alignment_role;
+        Gfx::FlagRole as_flag_role;
+        Gfx::MetricRole as_metric_role;
+        Gfx::PathRole as_path_role;
         RawPoint as_point;
         RawSize as_size;
         RawRect as_rect;

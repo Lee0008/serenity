@@ -14,10 +14,9 @@
 #include <AK/NonnullOwnPtr.h>
 #include <Kernel/API/InodeWatcherEvent.h>
 #include <Kernel/FileSystem/File.h>
+#include <Kernel/Forward.h>
 
 namespace Kernel {
-
-class Inode;
 
 // A specific description of a watch.
 struct WatchDescription {
@@ -25,12 +24,9 @@ struct WatchDescription {
     Inode& inode;
     unsigned event_mask;
 
-    static KResultOr<NonnullOwnPtr<WatchDescription>> create(int wd, Inode& inode, unsigned event_mask)
+    static ErrorOr<NonnullOwnPtr<WatchDescription>> create(int wd, Inode& inode, unsigned event_mask)
     {
-        auto description = adopt_own_if_nonnull(new WatchDescription(wd, inode, event_mask));
-        if (description)
-            return description.release_nonnull();
-        return ENOMEM;
+        return adopt_nonnull_own_or_enomem(new (nothrow) WatchDescription(wd, inode, event_mask));
     }
 
 private:
@@ -44,35 +40,35 @@ private:
 
 class InodeWatcher final : public File {
 public:
-    static KResultOr<NonnullRefPtr<InodeWatcher>> create();
+    static ErrorOr<NonnullRefPtr<InodeWatcher>> try_create();
     virtual ~InodeWatcher() override;
 
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
     // Can't write to an inode watcher.
-    virtual bool can_write(const FileDescription&, size_t) const override { return true; }
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return EIO; }
-    virtual KResult close() override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return true; }
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return EIO; }
+    virtual ErrorOr<void> close() override;
 
-    virtual String absolute_path(const FileDescription&) const override;
-    virtual const char* class_name() const override { return "InodeWatcher"; };
+    virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
+    virtual StringView class_name() const override { return "InodeWatcher"sv; };
     virtual bool is_inode_watcher() const override { return true; }
 
-    void notify_inode_event(Badge<Inode>, InodeIdentifier, InodeWatcherEvent::Type, String const& name = {});
+    void notify_inode_event(Badge<Inode>, InodeIdentifier, InodeWatcherEvent::Type, StringView name = {});
 
-    KResultOr<int> register_inode(Inode&, unsigned event_mask);
-    KResult unregister_by_wd(int);
+    ErrorOr<int> register_inode(Inode&, unsigned event_mask);
+    ErrorOr<void> unregister_by_wd(int);
     void unregister_by_inode(Badge<Inode>, InodeIdentifier);
 
 private:
     explicit InodeWatcher() { }
 
-    mutable Lock m_lock;
+    mutable Mutex m_lock;
 
     struct Event {
         int wd { 0 };
         InodeWatcherEvent::Type type { InodeWatcherEvent::Type::Invalid };
-        String path;
+        OwnPtr<KString> path;
     };
     CircularQueue<Event, 32> m_queue;
     Checked<int> m_wd_counter { 1 };

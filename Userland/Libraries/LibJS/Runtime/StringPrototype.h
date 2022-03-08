@@ -10,6 +10,16 @@
 
 namespace JS {
 
+struct CodePoint {
+    bool is_unpaired_surrogate { false };
+    u32 code_point { 0 };
+    size_t code_unit_count { 0 };
+};
+
+CodePoint code_point_at(Utf16View const& string, size_t position);
+static constexpr Utf8View whitespace_characters = Utf8View("\x09\x0A\x0B\x0C\x0D\x20\xC2\xA0\xE1\x9A\x80\xE2\x80\x80\xE2\x80\x81\xE2\x80\x82\xE2\x80\x83\xE2\x80\x84\xE2\x80\x85\xE2\x80\x86\xE2\x80\x87\xE2\x80\x88\xE2\x80\x89\xE2\x80\x8A\xE2\x80\xAF\xE2\x81\x9F\xE3\x80\x80\xE2\x80\xA8\xE2\x80\xA9\xEF\xBB\xBF"sv);
+ThrowCompletionOr<String> trim_string(GlobalObject&, Value string, TrimMode where);
+
 class StringPrototype final : public StringObject {
     JS_OBJECT(StringPrototype, StringObject);
 
@@ -21,10 +31,13 @@ public:
 private:
     JS_DECLARE_NATIVE_FUNCTION(char_at);
     JS_DECLARE_NATIVE_FUNCTION(char_code_at);
+    JS_DECLARE_NATIVE_FUNCTION(code_point_at);
     JS_DECLARE_NATIVE_FUNCTION(repeat);
     JS_DECLARE_NATIVE_FUNCTION(starts_with);
     JS_DECLARE_NATIVE_FUNCTION(ends_with);
     JS_DECLARE_NATIVE_FUNCTION(index_of);
+    JS_DECLARE_NATIVE_FUNCTION(to_locale_lowercase);
+    JS_DECLARE_NATIVE_FUNCTION(to_locale_uppercase);
     JS_DECLARE_NATIVE_FUNCTION(to_lowercase);
     JS_DECLARE_NATIVE_FUNCTION(to_uppercase);
     JS_DECLARE_NATIVE_FUNCTION(to_string);
@@ -43,7 +56,10 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(last_index_of);
     JS_DECLARE_NATIVE_FUNCTION(at);
     JS_DECLARE_NATIVE_FUNCTION(match);
+    JS_DECLARE_NATIVE_FUNCTION(match_all);
     JS_DECLARE_NATIVE_FUNCTION(replace);
+    JS_DECLARE_NATIVE_FUNCTION(replace_all);
+    JS_DECLARE_NATIVE_FUNCTION(search);
     JS_DECLARE_NATIVE_FUNCTION(anchor);
     JS_DECLARE_NATIVE_FUNCTION(big);
     JS_DECLARE_NATIVE_FUNCTION(blink);
@@ -57,6 +73,7 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(strike);
     JS_DECLARE_NATIVE_FUNCTION(sub);
     JS_DECLARE_NATIVE_FUNCTION(sup);
+    JS_DECLARE_NATIVE_FUNCTION(locale_compare);
 
     JS_DECLARE_NATIVE_FUNCTION(symbol_iterator);
 };

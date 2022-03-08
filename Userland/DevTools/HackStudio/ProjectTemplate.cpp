@@ -30,7 +30,10 @@ ProjectTemplate::ProjectTemplate(const String& id, const String& name, const Str
 
 RefPtr<ProjectTemplate> ProjectTemplate::load_from_manifest(const String& manifest_path)
 {
-    auto config = Core::ConfigFile::open(manifest_path);
+    auto maybe_config = Core::ConfigFile::open(manifest_path);
+    if (maybe_config.is_error())
+        return {};
+    auto config = maybe_config.release_value();
 
     if (!config->has_group("HackStudioTemplate")
         || !config->has_key("HackStudioTemplate", "Name")
@@ -38,7 +41,7 @@ RefPtr<ProjectTemplate> ProjectTemplate::load_from_manifest(const String& manife
         || !config->has_key("HackStudioTemplate", "IconName32x"))
         return {};
 
-    auto id = LexicalPath(manifest_path).title();
+    auto id = LexicalPath::title(manifest_path);
     auto name = config->read_entry("HackStudioTemplate", "Name");
     auto description = config->read_entry("HackStudioTemplate", "Description");
     int priority = config->read_num_entry("HackStudioTemplate", "Priority", 0);
@@ -50,8 +53,9 @@ RefPtr<ProjectTemplate> ProjectTemplate::load_from_manifest(const String& manife
     auto bitmap_path_32 = String::formatted("/res/icons/hackstudio/templates-32x32/{}.png", config->read_entry("HackStudioTemplate", "IconName32x"));
 
     if (Core::File::exists(bitmap_path_32)) {
-        auto bitmap32 = Gfx::Bitmap::load_from_file(bitmap_path_32);
-        icon = GUI::Icon(move(bitmap32));
+        auto bitmap_or_error = Gfx::Bitmap::try_load_from_file(bitmap_path_32);
+        if (!bitmap_or_error.is_error())
+            icon = GUI::Icon(bitmap_or_error.release_value());
     }
 
     return adopt_ref(*new ProjectTemplate(id, name, description, icon, priority));
@@ -71,7 +75,7 @@ Result<void, String> ProjectTemplate::create_project(const String& name, const S
         auto result = Core::File::copy_file_or_directory(path, content_path());
         dbgln("Copying {} -> {}", content_path(), path);
         if (result.is_error())
-            return String::formatted("Failed to copy template contents. Error code: {}", result.error().error_code);
+            return String::formatted("Failed to copy template contents. Error code: {}", static_cast<Error const&>(result.error()));
     } else {
         dbgln("No template content directory found for '{}', creating an empty directory for the project.", m_id);
         int rc;
@@ -90,8 +94,7 @@ Result<void, String> ProjectTemplate::create_project(const String& name, const S
         dbgln("Running post-create script '{}'", postcreate_script_path);
 
         // Generate a namespace-safe project name (replace hyphens with underscores)
-        String namespace_safe(name.characters());
-        namespace_safe.replace("-", "_", true);
+        auto namespace_safe = name.replace("-", "_", true);
 
         pid_t child_pid;
         const char* argv[] = { postcreate_script_path.characters(), name.characters(), path.characters(), namespace_safe.characters(), nullptr };

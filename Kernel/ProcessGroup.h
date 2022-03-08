@@ -9,8 +9,7 @@
 #include <AK/IntrusiveList.h>
 #include <AK/RefCounted.h>
 #include <AK/Weakable.h>
-#include <Kernel/Lock.h>
-#include <Kernel/SpinLock.h>
+#include <Kernel/Locking/SpinlockProtected.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
@@ -25,8 +24,8 @@ class ProcessGroup
 public:
     ~ProcessGroup();
 
-    static RefPtr<ProcessGroup> create(ProcessGroupID);
-    static RefPtr<ProcessGroup> find_or_create(ProcessGroupID);
+    static ErrorOr<NonnullRefPtr<ProcessGroup>> try_create(ProcessGroupID);
+    static ErrorOr<NonnullRefPtr<ProcessGroup>> try_find_or_create(ProcessGroupID);
     static RefPtr<ProcessGroup> from_pgid(ProcessGroupID);
 
     const ProcessGroupID& pgid() const { return m_pgid; }
@@ -41,10 +40,9 @@ private:
     ProcessGroupID m_pgid;
 
 public:
-    using List = IntrusiveList<ProcessGroup, RawPtr<ProcessGroup>, &ProcessGroup::m_list_node>;
+    using List = IntrusiveList<&ProcessGroup::m_list_node>;
 };
 
-extern ProcessGroup::List* g_process_groups;
-extern RecursiveSpinLock g_process_groups_lock;
+SpinlockProtected<ProcessGroup::List>& process_groups();
 
 }

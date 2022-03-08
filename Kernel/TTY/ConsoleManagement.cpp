@@ -7,13 +7,15 @@
 #include <AK/Singleton.h>
 #include <Kernel/CommandLine.h>
 #include <Kernel/Debug.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Graphics/GraphicsManagement.h>
 #include <Kernel/Panic.h>
+#include <Kernel/Sections.h>
 #include <Kernel/TTY/ConsoleManagement.h>
 
 namespace Kernel {
 
-static AK::Singleton<ConsoleManagement> s_the;
+static Singleton<ConsoleManagement> s_the;
 
 void ConsoleManagement::resolution_was_changed()
 {
@@ -28,7 +30,7 @@ bool ConsoleManagement::is_initialized()
         return false;
     if (s_the->m_consoles.is_empty())
         return false;
-    if (s_the->m_active_console.is_null())
+    if (!s_the->m_active_console)
         return false;
     return true;
 }
@@ -47,7 +49,8 @@ UNMAP_AFTER_INIT void ConsoleManagement::initialize()
     for (size_t index = 0; index < s_max_virtual_consoles; index++) {
         // FIXME: Better determine the debug TTY we chose...
         if (index == 1) {
-            m_consoles.append(VirtualConsole::create_with_preset_log(index, ConsoleDevice::the().logbuffer()));
+            VERIFY(DeviceManagement::the().is_console_device_attached());
+            m_consoles.append(VirtualConsole::create_with_preset_log(index, DeviceManagement::the().console_device().logbuffer()));
             continue;
         }
         m_consoles.append(VirtualConsole::create(index));
@@ -57,14 +60,16 @@ UNMAP_AFTER_INIT void ConsoleManagement::initialize()
     if (tty_number > m_consoles.size()) {
         PANIC("Switch to tty value is invalid: {} ", tty_number);
     }
-    m_active_console = m_consoles[tty_number];
-    ScopedSpinLock lock(m_lock);
+    m_active_console = &m_consoles[tty_number];
+    SpinlockLocker lock(m_lock);
     m_active_console->set_active(true);
+    if (!m_active_console->is_graphical())
+        m_active_console->clear();
 }
 
 void ConsoleManagement::switch_to(unsigned index)
 {
-    ScopedSpinLock lock(m_lock);
+    SpinlockLocker lock(m_lock);
     VERIFY(m_active_console);
     VERIFY(index < m_consoles.size());
     if (m_active_console->index() == index)
@@ -72,7 +77,7 @@ void ConsoleManagement::switch_to(unsigned index)
 
     bool was_graphical = m_active_console->is_graphical();
     m_active_console->set_active(false);
-    m_active_console = m_consoles[index];
+    m_active_console = &m_consoles[index];
     dbgln_if(VIRTUAL_CONSOLE_DEBUG, "Console: Switch to {}", index);
 
     // Before setting current console to be "active", switch between graphical mode to "textual" mode

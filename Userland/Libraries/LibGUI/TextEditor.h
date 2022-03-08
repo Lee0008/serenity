@@ -12,6 +12,8 @@
 #include <LibCore/ElapsedTimer.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/AbstractScrollableWidget.h>
+#include <LibGUI/Action.h>
+#include <LibGUI/Clipboard.h>
 #include <LibGUI/Forward.h>
 #include <LibGUI/TextDocument.h>
 #include <LibGUI/TextRange.h>
@@ -24,7 +26,8 @@ namespace GUI {
 class TextEditor
     : public AbstractScrollableWidget
     , public TextDocument::Client
-    , public Syntax::HighlighterClient {
+    , public Syntax::HighlighterClient
+    , public Clipboard::ClipboardClient {
     C_OBJECT(TextEditor);
 
 public:
@@ -47,22 +50,26 @@ public:
 
     virtual ~TextEditor() override;
 
-    const TextDocument& document() const { return *m_document; }
+    TextDocument const& document() const { return *m_document; }
     TextDocument& document() { return *m_document; }
+    bool has_document() const { return !!m_document; }
 
     virtual void set_document(TextDocument&);
 
-    const String& placeholder() const { return m_placeholder; }
-    void set_placeholder(const StringView& placeholder) { m_placeholder = placeholder; }
+    String const& placeholder() const { return m_placeholder; }
+    void set_placeholder(StringView placeholder) { m_placeholder = placeholder; }
 
     TextDocumentLine& current_line() { return line(m_cursor.line()); }
-    const TextDocumentLine& current_line() const { return line(m_cursor.line()); }
+    TextDocumentLine const& current_line() const { return line(m_cursor.line()); }
 
     void set_visualize_trailing_whitespace(bool);
     bool visualize_trailing_whitespace() const { return m_visualize_trailing_whitespace; }
 
     void set_visualize_leading_whitespace(bool);
     bool visualize_leading_whitespace() const { return m_visualize_leading_whitespace; }
+
+    bool is_cursor_line_highlighted() const { return m_cursor_line_highlighting; }
+    void set_cursor_line_highlighting(bool);
 
     virtual bool is_automatic_indentation_enabled() const final { return m_automatic_indentation_enabled; }
     void set_automatic_indentation_enabled(bool enabled) { m_automatic_indentation_enabled = enabled; }
@@ -93,33 +100,35 @@ public:
     bool is_gutter_visible() const { return m_gutter_visible; }
     void set_gutter_visible(bool);
 
-    void set_icon(const Gfx::Bitmap*);
-    const Gfx::Bitmap* icon() const { return m_icon; }
+    void set_icon(Gfx::Bitmap const*);
+    Gfx::Bitmap const* icon() const { return m_icon; }
 
     Function<void()> on_cursor_change;
     Function<void()> on_selection_change;
     Function<void()> on_focusin;
     Function<void()> on_focusout;
+    Function<void()> on_highlighter_change;
 
-    void set_text(const StringView&);
+    void set_text(StringView, AllowCallback = AllowCallback::Yes);
     void scroll_cursor_into_view();
-    void scroll_position_into_view(const TextPosition&);
+    void scroll_position_into_view(TextPosition const&);
     size_t line_count() const { return document().line_count(); }
     TextDocumentLine& line(size_t index) { return document().line(index); }
-    const TextDocumentLine& line(size_t index) const { return document().line(index); }
+    TextDocumentLine const& line(size_t index) const { return document().line(index); }
     NonnullOwnPtrVector<TextDocumentLine>& lines() { return document().lines(); }
-    const NonnullOwnPtrVector<TextDocumentLine>& lines() const { return document().lines(); }
-    int line_spacing() const { return m_line_spacing; }
+    NonnullOwnPtrVector<TextDocumentLine> const& lines() const { return document().lines(); }
     int line_height() const;
     TextPosition cursor() const { return m_cursor; }
     TextRange normalized_selection() const { return m_selection.normalized(); }
 
-    void insert_at_cursor_or_replace_selection(const StringView&);
-    bool write_to_file(const String& path);
+    void insert_at_cursor_or_replace_selection(StringView);
+    bool write_to_file(String const& path);
+    bool write_to_file(Core::File&);
     bool has_selection() const { return m_selection.is_valid(); }
     String selected_text() const;
+    size_t number_of_words() const;
     size_t number_of_selected_words() const;
-    void set_selection(const TextRange&);
+    void set_selection(TextRange const&);
     void clear_selection();
     bool can_undo() const { return document().can_undo(); }
     bool can_redo() const { return document().can_redo(); }
@@ -133,7 +142,11 @@ public:
     void paste();
     void do_delete();
     void delete_current_line();
+    void delete_previous_word();
+    void delete_previous_char();
+    void delete_from_line_start_to_cursor();
     void select_all();
+    void select_current_line();
     virtual void undo();
     virtual void redo();
 
@@ -153,7 +166,6 @@ public:
     Action& cut_action() { return *m_cut_action; }
     Action& copy_action() { return *m_copy_action; }
     Action& paste_action() { return *m_paste_action; }
-    Action& delete_action() { return *m_delete_action; }
     Action& go_to_line_action() { return *m_go_to_line_action; }
     Action& select_all_action() { return *m_select_all_action; }
 
@@ -161,25 +173,29 @@ public:
 
     void set_cursor_and_focus_line(size_t line, size_t column);
     void set_cursor(size_t line, size_t column);
-    virtual void set_cursor(const TextPosition&);
+    virtual void set_cursor(TextPosition const&);
 
-    const Syntax::Highlighter* syntax_highlighter() const;
+    Syntax::Highlighter* syntax_highlighter();
+    Syntax::Highlighter const* syntax_highlighter() const;
     void set_syntax_highlighter(OwnPtr<Syntax::Highlighter>);
 
-    const AutocompleteProvider* autocomplete_provider() const;
+    AutocompleteProvider const* autocomplete_provider() const;
     void set_autocomplete_provider(OwnPtr<AutocompleteProvider>&&);
 
-    const EditingEngine* editing_engine() const;
+    EditingEngine const* editing_engine() const;
     void set_editing_engine(OwnPtr<EditingEngine>);
 
     bool should_autocomplete_automatically() const { return m_autocomplete_timer; }
     void set_should_autocomplete_automatically(bool);
 
+    u32 substitution_code_point() const { return m_substitution_code_point; }
+    void set_substitution_code_point(u32 code_point);
+
     bool is_in_drag_select() const { return m_in_drag_select; }
 
-    TextRange* selection() { return &m_selection; };
+    TextRange& selection() { return m_selection; };
     void did_update_selection();
-    void did_change();
+    void did_change(AllowCallback = AllowCallback::Yes);
     void update_cursor();
 
     void add_code_point(u32 code_point);
@@ -188,9 +204,13 @@ public:
 
     int number_of_visible_lines() const;
     Gfx::IntRect cursor_content_rect() const;
-    TextPosition text_position_at_content_position(const Gfx::IntPoint&) const;
+    TextPosition text_position_at_content_position(Gfx::IntPoint const&) const;
 
     void delete_text_range(TextRange);
+
+    bool text_is_secret() const { return m_text_is_secret; }
+    void set_text_is_secret(bool text_is_secret);
+    void force_rehighlight();
 
 protected:
     explicit TextEditor(Type = Type::MultiLine);
@@ -210,14 +230,14 @@ protected:
     virtual void context_menu_event(ContextMenuEvent&) override;
     virtual void resize_event(ResizeEvent&) override;
     virtual void theme_change_event(ThemeChangeEvent&) override;
-    virtual void cursor_did_change() { }
+    virtual void cursor_did_change();
     Gfx::IntRect ruler_content_rect(size_t line) const;
     Gfx::IntRect gutter_content_rect(size_t line) const;
 
-    TextPosition text_position_at(const Gfx::IntPoint&) const;
+    TextPosition text_position_at(Gfx::IntPoint const&) const;
     bool ruler_visible() const { return m_ruler_visible; }
     bool gutter_visible() const { return m_gutter_visible; }
-    Gfx::IntRect content_rect_for_position(const TextPosition&) const;
+    Gfx::IntRect content_rect_for_position(TextPosition const&) const;
     int ruler_width() const;
     int gutter_width() const;
 
@@ -229,20 +249,23 @@ private:
     virtual void document_did_insert_line(size_t) override;
     virtual void document_did_remove_line(size_t) override;
     virtual void document_did_remove_all_lines() override;
-    virtual void document_did_change() override;
-    virtual void document_did_set_text() override;
-    virtual void document_did_set_cursor(const TextPosition&) override;
+    virtual void document_did_change(AllowCallback = AllowCallback::Yes) override;
+    virtual void document_did_set_text(AllowCallback = AllowCallback::Yes) override;
+    virtual void document_did_set_cursor(TextPosition const&) override;
     virtual void document_did_update_undo_stack() override;
 
     // ^Syntax::HighlighterClient
     virtual Vector<TextDocumentSpan>& spans() final { return document().spans(); }
-    virtual const Vector<TextDocumentSpan>& spans() const final { return document().spans(); }
+    virtual Vector<TextDocumentSpan> const& spans() const final { return document().spans(); }
     virtual void highlighter_did_set_spans(Vector<TextDocumentSpan> spans) final { document().set_spans(move(spans)); }
     virtual void set_span_at_index(size_t index, TextDocumentSpan span) final { document().set_span_at_index(index, move(span)); }
     virtual void highlighter_did_request_update() final { update(); }
     virtual String highlighter_did_request_text() const final { return text(); }
     virtual GUI::TextDocument& highlighter_did_request_document() final { return document(); }
     virtual GUI::TextPosition highlighter_did_request_cursor() const final { return m_cursor; }
+
+    // ^Clipboard::ClipboardClient
+    virtual void clipboard_content_did_change(String const& mime_type) override;
 
     void create_actions();
     void paint_ruler(Painter&);
@@ -252,7 +275,15 @@ private:
     void defer_reflow();
     void undefer_reflow();
 
-    void try_show_autocomplete();
+    enum UserRequestedAutocomplete {
+        No,
+        Yes
+    };
+    void try_show_autocomplete(UserRequestedAutocomplete);
+    void try_update_autocomplete(Function<void()> callback = {});
+    void force_update_autocomplete(Function<void()> callback = {});
+    void hide_autocomplete_if_needed();
+    void hide_autocomplete();
 
     int icon_size() const { return 16; }
     int icon_padding() const { return 2; }
@@ -273,16 +304,19 @@ private:
         TextEditor& m_editor;
     };
 
+    int text_width_for_font(auto const& text_view, Gfx::Font const&) const;
+    Utf32View substitution_code_point_view(size_t length) const;
+
     Gfx::IntRect line_content_rect(size_t item_index) const;
     Gfx::IntRect line_widget_rect(size_t line_index) const;
     void delete_selection();
-    int content_x_for_position(const TextPosition&) const;
+    int content_x_for_position(TextPosition const&) const;
     Gfx::IntRect ruler_rect_in_inner_coordinates() const;
     Gfx::IntRect gutter_rect_in_inner_coordinates() const;
     Gfx::IntRect visible_text_rect_in_inner_coordinates() const;
     void recompute_all_visual_lines();
     void ensure_cursor_is_valid();
-    void flush_pending_change_notification_if_needed();
+    void rehighlight_if_needed();
 
     size_t visual_line_containing(size_t line_index, size_t column) const;
     void recompute_visual_lines(size_t line_index);
@@ -310,22 +344,27 @@ private:
     bool m_in_drag_select { false };
     bool m_ruler_visible { false };
     bool m_gutter_visible { false };
+    bool m_needs_rehighlight { false };
     bool m_has_pending_change_notification { false };
     bool m_automatic_indentation_enabled { false };
     WrappingMode m_wrapping_mode { WrappingMode::NoWrap };
     bool m_visualize_trailing_whitespace { true };
     bool m_visualize_leading_whitespace { false };
-    int m_line_spacing { 4 };
+    bool m_cursor_line_highlighting { true };
     size_t m_soft_tab_width { 4 };
     int m_horizontal_content_padding { 3 };
     TextRange m_selection;
+
+    // NOTE: If non-zero, all glyphs will be substituted with this one.
+    u32 m_substitution_code_point { 0 };
+    mutable OwnPtr<Vector<u32>> m_substitution_string_data; // Used to avoid repeated String construction.
+
     RefPtr<Menu> m_context_menu;
     RefPtr<Action> m_undo_action;
     RefPtr<Action> m_redo_action;
     RefPtr<Action> m_cut_action;
     RefPtr<Action> m_copy_action;
     RefPtr<Action> m_paste_action;
-    RefPtr<Action> m_delete_action;
     RefPtr<Action> m_go_to_line_action;
     RefPtr<Action> m_select_all_action;
     Core::ElapsedTimer m_triple_click_timer;
@@ -364,6 +403,8 @@ private:
     Gfx::IntPoint m_last_mousemove_position;
 
     RefPtr<Gfx::Bitmap> m_icon;
+
+    bool m_text_is_secret { false };
 };
 
 }

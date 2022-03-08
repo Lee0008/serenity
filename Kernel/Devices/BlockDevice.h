@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <AK/IntegralMath.h>
+#include <AK/Weakable.h>
 #include <Kernel/Devices/Device.h>
 
 namespace Kernel {
@@ -29,13 +31,13 @@ public:
     size_t buffer_size() const { return m_buffer_size; }
 
     virtual void start() override;
-    virtual const char* name() const override
+    virtual StringView name() const override
     {
         switch (m_request_type) {
         case Read:
-            return "BlockDeviceRequest (read)";
+            return "BlockDeviceRequest (read)"sv;
         case Write:
-            return "BlockDeviceRequest (write)";
+            return "BlockDeviceRequest (write)"sv;
         default:
             VERIFY_NOT_REACHED();
         }
@@ -55,6 +57,7 @@ public:
     virtual ~BlockDevice() override;
 
     size_t block_size() const { return m_block_size; }
+    u8 block_size_log() const { return m_block_size_log; }
     virtual bool is_seekable() const override { return true; }
 
     bool read_block(u64 index, UserOrKernelBuffer&);
@@ -63,16 +66,21 @@ public:
     virtual void start_request(AsyncBlockDeviceRequest&) = 0;
 
 protected:
-    BlockDevice(unsigned major, unsigned minor, size_t block_size = PAGE_SIZE)
+    BlockDevice(MajorNumber major, MinorNumber minor, size_t block_size = PAGE_SIZE)
         : Device(major, minor)
         , m_block_size(block_size)
     {
+        // 512 is the minimum sector size in most block devices
+        VERIFY(m_block_size >= 512);
+        VERIFY(is_power_of_two(m_block_size));
+        m_block_size_log = AK::log2(m_block_size);
     }
 
 private:
     virtual bool is_block_device() const final { return true; }
 
     size_t m_block_size { 0 };
+    u8 m_block_size_log { 0 };
 };
 
 }

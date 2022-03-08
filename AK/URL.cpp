@@ -16,8 +16,8 @@
 namespace AK {
 
 // FIXME: It could make sense to force users of URL to use URLParser::parse() explicitly instead of using a constructor.
-URL::URL(StringView const& string)
-    : URL(URLParser::parse({}, string))
+URL::URL(StringView string)
+    : URL(URLParser::parse(string))
 {
     if constexpr (URL_PARSER_DEBUG) {
         if (m_valid)
@@ -44,7 +44,7 @@ URL URL::complete_url(String const& string) const
     if (!is_valid())
         return {};
 
-    return URLParser::parse({}, string, this);
+    return URLParser::parse(string, this);
 }
 
 void URL::set_scheme(String scheme)
@@ -71,13 +71,13 @@ void URL::set_host(String host)
     m_valid = compute_validity();
 }
 
-void URL::set_port(u16 port)
+void URL::set_port(Optional<u16> port)
 {
     if (port == default_port_for_scheme(m_scheme)) {
-        m_port = 0;
+        m_port = {};
         return;
     }
-    m_port = port;
+    m_port = move(port);
     m_valid = compute_validity();
 }
 
@@ -135,12 +135,12 @@ bool URL::compute_validity() const
     return true;
 }
 
-bool URL::scheme_requires_port(StringView const& scheme)
+bool URL::scheme_requires_port(StringView scheme)
 {
     return (default_port_for_scheme(scheme) != 0);
 }
 
-u16 URL::default_port_for_scheme(StringView const& scheme)
+u16 URL::default_port_for_scheme(StringView scheme)
 {
     if (scheme == "http")
         return 80;
@@ -162,7 +162,7 @@ u16 URL::default_port_for_scheme(StringView const& scheme)
 URL URL::create_with_file_scheme(String const& path, String const& fragment, String const& hostname)
 {
     LexicalPath lexical_path(path);
-    if (!lexical_path.is_valid() || !lexical_path.is_absolute())
+    if (!lexical_path.is_absolute())
         return {};
 
     URL url;
@@ -189,7 +189,7 @@ URL URL::create_with_url_or_path(String const& url_or_path)
 }
 
 // https://url.spec.whatwg.org/#special-scheme
-bool URL::is_special_scheme(StringView const& scheme)
+bool URL::is_special_scheme(StringView scheme)
 {
     return scheme.is_one_of("ftp", "file", "http", "https", "ws", "wss");
 }
@@ -234,8 +234,8 @@ String URL::serialize(ExcludeFragment exclude_fragment) const
         }
 
         builder.append(m_host);
-        if (m_port != 0)
-            builder.appendff(":{}", m_port);
+        if (m_port.has_value())
+            builder.appendff(":{}", *m_port);
     }
 
     if (cannot_be_a_base_url()) {
@@ -278,8 +278,8 @@ String URL::serialize_for_display() const
     if (!m_host.is_null()) {
         builder.append("//");
         builder.append(m_host);
-        if (m_port != 0)
-            builder.appendff(":{}", m_port);
+        if (m_port.has_value())
+            builder.appendff(":{}", *m_port);
     }
 
     if (cannot_be_a_base_url()) {
@@ -304,6 +304,34 @@ String URL::serialize_for_display() const
     }
 
     return builder.to_string();
+}
+
+// https://html.spec.whatwg.org/multipage/origin.html#ascii-serialisation-of-an-origin
+// https://url.spec.whatwg.org/#concept-url-origin
+String URL::serialize_origin() const
+{
+    VERIFY(m_valid);
+
+    if (m_scheme == "blob"sv) {
+        // TODO: 1. If URL’s blob URL entry is non-null, then return URL’s blob URL entry’s environment’s origin.
+        // 2. Let url be the result of parsing URL’s path[0].
+        VERIFY(!m_paths.is_empty());
+        URL url = m_paths[0];
+        // 3. Return a new opaque origin, if url is failure, and url’s origin otherwise.
+        if (!url.is_valid())
+            return "null";
+        return url.serialize_origin();
+    } else if (!m_scheme.is_one_of("ftp"sv, "http"sv, "https"sv, "ws"sv, "wss"sv)) { // file: "Unfortunate as it is, this is left as an exercise to the reader. When in doubt, return a new opaque origin."
+        return "null";
+    }
+
+    StringBuilder builder;
+    builder.append(m_scheme);
+    builder.append("://"sv);
+    builder.append(m_host);
+    if (m_port.has_value())
+        builder.append(":{}", *m_port);
+    return builder.build();
 }
 
 bool URL::equals(URL const& other, ExcludeFragment exclude_fragments) const
@@ -375,7 +403,7 @@ void URL::append_percent_encoded_if_necessary(StringBuilder& builder, u32 code_p
         builder.append_code_point(code_point);
 }
 
-String URL::percent_encode(StringView const& input, URL::PercentEncodeSet set)
+String URL::percent_encode(StringView input, URL::PercentEncodeSet set)
 {
     StringBuilder builder;
     for (auto code_point : Utf8View(input)) {
@@ -384,7 +412,7 @@ String URL::percent_encode(StringView const& input, URL::PercentEncodeSet set)
     return builder.to_string();
 }
 
-String URL::percent_decode(StringView const& input)
+String URL::percent_decode(StringView input)
 {
     if (!input.contains('%'))
         return input;

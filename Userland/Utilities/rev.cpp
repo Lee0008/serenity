@@ -4,50 +4,65 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/String.h>
-#include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
-#include <LibCore/File.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
+#include <errno.h>
+#include <string.h>
 #include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath"sv));
 
-    Vector<String> paths;
+    Vector<StringView> paths;
     Core::ArgsParser args_parser;
 
     args_parser.set_general_help("Concatente files to stdout with each line in reverse.");
     args_parser.add_positional_argument(paths, "File path", "path", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
-    Vector<RefPtr<Core::File>> files;
-    if (paths.is_empty()) {
-        files.append(Core::File::standard_input());
-    } else {
+    Vector<FILE*> streams;
+    auto num_paths = paths.size();
+    streams.ensure_capacity(num_paths ? num_paths : 1);
+
+    if (!paths.is_empty()) {
         for (auto const& path : paths) {
-            auto file_or_error = Core::File::open(path, Core::OpenMode::ReadOnly);
-            if (file_or_error.is_error()) {
-                warnln("Failed to open {}: {}", path, file_or_error.error());
+            FILE* stream = fopen(String(path).characters(), "r");
+            if (!stream) {
+                warnln("Failed to open {}: {}", path, strerror(errno));
                 continue;
             }
-
-            files.append(file_or_error.value());
+            streams.append(stream);
         }
+    } else {
+        streams.append(stdin);
     }
 
-    if (pledge("stdio", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    char* buffer = nullptr;
+    ScopeGuard guard = [&] {
+        free(buffer);
+        for (auto* stream : streams) {
+            if (fclose(stream))
+                perror("fclose");
+        }
+    };
 
-    for (auto& file : files) {
-        while (file->can_read_line()) {
-            auto line = file->read_line();
-            outln("{}", line.reverse());
+    TRY(Core::System::pledge("stdio"sv));
+
+    for (auto* stream : streams) {
+        for (;;) {
+            size_t n = 0;
+            errno = 0;
+            ssize_t buflen = getline(&buffer, &n, stream);
+            if (buflen == -1) {
+                if (errno != 0) {
+                    perror("getline");
+                    return 1;
+                }
+                break;
+            }
+            outln("{}", String { buffer, Chomp }.reverse());
         }
     }
 

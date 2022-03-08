@@ -5,6 +5,7 @@
  */
 
 #include "CalculatorWidget.h"
+#include <LibCore/System.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Clipboard.h>
@@ -13,65 +14,60 @@
 #include <LibGUI/Menubar.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
 #include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd rpath unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath unix"));
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    auto app = GUI::Application::construct(argc, argv);
-
-    if (pledge("stdio recvfd sendfd rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    unveil(nullptr, nullptr);
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     auto app_icon = GUI::Icon::default_icon("app-calculator");
 
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_title("Calculator");
     window->set_resizable(false);
-    window->resize(254, 215);
+    window->resize(250, 215);
 
-    auto& widget = window->set_main_widget<CalculatorWidget>();
+    auto widget = TRY(window->try_set_main_widget<CalculatorWidget>());
 
-    window->show();
     window->set_icon(app_icon.bitmap_for_size(16));
 
-    auto menubar = GUI::Menubar::construct();
-
-    auto& file_menu = menubar->add_menu("&File");
+    auto& file_menu = window->add_menu("&File");
     file_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
         GUI::Application::the()->quit();
     }));
 
-    auto& edit_menu = menubar->add_menu("&Edit");
+    auto& edit_menu = window->add_menu("&Edit");
     edit_menu.add_action(GUI::CommonActions::make_copy_action([&](auto&) {
-        GUI::Clipboard::the().set_plain_text(widget.get_entry());
+        GUI::Clipboard::the().set_plain_text(widget->get_entry());
     }));
     edit_menu.add_action(GUI::CommonActions::make_paste_action([&](auto&) {
-        auto clipboard = GUI::Clipboard::the().data_and_type();
+        auto clipboard = GUI::Clipboard::the().fetch_data_and_type();
         if (clipboard.mime_type == "text/plain") {
             if (!clipboard.data.is_empty()) {
-                auto data = atof(StringView(clipboard.data).to_string().characters());
-                widget.set_entry(data);
+                widget->set_entry(KeypadValue(StringView(clipboard.data)));
             }
         }
     }));
 
-    auto& help_menu = menubar->add_menu("&Help");
+    auto& constants_menu = window->add_menu("&Constants");
+    constants_menu.add_action(GUI::Action::create("&Pi", TRY(Gfx::Bitmap::try_load_from_file("/res/icons/calculator/pi.png")), [&](auto&) {
+        widget->set_entry(KeypadValue { 31415926535, 10 });
+    }));
+    constants_menu.add_action(GUI::Action::create("&Euler's Constant", TRY(Gfx::Bitmap::try_load_from_file("/res/icons/calculator/eulers.png")), [&](auto&) {
+        widget->set_entry(KeypadValue { 27182818284, 10 });
+    }));
+
+    auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_about_action("Calculator", app_icon, window));
-    window->set_menubar(move(menubar));
+
+    window->show();
+
     return app->exec();
 }

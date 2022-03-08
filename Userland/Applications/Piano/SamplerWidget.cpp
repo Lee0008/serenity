@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, William McPherson <willmcpherson2@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,10 +16,6 @@
 
 WaveEditor::WaveEditor(TrackManager& track_manager)
     : m_track_manager(track_manager)
-{
-}
-
-WaveEditor::~WaveEditor()
 {
 }
 
@@ -72,7 +69,7 @@ SamplerWidget::SamplerWidget(TrackManager& track_manager)
     : m_track_manager(track_manager)
 {
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 10, 10, 10, 10 });
+    layout()->set_margins(10);
     layout()->set_spacing(10);
     set_fill_with_background_color(true);
 
@@ -84,16 +81,12 @@ SamplerWidget::SamplerWidget(TrackManager& track_manager)
     m_open_button = m_open_button_and_recorded_sample_name_container->add<GUI::Button>();
     m_open_button->set_fixed_size(24, 24);
     m_open_button->set_focus_policy(GUI::FocusPolicy::TabFocus);
-    m_open_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/open.png"));
+    m_open_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png").release_value_but_fixme_should_propagate_errors());
     m_open_button->on_click = [this](auto) {
         Optional<String> open_path = GUI::FilePicker::get_open_filepath(window());
         if (!open_path.has_value())
             return;
-        String error_string = m_track_manager.current_track().set_recorded_sample(open_path.value());
-        if (!error_string.is_empty()) {
-            GUI::MessageBox::show(window(), String::formatted("Failed to load WAV file: {}", error_string.characters()), "Error", GUI::MessageBox::Type::Error);
-            return;
-        }
+        // TODO: We don't actually load the sample.
         m_recorded_sample_name->set_text(open_path.value());
         m_wave_editor->update();
     };
@@ -103,8 +96,4 @@ SamplerWidget::SamplerWidget(TrackManager& track_manager)
 
     m_wave_editor = add<WaveEditor>(m_track_manager);
     m_wave_editor->set_fixed_height(100);
-}
-
-SamplerWidget::~SamplerWidget()
-{
 }

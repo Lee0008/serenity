@@ -11,7 +11,7 @@
 
 namespace Debug::Dwarf {
 
-AbbreviationsMap::AbbreviationsMap(const DwarfInfo& dwarf_info, u32 offset)
+AbbreviationsMap::AbbreviationsMap(DwarfInfo const& dwarf_info, u32 offset)
     : m_dwarf_info(dwarf_info)
     , m_offset(offset)
 {
@@ -37,9 +37,9 @@ void AbbreviationsMap::populate_map()
         u8 has_children = 0;
         abbreviation_stream >> has_children;
 
-        AbbreviationEntry abbrevation_entry {};
-        abbrevation_entry.tag = static_cast<EntryTag>(tag);
-        abbrevation_entry.has_children = (has_children == 1);
+        AbbreviationEntry abbreviation_entry {};
+        abbreviation_entry.tag = static_cast<EntryTag>(tag);
+        abbreviation_entry.has_children = (has_children == 1);
 
         AttributeSpecification current_attribute_specification {};
         do {
@@ -58,17 +58,21 @@ void AbbreviationsMap::populate_map()
             }
 
             if (current_attribute_specification.attribute != Attribute::None) {
-                abbrevation_entry.attribute_specifications.append(current_attribute_specification);
+                abbreviation_entry.attribute_specifications.append(current_attribute_specification);
             }
         } while (current_attribute_specification.attribute != Attribute::None || current_attribute_specification.form != AttributeDataForm::None);
 
-        m_entries.set((u32)abbreviation_code, move(abbrevation_entry));
+        m_entries.set(static_cast<u32>(abbreviation_code), move(abbreviation_entry));
     }
 }
 
-Optional<AbbreviationsMap::AbbreviationEntry> AbbreviationsMap::get(u32 code) const
+AbbreviationsMap::AbbreviationEntry const* AbbreviationsMap::get(u32 code) const
 {
-    return m_entries.get(code);
+    auto it = m_entries.find(code);
+    if (it == m_entries.end()) {
+        return nullptr;
+    }
+    return &it->value;
 }
 
 }

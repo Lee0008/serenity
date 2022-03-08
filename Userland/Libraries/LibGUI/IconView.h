@@ -40,6 +40,8 @@ public:
 
     virtual ModelIndex index_at_event_position(const Gfx::IntPoint&) const override;
     virtual Gfx::IntRect content_rect(const ModelIndex&) const override;
+    virtual Gfx::IntRect editing_rect(ModelIndex const&) const override;
+    virtual Gfx::IntRect paint_invalidation_rect(ModelIndex const&) const override;
 
     virtual void select_all() override;
 
@@ -55,11 +57,15 @@ private:
     virtual void mouseup_event(MouseEvent&) override;
     virtual void did_change_hovered_index(const ModelIndex& old_index, const ModelIndex& new_index) override;
     virtual void did_change_cursor_index(const ModelIndex& old_index, const ModelIndex& new_index) override;
+    virtual void editing_widget_did_change(const ModelIndex& index) override;
 
     virtual void move_cursor(CursorMovement, SelectionUpdate) override;
 
+    virtual void on_automatic_scrolling_timer_fired() override;
+
     struct ItemData {
         Gfx::IntRect text_rect;
+        Optional<Gfx::IntRect> text_rect_wrapped;
         Gfx::IntRect icon_rect;
         int icon_offset_y;
         int text_offset_y;
@@ -77,20 +83,25 @@ private:
             text = {};
         }
 
+        Gfx::IntRect hot_icon_rect() const { return icon_rect.inflated(10, 10); }
+        Gfx::IntRect hot_text_rect() const { return text_rect.inflated(2, 2); }
+
         bool is_intersecting(const Gfx::IntRect& rect) const
         {
             VERIFY(valid);
-            return icon_rect.intersects(rect) || text_rect.intersects(rect);
+            return hot_icon_rect().intersects(rect) || hot_text_rect().intersects(rect);
         }
 
         bool is_containing(const Gfx::IntPoint& point) const
         {
             VERIFY(valid);
-            return icon_rect.contains(point) || text_rect.contains(point);
+            return hot_icon_rect().contains(point) || hot_text_rect().contains(point);
         }
 
-        Gfx::IntRect rect() const
+        Gfx::IntRect rect(bool wrapped = false) const
         {
+            if (wrapped && text_rect_wrapped.has_value())
+                return text_rect_wrapped->united(icon_rect);
             return text_rect.united(icon_rect);
         }
     };
@@ -113,7 +124,6 @@ private:
     void update_item_rects(int item_index, ItemData& item_data) const;
     void get_item_rects(int item_index, ItemData& item_data, const Gfx::Font&) const;
     bool update_rubber_banding(const Gfx::IntPoint&);
-    void scroll_out_of_view_timer_fired();
     int items_per_page() const;
 
     void rebuild_item_cache() const;
@@ -134,7 +144,7 @@ private:
     void do_clear_selection();
     bool do_add_selection(ItemData&);
     void add_selection(ItemData&);
-    void remove_selection(ItemData&);
+    void remove_item_selection(ItemData&);
     void toggle_selection(ItemData&);
 
     int m_horizontal_padding { 5 };
@@ -147,10 +157,10 @@ private:
     bool m_always_wrap_item_labels { false };
 
     bool m_rubber_banding { false };
-    RefPtr<Core::Timer> m_out_of_view_timer;
     Gfx::IntPoint m_out_of_view_position;
     Gfx::IntPoint m_rubber_band_origin;
     Gfx::IntPoint m_rubber_band_current;
+    Gfx::IntPoint m_rubber_band_scroll_delta;
 
     FlowDirection m_flow_direction { FlowDirection::LeftToRight };
 

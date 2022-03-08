@@ -6,12 +6,13 @@
 
 #pragma once
 
-#include <LibJS/Runtime/Object.h>
+#include <LibJS/Runtime/ArrayBuffer.h>
+#include <LibJS/Runtime/PrototypeObject.h>
 
 namespace JS {
 
-class ArrayBufferPrototype final : public Object {
-    JS_OBJECT(ArrayBufferPrototype, Object);
+class ArrayBufferPrototype final : public PrototypeObject<ArrayBufferPrototype, ArrayBuffer> {
+    JS_PROTOTYPE_OBJECT(ArrayBufferPrototype, ArrayBuffer, ArrayBuffer);
 
 public:
     explicit ArrayBufferPrototype(GlobalObject&);
@@ -20,7 +21,10 @@ public:
 
 private:
     JS_DECLARE_NATIVE_FUNCTION(slice);
-    JS_DECLARE_NATIVE_GETTER(byte_length_getter);
+    JS_DECLARE_NATIVE_FUNCTION(resize);
+    JS_DECLARE_NATIVE_FUNCTION(byte_length_getter);
+    JS_DECLARE_NATIVE_FUNCTION(max_byte_length_getter);
+    JS_DECLARE_NATIVE_FUNCTION(resizable_getter);
 };
 
 }

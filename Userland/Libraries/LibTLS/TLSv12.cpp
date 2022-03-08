@@ -9,7 +9,6 @@
 #include <LibCore/ConfigFile.h>
 #include <LibCore/DateTime.h>
 #include <LibCore/File.h>
-#include <LibCore/FileStream.h>
 #include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/ASN1.h>
 #include <LibCrypto/ASN1/PEM.h>
@@ -36,7 +35,10 @@ void TLSv12::consume(ReadonlyBytes record)
 
     dbgln_if(TLS_DEBUG, "Consuming {} bytes", record.size());
 
-    m_context.message_buffer.append(record.data(), record.size());
+    if (m_context.message_buffer.try_append(record).is_error()) {
+        dbgln("Not enough space in message buffer, dropping the record");
+        return;
+    }
 
     size_t index { 0 };
     size_t buffer_length = m_context.message_buffer.size();
@@ -172,7 +174,7 @@ void TLSv12::try_disambiguate_error() const
 
 void TLSv12::set_root_certificates(Vector<Certificate> certificates)
 {
-    if (!m_context.root_ceritificates.is_empty())
+    if (!m_context.root_certificates.is_empty())
         dbgln("TLS warn: resetting root certificates!");
 
     for (auto& cert : certificates) {
@@ -180,7 +182,8 @@ void TLSv12::set_root_certificates(Vector<Certificate> certificates)
             dbgln("Certificate for {} by {} is invalid, things may or may not work!", cert.subject.subject, cert.issuer.subject);
         // FIXME: Figure out what we should do when our root certs are invalid.
     }
-    m_context.root_ceritificates = move(certificates);
+    m_context.root_certificates = move(certificates);
+    dbgln_if(TLS_DEBUG, "{}: Set {} root certificates", this, m_context.root_certificates.size());
 }
 
 bool Context::verify_chain() const
@@ -200,7 +203,7 @@ bool Context::verify_chain() const
     HashMap<String, String> chain;
     HashTable<String> roots;
     // First, walk the root certs.
-    for (auto& cert : root_ceritificates) {
+    for (auto& cert : root_certificates) {
         roots.set(cert.subject.subject);
         chain.set(cert.subject.subject, cert.issuer.subject);
     }
@@ -221,7 +224,7 @@ bool Context::verify_chain() const
 
         auto ref = chain.get(it.value);
         if (!ref.has_value()) {
-            dbgln("Certificate for {} is not signed by anyone we trust ({})", it.key, it.value);
+            dbgln("{}: Certificate for {} is not signed by anyone we trust ({})", this, it.key, it.value);
             return false;
         }
 
@@ -299,57 +302,50 @@ void TLSv12::pseudorandom_function(Bytes output, ReadonlyBytes secret, const u8*
     }
 }
 
-TLSv12::TLSv12(Core::Object* parent, Options options)
-    : Core::Socket(Core::Socket::Type::TCP, parent)
+TLSv12::TLSv12(StreamVariantType stream, Options options)
+    : m_stream(move(stream))
 {
     m_context.options = move(options);
     m_context.is_server = false;
-    m_context.tls_buffer = ByteBuffer::create_uninitialized(0);
-#ifdef SOCK_NONBLOCK
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-#else
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    int option = 1;
-    ioctl(fd, FIONBIO, &option);
-#endif
-    if (fd < 0) {
-        set_error(errno);
-    } else {
-        set_fd(fd);
-        set_mode(Core::OpenMode::ReadWrite);
-        set_error(0);
-    }
+    m_context.tls_buffer = {};
+
+    set_root_certificates(m_context.options.root_certificates.has_value()
+            ? *m_context.options.root_certificates
+            : DefaultRootCACertificates::the().certificates());
+
+    setup_connection();
 }
 
-bool TLSv12::add_client_key(ReadonlyBytes certificate_pem_buffer, ReadonlyBytes rsa_key) // FIXME: This should not be bound to RSA
+Vector<Certificate> TLSv12::parse_pem_certificate(ReadonlyBytes certificate_pem_buffer, ReadonlyBytes rsa_key) // FIXME: This should not be bound to RSA
 {
     if (certificate_pem_buffer.is_empty() || rsa_key.is_empty()) {
-        return true;
+        return {};
     }
+
     auto decoded_certificate = Crypto::decode_pem(certificate_pem_buffer);
     if (decoded_certificate.is_empty()) {
         dbgln("Certificate not PEM");
-        return false;
+        return {};
     }
 
     auto maybe_certificate = Certificate::parse_asn1(decoded_certificate);
     if (!maybe_certificate.has_value()) {
         dbgln("Invalid certificate");
-        return false;
+        return {};
     }
 
     Crypto::PK::RSA rsa(rsa_key);
-    auto certificate = maybe_certificate.value();
+    auto certificate = maybe_certificate.release_value();
     certificate.private_key = rsa.private_key();
 
-    return add_client_key(certificate);
+    return { move(certificate) };
 }
 
-AK::Singleton<DefaultRootCACertificates> DefaultRootCACertificates::s_the;
+Singleton<DefaultRootCACertificates> DefaultRootCACertificates::s_the;
 DefaultRootCACertificates::DefaultRootCACertificates()
 {
     // FIXME: This might not be the best format, find a better way to represent CA certificates.
-    auto config = Core::ConfigFile::get_for_system("ca_certs");
+    auto config = Core::ConfigFile::open_for_system("ca_certs").release_value_but_fixme_should_propagate_errors();
     auto now = Core::DateTime::now();
     auto last_year = Core::DateTime::create(now.year() - 1);
     auto next_year = Core::DateTime::create(now.year() + 1);
@@ -362,5 +358,6 @@ DefaultRootCACertificates::DefaultRootCACertificates()
         cert.not_after = Crypto::ASN1::parse_generalized_time(config->read_entry(entity, "not_after", "")).value_or(next_year);
         m_ca_certificates.append(move(cert));
     }
+    dbgln("Loaded {} CA Certificates", m_ca_certificates.size());
 }
 }

@@ -11,17 +11,18 @@
 namespace Kernel {
 
 class LoopbackAdapter final : public NetworkAdapter {
-    AK_MAKE_ETERNAL
-
 private:
-    LoopbackAdapter();
+    LoopbackAdapter(NonnullOwnPtr<KString>);
 
 public:
-    static NonnullRefPtr<LoopbackAdapter> create();
+    static RefPtr<LoopbackAdapter> try_create();
     virtual ~LoopbackAdapter() override;
 
     virtual void send_raw(ReadonlyBytes) override;
-    virtual const char* class_name() const override { return "LoopbackAdapter"; }
+    virtual StringView class_name() const override { return "LoopbackAdapter"sv; }
+    virtual bool link_up() override { return true; }
+    virtual bool link_full_duplex() override { return true; }
+    virtual int link_speed() override { return 1000; }
 };
 
 }

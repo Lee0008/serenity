@@ -7,30 +7,34 @@
 #pragma once
 
 #include <AK/OwnPtr.h>
-#include <AK/Vector.h>
 #include <LibMarkdown/Block.h>
-#include <LibMarkdown/Text.h>
+#include <LibMarkdown/ContainerBlock.h>
+#include <LibMarkdown/LineIterator.h>
 
 namespace Markdown {
 
 class List final : public Block {
 public:
-    List(Vector<Text>&& text, bool is_ordered)
-        : m_items(move(text))
+    List(Vector<OwnPtr<ContainerBlock>> items, bool is_ordered, bool is_tight, size_t start_number)
+        : m_items(move(items))
         , m_is_ordered(is_ordered)
+        , m_is_tight(is_tight)
+        , m_start_number(start_number)
     {
     }
     virtual ~List() override { }
 
-    virtual String render_to_html() const override;
+    virtual String render_to_html(bool tight = false) const override;
     virtual String render_for_terminal(size_t view_width = 0) const override;
+    virtual RecursionDecision walk(Visitor&) const override;
 
-    static OwnPtr<List> parse(Vector<StringView>::ConstIterator& lines);
+    static OwnPtr<List> parse(LineIterator& lines);
 
 private:
-    // TODO: List items should be considered blocks of their own kind.
-    Vector<Text> m_items;
+    Vector<OwnPtr<ContainerBlock>> m_items;
     bool m_is_ordered { false };
+    bool m_is_tight { false };
+    size_t m_start_number { 1 };
 };
 
 }

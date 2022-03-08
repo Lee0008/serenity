@@ -1,15 +1,15 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/MappedFile.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/MappedFile.h>
 #include <LibELF/DynamicLoader.h>
 #include <LibELF/DynamicObject.h>
 #include <LibELF/Image.h>
@@ -19,51 +19,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-static const char* object_file_type_to_string(Elf32_Half type)
-{
-    switch (type) {
-    case ET_NONE:
-        return "None";
-    case ET_REL:
-        return "Relocatable";
-    case ET_EXEC:
-        return "Executable";
-    case ET_DYN:
-        return "Shared object";
-    case ET_CORE:
-        return "Core";
-    default:
-        return "(?)";
-    }
-}
-
-static const char* object_machine_type_to_string(Elf32_Half type)
-{
-    switch (type) {
-    case ET_NONE:
-        return "None";
-    case EM_M32:
-        return "AT&T WE 32100";
-    case EM_SPARC:
-        return "SPARC";
-    case EM_386:
-        return "Intel 80386";
-    case EM_68K:
-        return "Motorola 68000";
-    case EM_88K:
-        return "Motorola 88000";
-    case EM_486:
-        return "Intel 80486";
-    case EM_860:
-        return "Intel 80860";
-    case EM_MIPS:
-        return "MIPS R3000 Big-Endian only";
-    default:
-        return "(?)";
-    }
-}
-
-static const char* object_program_header_type_to_string(Elf32_Word type)
+static const char* object_program_header_type_to_string(ElfW(Word) type)
 {
     switch (type) {
     case PT_NULL:
@@ -107,7 +63,7 @@ static const char* object_program_header_type_to_string(Elf32_Word type)
     }
 }
 
-static const char* object_section_header_type_to_string(Elf32_Word type)
+static const char* object_section_header_type_to_string(ElfW(Word) type)
 {
     switch (type) {
     case SHT_NULL:
@@ -146,6 +102,8 @@ static const char* object_section_header_type_to_string(Elf32_Word type)
         return "GROUP";
     case SHT_SYMTAB_SHNDX:
         return "SYMTAB_SHNDX";
+    case SHT_RELR:
+        return "RELR";
     case SHT_LOOS:
         return "SOOS";
     case SHT_SUNW_dof:
@@ -177,7 +135,7 @@ static const char* object_section_header_type_to_string(Elf32_Word type)
     }
 }
 
-static const char* object_symbol_type_to_string(Elf32_Word type)
+static const char* object_symbol_type_to_string(ElfW(Word) type)
 {
     switch (type) {
     case STT_NOTYPE:
@@ -201,7 +159,7 @@ static const char* object_symbol_type_to_string(Elf32_Word type)
     }
 }
 
-static const char* object_symbol_binding_to_string(Elf32_Word type)
+static const char* object_symbol_binding_to_string(ElfW(Word) type)
 {
     switch (type) {
     case STB_LOCAL:
@@ -221,9 +179,10 @@ static const char* object_symbol_binding_to_string(Elf32_Word type)
     }
 }
 
-static const char* object_relocation_type_to_string(Elf32_Word type)
+static const char* object_relocation_type_to_string(ElfW(Word) type)
 {
     switch (type) {
+#if ARCH(I386)
     case R_386_NONE:
         return "R_386_NONE";
     case R_386_32:
@@ -246,100 +205,22 @@ static const char* object_relocation_type_to_string(Elf32_Word type)
         return "R_386_TLS_TPOFF";
     case R_386_TLS_TPOFF32:
         return "R_386_TLS_TPOFF32";
+#else
+    case R_X86_64_NONE:
+        return "R_X86_64_NONE";
+    case R_X86_64_64:
+        return "R_X86_64";
+    case R_X86_64_GLOB_DAT:
+        return "R_x86_64_GLOB_DAT";
+    case R_X86_64_JUMP_SLOT:
+        return "R_X86_64_JUMP_SLOT";
+    case R_X86_64_RELATIVE:
+        return "R_X86_64_RELATIVE";
+    case R_X86_64_TPOFF64:
+        return "R_X86_64_TPOFF64";
+#endif
     default:
         return "(?)";
-    }
-}
-
-static const char* object_tag_to_string(Elf32_Sword dt_tag)
-{
-    switch (dt_tag) {
-    case DT_NULL:
-        return "NULL"; /* marks end of _DYNAMIC array */
-    case DT_NEEDED:
-        return "NEEDED"; /* string table offset of needed lib */
-    case DT_PLTRELSZ:
-        return "PLTRELSZ"; /* size of relocation entries in PLT */
-    case DT_PLTGOT:
-        return "PLTGOT"; /* address PLT/GOT */
-    case DT_HASH:
-        return "HASH"; /* address of symbol hash table */
-    case DT_STRTAB:
-        return "STRTAB"; /* address of string table */
-    case DT_SYMTAB:
-        return "SYMTAB"; /* address of symbol table */
-    case DT_RELA:
-        return "RELA"; /* address of relocation table */
-    case DT_RELASZ:
-        return "RELASZ"; /* size of relocation table */
-    case DT_RELAENT:
-        return "RELAENT"; /* size of relocation entry */
-    case DT_STRSZ:
-        return "STRSZ"; /* size of string table */
-    case DT_SYMENT:
-        return "SYMENT"; /* size of symbol table entry */
-    case DT_INIT:
-        return "INIT"; /* address of initialization func. */
-    case DT_FINI:
-        return "FINI"; /* address of termination function */
-    case DT_SONAME:
-        return "SONAME"; /* string table offset of shared obj */
-    case DT_RPATH:
-        return "RPATH"; /* string table offset of library search path */
-    case DT_SYMBOLIC:
-        return "SYMBOLIC"; /* start sym search in shared obj. */
-    case DT_REL:
-        return "REL"; /* address of rel. tbl. w addends */
-    case DT_RELSZ:
-        return "RELSZ"; /* size of DT_REL relocation table */
-    case DT_RELENT:
-        return "RELENT"; /* size of DT_REL relocation entry */
-    case DT_PLTREL:
-        return "PLTREL"; /* PLT referenced relocation entry */
-    case DT_DEBUG:
-        return "DEBUG"; /* bugger */
-    case DT_TEXTREL:
-        return "TEXTREL"; /* Allow rel. mod. to unwritable seg */
-    case DT_JMPREL:
-        return "JMPREL"; /* add. of PLT's relocation entries */
-    case DT_BIND_NOW:
-        return "BIND_NOW"; /* Bind now regardless of env setting */
-    case DT_INIT_ARRAY:
-        return "INIT_ARRAY"; /* address of array of init func */
-    case DT_FINI_ARRAY:
-        return "FINI_ARRAY"; /* address of array of term func */
-    case DT_INIT_ARRAYSZ:
-        return "INIT_ARRAYSZ"; /* size of array of init func */
-    case DT_FINI_ARRAYSZ:
-        return "FINI_ARRAYSZ"; /* size of array of term func */
-    case DT_RUNPATH:
-        return "RUNPATH"; /* strtab offset of lib search path */
-    case DT_FLAGS:
-        return "FLAGS"; /* Set of DF_* flags */
-    case DT_ENCODING:
-        return "ENCODING"; /* further DT_* follow encoding rules */
-    case DT_PREINIT_ARRAY:
-        return "PREINIT_ARRAY"; /* address of array of preinit func */
-    case DT_PREINIT_ARRAYSZ:
-        return "PREINIT_ARRAYSZ"; /* size of array of preinit func */
-    case DT_LOOS:
-        return "LOOS"; /* reserved range for OS */
-    case DT_HIOS:
-        return "HIOS"; /*  specific dynamic array tags */
-    case DT_LOPROC:
-        return "LOPROC"; /* reserved range for processor */
-    case DT_HIPROC:
-        return "HIPROC"; /*  specific dynamic array tags */
-    case DT_GNU_HASH:
-        return "GNU_HASH"; /* address of GNU hash table */
-    case DT_RELACOUNT:
-        return "RELACOUNT"; /* if present, number of RELATIVE */
-    case DT_RELCOUNT:
-        return "RELCOUNT"; /* relocs, which must come first */
-    case DT_FLAGS_1:
-        return "FLAGS_1";
-    default:
-        return "??";
     }
 }
 
@@ -363,6 +244,7 @@ int main(int argc, char** argv)
     static bool display_unwind_info = false;
     static bool display_dynamic_section = false;
     static bool display_hardening = false;
+    StringView string_dump_section {};
 
     Core::ArgsParser args_parser;
     args_parser.add_option(display_all, "Display all", "all", 'a');
@@ -377,6 +259,7 @@ int main(int argc, char** argv)
     args_parser.add_option(display_relocations, "Display relocations", "relocs", 'r');
     args_parser.add_option(display_unwind_info, "Display unwind info", "unwind", 'u');
     args_parser.add_option(display_hardening, "Display security hardening info", "checksec", 'c');
+    args_parser.add_option(string_dump_section, "Display the contents of a section as strings", "string-dump", 'p', "section-name");
     args_parser.add_positional_argument(path, "ELF path", "path");
     args_parser.parse(argc, argv);
 
@@ -395,6 +278,8 @@ int main(int argc, char** argv)
         display_elf_header = true;
         display_program_headers = true;
         display_section_headers = true;
+        display_dynamic_symbol_table = true;
+        display_dynamic_section = true;
         display_core_notes = true;
         display_relocations = true;
         display_unwind_info = true;
@@ -402,7 +287,7 @@ int main(int argc, char** argv)
         display_hardening = true;
     }
 
-    auto file_or_error = MappedFile::map(path);
+    auto file_or_error = Core::MappedFile::map(path);
 
     if (file_or_error.is_error()) {
         warnln("Unable to map file {}: {}", path, file_or_error.error());
@@ -417,24 +302,25 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    String interpreter_path;
-
-    if (!ELF::validate_program_headers(*(const Elf32_Ehdr*)elf_image_data.data(), elf_image_data.size(), (const u8*)elf_image_data.data(), elf_image_data.size(), &interpreter_path)) {
+    StringBuilder interpreter_path_builder;
+    auto result_or_error = ELF::validate_program_headers(*(const ElfW(Ehdr)*)elf_image_data.data(), elf_image_data.size(), elf_image_data, &interpreter_path_builder);
+    if (result_or_error.is_error() || !result_or_error.value()) {
         warnln("Invalid ELF headers");
         return -1;
     }
+    auto interpreter_path = interpreter_path_builder.string_view();
 
-    auto& header = *reinterpret_cast<const Elf32_Ehdr*>(elf_image_data.data());
+    auto& header = *reinterpret_cast<const ElfW(Ehdr)*>(elf_image_data.data());
 
     RefPtr<ELF::DynamicObject> object = nullptr;
 
     if (elf_image.is_dynamic()) {
-        if (interpreter_path.is_null()) {
-            interpreter_path = "/usr/lib/Loader.so";
+        if (interpreter_path.is_empty()) {
+            interpreter_path = "/usr/lib/Loader.so"sv;
             warnln("Warning: Dynamic ELF object has no interpreter path. Using: {}", interpreter_path);
         }
 
-        auto interpreter_file_or_error = MappedFile::map(interpreter_path);
+        auto interpreter_file_or_error = Core::MappedFile::map(interpreter_path);
 
         if (interpreter_file_or_error.is_error()) {
             warnln("Unable to map interpreter file {}: {}", interpreter_path, interpreter_file_or_error.error());
@@ -487,8 +373,8 @@ int main(int argc, char** argv)
         }
         outln();
 
-        outln("  Type:                              {} ({})", header.e_type, object_file_type_to_string(header.e_type));
-        outln("  Machine:                           {} ({})", header.e_machine, object_machine_type_to_string(header.e_machine));
+        outln("  Type:                              {} ({})", header.e_type, ELF::Image::object_file_type_to_string(header.e_type).value_or("(?)"));
+        outln("  Machine:                           {} ({})", header.e_machine, ELF::Image::object_machine_type_to_string(header.e_machine).value_or("(?)"));
         outln("  Version:                           {:#x}", header.e_version);
         outln("  Entry point address:               {:#x}", header.e_entry);
         outln("  Start of program headers:          {} (bytes into file)", header.e_phoff);
@@ -503,6 +389,12 @@ int main(int argc, char** argv)
         outln();
     }
 
+#if ARCH(I386)
+    auto addr_padding = "";
+#else
+    auto addr_padding = "        ";
+#endif
+
     if (display_section_headers) {
         if (!display_all) {
             outln("There are {} section headers, starting at offset {:#x}:", header.e_shnum, header.e_shoff);
@@ -513,14 +405,14 @@ int main(int argc, char** argv)
             outln("There are no sections in this file.");
         } else {
             outln("Section Headers:");
-            outln("  Name                Type            Address  Offset   Size     Flags");
+            outln("  Name                Type            Address{}    Offset{}     Size{}       Flags", addr_padding, addr_padding, addr_padding);
 
             elf_image.for_each_section([](const ELF::Image::Section& section) {
                 out("  {:19} ", section.name());
                 out("{:15} ", object_section_header_type_to_string(section.type()));
-                out("{:08x} ", section.address());
-                out("{:08x} ", section.offset());
-                out("{:08x} ", section.size());
+                out("{:p} ", section.address());
+                out("{:p} ", section.offset());
+                out("{:p} ", section.size());
                 out("{}", section.flags());
                 outln();
             });
@@ -530,7 +422,7 @@ int main(int argc, char** argv)
 
     if (display_program_headers) {
         if (!display_all) {
-            outln("ELF file type is {} ({})", header.e_type, object_file_type_to_string(header.e_type));
+            outln("ELF file type is {} ({})", header.e_type, ELF::Image::object_file_type_to_string(header.e_type).value_or("(?)"));
             outln("Entry point {:#x}\n", header.e_entry);
             outln("There are {} program headers, starting at offset {}", header.e_phnum, header.e_phoff);
             outln();
@@ -540,18 +432,19 @@ int main(int argc, char** argv)
             outln("There are no program headers in this file.");
         } else {
             outln("Program Headers:");
-            outln("  Type           Offset     VirtAddr   PhysAddr   FileSiz    MemSiz     Flg  Align");
+            outln("  Type           Offset{}     VirtAddr{}   PhysAddr{}   FileSiz{}    MemSiz{}     Flg  Align",
+                addr_padding, addr_padding, addr_padding, addr_padding, addr_padding);
 
             elf_image.for_each_program_header([](const ELF::Image::ProgramHeader& program_header) {
                 out("  ");
                 out("{:14} ", object_program_header_type_to_string(program_header.type()));
-                out("{:#08x} ", program_header.offset());
+                out("{:p} ", program_header.offset());
                 out("{:p} ", program_header.vaddr().as_ptr());
                 out("{:p} ", program_header.vaddr().as_ptr()); // FIXME: assumes PhysAddr = VirtAddr
-                out("{:#08x} ", program_header.size_in_image());
-                out("{:#08x} ", program_header.size_in_memory());
+                out("{:p} ", program_header.size_in_image());
+                out("{:p} ", program_header.size_in_memory());
                 out("{:04x} ", program_header.flags());
-                out("{:#08x}", program_header.alignment());
+                out("{:p}", program_header.alignment());
                 outln();
 
                 if (program_header.type() == PT_INTERP)
@@ -590,7 +483,7 @@ int main(int argc, char** argv)
             outln("  Tag        Type              Name / Value");
             object->for_each_dynamic_entry([&library_index, &libraries, &object](const ELF::DynamicObject::DynamicEntry& entry) {
                 out("  {:#08x} ", entry.tag());
-                out("{:17} ", object_tag_to_string(entry.tag()));
+                out("{:17} ", ELF::DynamicObject::name_for_dtag(entry.tag()));
 
                 if (entry.tag() == DT_NEEDED) {
                     outln("Shared library: {}", libraries[library_index]);
@@ -619,11 +512,11 @@ int main(int argc, char** argv)
                 outln("Relocation section '{}' at offset {:#08x} contains zero entries:", object->relocation_section().name(), object->relocation_section().offset());
             } else {
                 outln("Relocation section '{}' at offset {:#08x} contains {} entries:", object->relocation_section().name(), object->relocation_section().offset(), object->relocation_section().entry_count());
-                outln("  Offset      Type               Sym Value   Sym Name");
+                outln("  Offset{}      Type                Sym Value{}   Sym Name", addr_padding, addr_padding);
                 object->relocation_section().for_each_relocation([](const ELF::DynamicObject::Relocation& reloc) {
-                    out("  {:#08x} ", reloc.offset());
-                    out(" {:17} ", object_relocation_type_to_string(reloc.type()));
-                    out(" {:#08x} ", reloc.symbol().value());
+                    out("  {:p} ", reloc.offset());
+                    out(" {:18} ", object_relocation_type_to_string(reloc.type()));
+                    out(" {:p} ", reloc.symbol().value());
                     out(" {}", reloc.symbol().name());
                     outln();
                 });
@@ -634,14 +527,24 @@ int main(int argc, char** argv)
                 outln("Relocation section '{}' at offset {:#08x} contains zero entries:", object->plt_relocation_section().name(), object->plt_relocation_section().offset());
             } else {
                 outln("Relocation section '{}' at offset {:#08x} contains {} entries:", object->plt_relocation_section().name(), object->plt_relocation_section().offset(), object->plt_relocation_section().entry_count());
-                outln("  Offset      Type               Sym Value   Sym Name");
+                outln("  Offset{}      Type                Sym Value{}   Sym Name", addr_padding, addr_padding);
                 object->plt_relocation_section().for_each_relocation([](const ELF::DynamicObject::Relocation& reloc) {
-                    out("  {:#08x} ", reloc.offset());
-                    out(" {:17} ", object_relocation_type_to_string(reloc.type()));
-                    out(" {:#08x} ", reloc.symbol().value());
+                    out("  {:p} ", reloc.offset());
+                    out(" {:18} ", object_relocation_type_to_string(reloc.type()));
+                    out(" {:p} ", reloc.symbol().value());
                     out(" {}", reloc.symbol().name());
                     outln();
                 });
+            }
+
+            outln();
+
+            size_t relr_count = 0;
+            object->for_each_relr_relocation([&relr_count](auto) { ++relr_count; });
+            if (relr_count != 0) {
+                outln("Relocation section '.relr.dyn' at offset {:#08x} contains {} entries:", object->relr_relocation_section().offset(), object->relr_relocation_section().entry_count());
+                outln("{:>8x} offsets", relr_count);
+                object->for_each_relr_relocation([](auto offset) { outln("{:p}", offset); });
             }
         } else {
             outln("No relocations in this file.");
@@ -652,7 +555,7 @@ int main(int argc, char** argv)
 
     if (display_unwind_info) {
         // TODO: Unwind info
-        outln("Decoding of unwind sections for machine type {} is not supported.", object_machine_type_to_string(header.e_machine));
+        outln("Decoding of unwind sections for machine type {} is not supported.", ELF::Image::object_machine_type_to_string(header.e_machine).value_or("?"));
         outln();
     }
 
@@ -697,11 +600,11 @@ int main(int argc, char** argv)
 
             if (object->symbol_count()) {
                 // FIXME: Add support for init/fini/start/main sections
-                outln("   Num: Value    Size     Type     Bind     Name");
+                outln("   Num: Value{}      Size{}       Type     Bind     Name", addr_padding, addr_padding);
                 object->for_each_symbol([](const ELF::DynamicObject::Symbol& sym) {
                     out("  {:>4}: ", sym.index());
-                    out("{:08x} ", sym.value());
-                    out("{:08x} ", sym.size());
+                    out("{:p} ", sym.value());
+                    out("{:p} ", sym.size());
                     out("{:8} ", object_symbol_type_to_string(sym.type()));
                     out("{:8} ", object_symbol_binding_to_string(sym.bind()));
                     out("{}", sym.name());
@@ -719,12 +622,12 @@ int main(int argc, char** argv)
     if (display_symbol_table) {
         if (elf_image.symbol_count()) {
             outln("Symbol table '{}' contains {} entries:", ELF_SYMTAB, elf_image.symbol_count());
-            outln("   Num: Value    Size     Type     Bind     Name");
+            outln("   Num: Value{}      Size{}       Type     Bind     Name", addr_padding, addr_padding);
 
             elf_image.for_each_symbol([](const ELF::Image::Symbol& sym) {
                 out("  {:>4}: ", sym.index());
-                out("{:08x} ", sym.value());
-                out("{:08x} ", sym.size());
+                out("{:p} ", sym.value());
+                out("{:p} ", sym.size());
                 out("{:8} ", object_symbol_type_to_string(sym.type()));
                 out("{:8} ", object_symbol_binding_to_string(sym.bind()));
                 out("{}", sym.name());
@@ -828,5 +731,19 @@ int main(int argc, char** argv)
         outln();
     }
 
+    if (!string_dump_section.is_null()) {
+        auto maybe_section = elf_image.lookup_section(string_dump_section);
+        if (maybe_section.has_value()) {
+            outln("String dump of section \'{}\':", string_dump_section);
+            StringView data(maybe_section->raw_data(), maybe_section->size());
+            data.for_each_split_view('\0', false, [&data](auto string) {
+                auto offset = string.characters_without_null_termination() - data.characters_without_null_termination();
+                outln("[{:6x}] {}", offset, string);
+            });
+        } else {
+            warnln("Could not find section \'{}\'", string_dump_section);
+            return 1;
+        }
+    }
     return 0;
 }

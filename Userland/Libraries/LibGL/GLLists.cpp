@@ -19,9 +19,19 @@ void glCallList(GLuint list)
     return g_gl_context->gl_call_list(list);
 }
 
+void glCallLists(GLsizei n, GLenum type, void const* lists)
+{
+    return g_gl_context->gl_call_lists(n, type, lists);
+}
+
 void glDeleteLists(GLuint list, GLsizei range)
 {
     return g_gl_context->gl_delete_lists(list, range);
+}
+
+void glListBase(GLuint base)
+{
+    return g_gl_context->gl_list_base(base);
 }
 
 void glEndList(void)
@@ -32,4 +42,9 @@ void glEndList(void)
 void glNewList(GLuint list, GLenum mode)
 {
     return g_gl_context->gl_new_list(list, mode);
+}
+
+GLboolean glIsList(GLuint list)
+{
+    return g_gl_context->gl_is_list(list);
 }

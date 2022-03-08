@@ -6,15 +6,12 @@
 
 #include <AK/LexicalPath.h>
 #include <LibCore/ArgsParser.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio"));
 
     StringView path;
     StringView suffix;
@@ -22,12 +19,12 @@ int main(int argc, char** argv)
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(path, "Path to get basename from", "path");
     args_parser.add_positional_argument(suffix, "Suffix to strip from name", "suffix", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
-    auto result = LexicalPath(path).basename();
+    auto result = LexicalPath::basename(path);
 
     if (!suffix.is_null() && result.length() != suffix.length() && result.ends_with(suffix))
-        result = result.substring(0, result.length() - suffix.length());
+        result = result.substring_view(0, result.length() - suffix.length());
 
     outln("{}", result);
     return 0;

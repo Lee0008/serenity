@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2019-2020, William McPherson <willmcpherson2@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +9,7 @@
 #include "MainWidget.h"
 #include "KeysWidget.h"
 #include "KnobsWidget.h"
+#include "PlayerWidget.h"
 #include "RollWidget.h"
 #include "SamplerWidget.h"
 #include "TrackManager.h"
@@ -17,12 +19,13 @@
 #include <LibGUI/Menu.h>
 #include <LibGUI/TabWidget.h>
 
-MainWidget::MainWidget(TrackManager& track_manager)
+MainWidget::MainWidget(TrackManager& track_manager, AudioPlayerLoop& loop)
     : m_track_manager(track_manager)
+    , m_audio_loop(loop)
 {
     set_layout<GUI::VerticalBoxLayout>();
     layout()->set_spacing(2);
-    layout()->set_margins({ 2, 2, 2, 2 });
+    layout()->set_margins(2);
     set_fill_with_background_color(true);
 
     m_wave_widget = add<WaveWidget>(track_manager);
@@ -35,33 +38,30 @@ MainWidget::MainWidget(TrackManager& track_manager)
 
     m_tab_widget->add_tab<SamplerWidget>("Sampler", track_manager);
 
+    m_player_widget = add<PlayerWidget>(track_manager, loop);
+
     m_keys_and_knobs_container = add<GUI::Widget>();
     m_keys_and_knobs_container->set_layout<GUI::HorizontalBoxLayout>();
     m_keys_and_knobs_container->layout()->set_spacing(2);
-    m_keys_and_knobs_container->set_fixed_height(100);
+    m_keys_and_knobs_container->set_fixed_height(130);
     m_keys_and_knobs_container->set_fill_with_background_color(true);
 
     m_keys_widget = m_keys_and_knobs_container->add<KeysWidget>(track_manager);
 
     m_knobs_widget = m_keys_and_knobs_container->add<KnobsWidget>(track_manager, *this);
-    m_knobs_widget->set_fixed_width(350);
 
     m_roll_widget->set_keys_widget(m_keys_widget);
 }
 
-MainWidget::~MainWidget()
+void MainWidget::add_track_actions(GUI::Menu& menu)
 {
-}
-
-void MainWidget::add_actions(GUI::Menu& menu)
-{
-    menu.add_action(GUI::Action::create("&Add Track", { Mod_Ctrl, Key_T }, [&](auto&) {
-        m_track_manager.add_track();
+    menu.add_action(GUI::Action::create("&Add Track", { Mod_Ctrl, Key_T }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/plus.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
+        m_player_widget->add_track();
     }));
 
-    menu.add_action(GUI::Action::create("&Next Track", { Mod_Ctrl, Key_N }, [&](auto&) {
+    menu.add_action(GUI::Action::create("&Next Track", { Mod_Ctrl, Key_N }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-last.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         turn_off_pressed_keys();
-        m_track_manager.next_track();
+        m_player_widget->next_track();
         turn_on_pressed_keys();
 
         m_knobs_widget->update_knobs();
@@ -114,8 +114,10 @@ void MainWidget::special_key_action(int key_code)
         set_octave_and_ensure_note_change(Up);
         break;
     case Key_C:
-        m_track_manager.current_track().set_wave(Up);
-        m_knobs_widget->update_knobs();
+        m_knobs_widget->cycle_waveform();
+        break;
+    case Key_Space:
+        m_player_widget->toggle_paused();
         break;
     }
 }

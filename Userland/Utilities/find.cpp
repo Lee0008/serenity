@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2020-2021, Sergey Bugaev <bugaevc@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -10,13 +10,17 @@
 #include <AK/NonnullOwnPtr.h>
 #include <AK/OwnPtr.h>
 #include <AK/Vector.h>
-#include <LibCore/DirIterator.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
+#include <dirent.h>
 #include <errno.h>
-#include <getopt.h>
+#include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -34,10 +38,60 @@ template<typename... Parameters>
     exit(1);
 }
 
+struct FileData {
+    // Full path to the file; either absolute or relative to cwd.
+    LexicalPath full_path;
+    // The parent directory of the file.
+    int dirfd { -1 };
+    // The file's basename, relative to the directory.
+    const char* basename { nullptr };
+    // Optionally, cached information as returned by stat/lstat/fstatat.
+    struct stat stat {
+    };
+    bool stat_is_valid : 1 { false };
+    // File type as returned from readdir(), or DT_UNKNOWN.
+    unsigned char d_type { DT_UNKNOWN };
+
+    const struct stat* ensure_stat()
+    {
+        if (stat_is_valid)
+            return &stat;
+
+        int flags = g_follow_symlinks ? 0 : AT_SYMLINK_NOFOLLOW;
+        int rc = fstatat(dirfd, basename, &stat, flags);
+        if (rc < 0) {
+            perror(full_path.string().characters());
+            g_there_was_an_error = true;
+            return nullptr;
+        }
+
+        stat_is_valid = true;
+
+        if (S_ISREG(stat.st_mode))
+            d_type = DT_REG;
+        else if (S_ISDIR(stat.st_mode))
+            d_type = DT_DIR;
+        else if (S_ISCHR(stat.st_mode))
+            d_type = DT_CHR;
+        else if (S_ISBLK(stat.st_mode))
+            d_type = DT_BLK;
+        else if (S_ISFIFO(stat.st_mode))
+            d_type = DT_FIFO;
+        else if (S_ISLNK(stat.st_mode))
+            d_type = DT_LNK;
+        else if (S_ISSOCK(stat.st_mode))
+            d_type = DT_SOCK;
+        else
+            VERIFY_NOT_REACHED();
+
+        return &stat;
+    }
+};
+
 class Command {
 public:
     virtual ~Command() { }
-    virtual bool evaluate(const char* file_path) const = 0;
+    virtual bool evaluate(FileData& file_data) const = 0;
 };
 
 class StatCommand : public Command {
@@ -45,21 +99,16 @@ public:
     virtual bool evaluate(const struct stat&) const = 0;
 
 private:
-    virtual bool evaluate(const char* file_path) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
-        struct stat stat;
-        auto stat_func = g_follow_symlinks ? ::stat : ::lstat;
-        int rc = stat_func(file_path, &stat);
-        if (rc < 0) {
-            perror(file_path);
-            g_there_was_an_error = true;
+        const struct stat* stat = file_data.ensure_stat();
+        if (!stat)
             return false;
-        }
-        return evaluate(stat);
+        return evaluate(*stat);
     }
 };
 
-class TypeCommand final : public StatCommand {
+class TypeCommand final : public Command {
 public:
     TypeCommand(const char* arg)
     {
@@ -70,24 +119,31 @@ public:
     }
 
 private:
-    virtual bool evaluate(const struct stat& stat) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
-        auto type = stat.st_mode;
+        // First, make sure we have a type, but avoid calling
+        // sys$stat() unless we need to.
+        if (file_data.d_type == DT_UNKNOWN) {
+            if (file_data.ensure_stat() == nullptr)
+                return false;
+        }
+
+        auto type = file_data.d_type;
         switch (m_type) {
         case 'b':
-            return S_ISBLK(type);
+            return type == DT_BLK;
         case 'c':
-            return S_ISCHR(type);
+            return type == DT_CHR;
         case 'd':
-            return S_ISDIR(type);
+            return type == DT_DIR;
         case 'l':
-            return S_ISLNK(type);
+            return type == DT_LNK;
         case 'p':
-            return S_ISFIFO(type);
+            return type == DT_FIFO;
         case 'f':
-            return S_ISREG(type);
+            return type == DT_REG;
         case 's':
-            return S_ISSOCK(type);
+            return type == DT_SOCK;
         default:
             // We've verified this is a correct character before.
             VERIFY_NOT_REACHED();
@@ -202,10 +258,9 @@ public:
     }
 
 private:
-    virtual bool evaluate(const char* file_path) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
-        LexicalPath path { file_path };
-        return path.basename().matches(m_pattern, m_case_sensitivity);
+        return file_data.full_path.basename().matches(m_pattern, m_case_sensitivity);
     }
 
     StringView m_pattern;
@@ -220,9 +275,9 @@ public:
     }
 
 private:
-    virtual bool evaluate(const char* file_path) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
-        out("{}{}", file_path, m_terminator);
+        out("{}{}", file_data.full_path, m_terminator);
         return true;
     }
 
@@ -237,7 +292,7 @@ public:
     }
 
 private:
-    virtual bool evaluate(const char* file_path) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
         pid_t pid = fork();
 
@@ -252,7 +307,7 @@ private:
             auto argv = const_cast<Vector<char*>&>(m_argv);
             for (auto& arg : argv) {
                 if (StringView(arg) == "{}")
-                    arg = const_cast<char*>(file_path);
+                    arg = const_cast<char*>(file_data.full_path.string().characters());
             }
             argv.append(nullptr);
             execvp(m_argv[0], argv.data());
@@ -282,9 +337,9 @@ public:
     }
 
 private:
-    virtual bool evaluate(const char* file_path) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
-        return m_lhs->evaluate(file_path) && m_rhs->evaluate(file_path);
+        return m_lhs->evaluate(file_data) && m_rhs->evaluate(file_data);
     }
 
     NonnullOwnPtr<Command> m_lhs;
@@ -300,45 +355,60 @@ public:
     }
 
 private:
-    virtual bool evaluate(const char* file_path) const override
+    virtual bool evaluate(FileData& file_data) const override
     {
-        return m_lhs->evaluate(file_path) || m_rhs->evaluate(file_path);
+        return m_lhs->evaluate(file_data) || m_rhs->evaluate(file_data);
     }
 
     NonnullOwnPtr<Command> m_lhs;
     NonnullOwnPtr<Command> m_rhs;
 };
 
-static OwnPtr<Command> parse_complex_command(char* argv[]);
+static OwnPtr<Command> parse_complex_command(Vector<char*>& args);
 
 // Parse a simple command starting at optind; leave optind at its the last
 // argument. Return nullptr if we reach the end of arguments.
-static OwnPtr<Command> parse_simple_command(char* argv[])
+static OwnPtr<Command> parse_simple_command(Vector<char*>& args)
 {
-    StringView arg = argv[optind];
-
-    if (arg.is_null()) {
+    if (args.is_empty())
         return {};
-    } else if (arg == "(") {
-        optind++;
-        auto command = parse_complex_command(argv);
-        if (command && argv[optind] && StringView(argv[++optind]) == ")")
+
+    char* raw_arg = args.take_first();
+    StringView arg = raw_arg;
+
+    if (arg == "(") {
+        auto command = parse_complex_command(args);
+        if (command && !args.is_empty() && StringView(args.first()) == ")")
             return command;
         fatal_error("Unmatched \033[1m(");
     } else if (arg == "-type") {
-        return make<TypeCommand>(argv[++optind]);
+        if (args.is_empty())
+            fatal_error("-type: requires additional arguments");
+        return make<TypeCommand>(args.take_first());
     } else if (arg == "-links") {
-        return make<LinksCommand>(argv[++optind]);
+        if (args.is_empty())
+            fatal_error("-links: requires additional arguments");
+        return make<LinksCommand>(args.take_first());
     } else if (arg == "-user") {
-        return make<UserCommand>(argv[++optind]);
+        if (args.is_empty())
+            fatal_error("-user: requires additional arguments");
+        return make<UserCommand>(args.take_first());
     } else if (arg == "-group") {
-        return make<GroupCommand>(argv[++optind]);
+        if (args.is_empty())
+            fatal_error("-group: requires additional arguments");
+        return make<GroupCommand>(args.take_first());
     } else if (arg == "-size") {
-        return make<SizeCommand>(argv[++optind]);
+        if (args.is_empty())
+            fatal_error("-size: requires additional arguments");
+        return make<SizeCommand>(args.take_first());
     } else if (arg == "-name") {
-        return make<NameCommand>(argv[++optind], CaseSensitivity::CaseSensitive);
+        if (args.is_empty())
+            fatal_error("-name: requires additional arguments");
+        return make<NameCommand>(args.take_first(), CaseSensitivity::CaseSensitive);
     } else if (arg == "-iname") {
-        return make<NameCommand>(argv[++optind], CaseSensitivity::CaseInsensitive);
+        if (args.is_empty())
+            fatal_error("-iname: requires additional arguments");
+        return make<NameCommand>(args.take_first(), CaseSensitivity::CaseInsensitive);
     } else if (arg == "-print") {
         g_have_seen_action_command = true;
         return make<PrintCommand>();
@@ -346,22 +416,29 @@ static OwnPtr<Command> parse_simple_command(char* argv[])
         g_have_seen_action_command = true;
         return make<PrintCommand>(0);
     } else if (arg == "-exec") {
+        if (args.is_empty())
+            fatal_error("-exec: requires additional arguments");
         g_have_seen_action_command = true;
         Vector<char*> command_argv;
-        while (argv[++optind] && StringView(argv[optind]) != ";")
-            command_argv.append(argv[optind]);
+        while (!args.is_empty()) {
+            char* next = args.take_first();
+            if (next[0] == ';')
+                break;
+            command_argv.append(next);
+        }
         return make<ExecCommand>(move(command_argv));
     } else {
-        fatal_error("Unsupported command \033[1m{}", argv[optind]);
+        fatal_error("Unsupported command \033[1m{}", arg);
     }
 }
 
-static OwnPtr<Command> parse_complex_command(char* argv[])
+static OwnPtr<Command> parse_complex_command(Vector<char*>& args)
 {
-    auto command = parse_simple_command(argv);
+    auto command = parse_simple_command(args);
 
-    while (command && argv[optind] && argv[optind + 1]) {
-        StringView arg = argv[++optind];
+    while (command && !args.is_empty()) {
+        char* raw_arg = args.take_first();
+        StringView arg = raw_arg;
 
         enum {
             And,
@@ -369,21 +446,20 @@ static OwnPtr<Command> parse_complex_command(char* argv[])
         } binary_operation { And };
 
         if (arg == "-a") {
-            optind++;
             binary_operation = And;
         } else if (arg == "-o") {
-            optind++;
             binary_operation = Or;
         } else if (arg == ")") {
             // Ooops, looked too far.
-            optind--;
+            args.prepend(raw_arg);
             return command;
         } else {
             // Juxtaposition is an And too, and there's nothing to skip.
+            args.prepend(raw_arg);
             binary_operation = And;
         }
 
-        auto rhs = parse_complex_command(argv);
+        auto rhs = parse_complex_command(args);
         if (!rhs)
             fatal_error("Missing right-hand side");
 
@@ -396,9 +472,9 @@ static OwnPtr<Command> parse_complex_command(char* argv[])
     return command;
 }
 
-static NonnullOwnPtr<Command> parse_all_commands(char* argv[])
+static NonnullOwnPtr<Command> parse_all_commands(Vector<char*>& args)
 {
-    auto command = parse_complex_command(argv);
+    auto command = parse_complex_command(args);
 
     if (g_have_seen_action_command) {
         VERIFY(command);
@@ -412,68 +488,114 @@ static NonnullOwnPtr<Command> parse_all_commands(char* argv[])
     return make<AndCommand>(command.release_nonnull(), make<PrintCommand>());
 }
 
-static const char* parse_options(int argc, char* argv[])
+static void walk_tree(FileData& root_data, Command& command)
 {
-    // Sadly, we can't use Core::ArgsParser, because find accepts arguments in
-    // an extremely unusual format. We're going to try to use getopt(), though.
-    opterr = 0;
-    while (true) {
-        int opt = getopt(argc, argv, "+L");
-        switch (opt) {
-        case -1: {
-            // No more options.
-            StringView arg = argv[optind];
-            if (!arg.is_null() && !arg.starts_with('-')) {
-                // It's our root path!
-                return argv[optind++];
-            } else {
-                // It's a part of the script, and our root path is the current
-                // directory by default.
-                return ".";
-            }
-        }
-        case '?':
-            // Some error. Most likely, it's getopt() getting confused about
-            // what it thought was an option, but is actually a command. Return
-            // the default path, and hope the command parsing logic deals with
-            // this.
-            return ".";
-        case 'L':
-            g_follow_symlinks = true;
+    command.evaluate(root_data);
+
+    // We should try to read directory entries if either:
+    // * This is a directory.
+    // * This is a symlink (that could point to a directory),
+    //   and we're following symlinks.
+    // * The type is unknown, so it could be a directory.
+    switch (root_data.d_type) {
+    case DT_DIR:
+    case DT_UNKNOWN:
+        break;
+    case DT_LNK:
+        if (g_follow_symlinks)
             break;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-    }
-}
-
-static void walk_tree(const char* root_path, Command& command)
-{
-    command.evaluate(root_path);
-
-    Core::DirIterator dir_iterator(root_path, Core::DirIterator::SkipParentAndBaseDir);
-    if (dir_iterator.has_error() && dir_iterator.error() == ENOTDIR)
         return;
-
-    while (dir_iterator.has_next()) {
-        auto path = dir_iterator.next_full_path();
-        struct stat stat;
-        if (g_follow_symlinks || ::lstat(path.characters(), &stat) < 0 || !S_ISLNK(stat.st_mode))
-            walk_tree(path.characters(), command);
-        else
-            command.evaluate(path.characters());
+    default:
+        return;
     }
 
-    if (dir_iterator.has_error()) {
-        warnln("{}: {}", root_path, dir_iterator.error_string());
+    int dirfd = openat(root_data.dirfd, root_data.basename, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0) {
+        if (errno == ENOTDIR) {
+            // Above we decided to try to open this file because it could
+            // be a directory, but turns out it's not. This is fine though.
+            return;
+        }
+        perror(root_data.full_path.string().characters());
+        g_there_was_an_error = true;
+        return;
+    }
+
+    DIR* dir = fdopendir(dirfd);
+
+    while (true) {
+        errno = 0;
+        auto* dirent = readdir(dir);
+        if (!dirent)
+            break;
+
+        if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
+            continue;
+
+        FileData file_data {
+            root_data.full_path.append(dirent->d_name),
+            dirfd,
+            dirent->d_name,
+            (struct stat) {},
+            false,
+            dirent->d_type,
+        };
+        walk_tree(file_data, command);
+    }
+
+    if (errno != 0) {
+        perror(root_data.full_path.string().characters());
         g_there_was_an_error = true;
     }
+
+    closedir(dir);
 }
 
-int main(int argc, char* argv[])
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    LexicalPath root_path(parse_options(argc, argv));
-    auto command = parse_all_commands(argv);
-    walk_tree(root_path.string().characters(), *command);
+    Vector<char*> args;
+    args.append(arguments.argv + 1, arguments.argc - 1);
+
+    OwnPtr<Command> command;
+    Vector<LexicalPath> paths;
+
+    while (!args.is_empty()) {
+        char* raw_arg = args.take_first();
+        StringView arg = raw_arg;
+        if (arg == "-L") {
+            g_follow_symlinks = true;
+        } else if (!arg.starts_with('-')) {
+            paths.append(LexicalPath(arg));
+        } else {
+            // No special case, so add back the argument and try to parse a command.
+            args.prepend(raw_arg);
+            command = parse_all_commands(args);
+        }
+    }
+
+    if (!command)
+        command = make<PrintCommand>();
+
+    if (paths.is_empty())
+        paths.append(LexicalPath("."));
+
+    for (auto& path : paths) {
+        String dirname = path.dirname();
+        String basename = path.basename();
+
+        int dirfd = TRY(Core::System::open(dirname, O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+
+        FileData file_data {
+            path,
+            dirfd,
+            basename.characters(),
+            (struct stat) {},
+            false,
+            DT_UNKNOWN,
+        };
+        walk_tree(file_data, *command);
+        close(dirfd);
+    }
+
     return g_there_was_an_error ? 1 : 0;
 }

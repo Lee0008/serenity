@@ -14,35 +14,43 @@
 
 namespace GUI {
 
-class FilteringProxyModel final : public Model {
+class FilteringProxyModel final : public Model
+    , public ModelClient {
 public:
-    static NonnullRefPtr<FilteringProxyModel> construct(Model& model)
+    static ErrorOr<NonnullRefPtr<FilteringProxyModel>> create(NonnullRefPtr<Model> model)
     {
-        return adopt_ref(*new FilteringProxyModel(model));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) FilteringProxyModel(move(model)));
     }
 
-    virtual ~FilteringProxyModel() override {};
+    virtual ~FilteringProxyModel() override
+    {
+        m_model->unregister_client(*this);
+    };
 
-    virtual int row_count(const ModelIndex& = ModelIndex()) const override;
-    virtual int column_count(const ModelIndex& = ModelIndex()) const override;
-    virtual Variant data(const ModelIndex&, ModelRole = ModelRole::Display) const override;
-    virtual void update() override;
-    virtual ModelIndex index(int row, int column = 0, const ModelIndex& parent = ModelIndex()) const override;
+    virtual int row_count(ModelIndex const& = ModelIndex()) const override;
+    virtual int column_count(ModelIndex const& = ModelIndex()) const override;
+    virtual Variant data(ModelIndex const&, ModelRole = ModelRole::Display) const override;
+    virtual void invalidate() override;
+    virtual ModelIndex index(int row, int column = 0, ModelIndex const& parent = ModelIndex()) const override;
     virtual bool is_searchable() const override;
-    virtual Vector<ModelIndex, 1> matches(const StringView&, unsigned = MatchesFlag::AllMatching, const ModelIndex& = ModelIndex()) override;
+    virtual Vector<ModelIndex> matches(StringView, unsigned = MatchesFlag::AllMatching, ModelIndex const& = ModelIndex()) override;
 
-    void set_filter_term(const StringView& term);
+    void set_filter_term(StringView term);
 
-    ModelIndex map(const ModelIndex&) const;
+    ModelIndex map(ModelIndex const&) const;
+
+protected:
+    virtual void model_did_update([[maybe_unused]] unsigned flags) override { invalidate(); }
 
 private:
     void filter();
-    explicit FilteringProxyModel(Model& model)
-        : m_model(model)
+    explicit FilteringProxyModel(NonnullRefPtr<Model> model)
+        : m_model(move(model))
     {
+        m_model->register_client(*this);
     }
 
-    Model& m_model;
+    NonnullRefPtr<Model> m_model;
 
     // Maps row to actual model index.
     Vector<ModelIndex> m_matching_indices;

@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResult Process::do_kill(Process& process, int signal)
+ErrorOr<void> Process::do_kill(Process& process, int signal)
 {
     // FIXME: Allow sending SIGCONT to everyone in the process group.
     // FIXME: Should setuid processes have some special treatment here?
@@ -20,10 +21,10 @@ KResult Process::do_kill(Process& process, int signal)
     }
     if (signal != 0)
         return process.send_signal(signal, this);
-    return KSuccess;
+    return {};
 }
 
-KResult Process::do_killpg(ProcessGroupID pgrp, int signal)
+ErrorOr<void> Process::do_killpg(ProcessGroupID pgrp, int signal)
 {
     InterruptDisabler disabler;
 
@@ -37,100 +38,106 @@ KResult Process::do_killpg(ProcessGroupID pgrp, int signal)
 
     bool group_was_empty = true;
     bool any_succeeded = false;
-    KResult error = KSuccess;
+    ErrorOr<void> error;
 
     Process::for_each_in_pgrp(pgrp, [&](auto& process) {
         group_was_empty = false;
 
-        KResult res = do_kill(process, signal);
-        if (res.is_success())
+        ErrorOr<void> res = do_kill(process, signal);
+        if (!res.is_error())
             any_succeeded = true;
         else
-            error = res;
+            error = move(res);
     });
 
     if (group_was_empty)
         return ESRCH;
     if (any_succeeded)
-        return KSuccess;
+        return {};
     return error;
 }
 
-KResult Process::do_killall(int signal)
+ErrorOr<void> Process::do_killall(int signal)
 {
     InterruptDisabler disabler;
 
     bool any_succeeded = false;
-    KResult error = KSuccess;
+    ErrorOr<void> error;
 
     // Send the signal to all processes we have access to for.
-    ScopedSpinLock lock(g_processes_lock);
-    for (auto& process : *g_processes) {
-        KResult res = KSuccess;
+    Process::all_instances().for_each([&](auto& process) {
+        ErrorOr<void> res;
         if (process.pid() == pid())
             res = do_killself(signal);
         else
             res = do_kill(process, signal);
 
-        if (res.is_success())
+        if (!res.is_error())
             any_succeeded = true;
         else
-            error = res;
-    }
+            error = move(res);
+    });
 
     if (any_succeeded)
-        return KSuccess;
+        return {};
     return error;
 }
 
-KResult Process::do_killself(int signal)
+ErrorOr<void> Process::do_killself(int signal)
 {
     if (signal == 0)
-        return KSuccess;
+        return {};
 
-    auto current_thread = Thread::current();
+    auto* current_thread = Thread::current();
     if (!current_thread->should_ignore_signal(signal))
         current_thread->send_signal(signal, this);
 
-    return KSuccess;
+    return {};
 }
 
-KResultOr<int> Process::sys$kill(pid_t pid_or_pgid, int signal)
+ErrorOr<FlatPtr> Process::sys$kill(pid_t pid_or_pgid, int signal)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     if (pid_or_pgid == pid().value())
-        REQUIRE_PROMISE(stdio);
+        TRY(require_promise(Pledge::stdio));
     else
-        REQUIRE_PROMISE(proc);
+        TRY(require_promise(Pledge::proc));
 
     if (signal < 0 || signal >= 32)
         return EINVAL;
     if (pid_or_pgid < -1) {
         if (pid_or_pgid == NumericLimits<i32>::min())
             return EINVAL;
-        return do_killpg(-pid_or_pgid, signal);
+        TRY(do_killpg(-pid_or_pgid, signal));
+        return 0;
     }
-    if (pid_or_pgid == -1)
-        return do_killall(signal);
+    if (pid_or_pgid == -1) {
+        TRY(do_killall(signal));
+        return 0;
+    }
     if (pid_or_pgid == pid().value()) {
-        return do_killself(signal);
+        TRY(do_killself(signal));
+        return 0;
     }
     VERIFY(pid_or_pgid >= 0);
-    ScopedSpinLock lock(g_processes_lock);
     auto peer = Process::from_pid(pid_or_pgid);
     if (!peer)
         return ESRCH;
-    return do_kill(*peer, signal);
+    TRY(do_kill(*peer, signal));
+    return 0;
 }
 
-KResultOr<int> Process::sys$killpg(pid_t pgrp, int signum)
+ErrorOr<FlatPtr> Process::sys$killpg(pid_t pgrp, int signum)
 {
-    REQUIRE_PROMISE(proc);
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::proc));
     if (signum < 1 || signum >= 32)
         return EINVAL;
     if (pgrp < 0)
         return EINVAL;
 
-    return do_killpg(pgrp, signum);
+    TRY(do_killpg(pgrp, signum));
+    return 0;
 }
 
 }

@@ -18,6 +18,7 @@ public:
 
     void set_bitmap(const Gfx::Bitmap*);
     Gfx::Bitmap* bitmap() { return m_bitmap.ptr(); }
+    Gfx::Bitmap const* bitmap() const { return m_bitmap.ptr(); }
 
     void set_should_stretch(bool value) { m_should_stretch = value; }
     bool should_stretch() const { return m_should_stretch; }
@@ -26,7 +27,7 @@ public:
     bool auto_resize() const { return m_auto_resize; }
 
     void animate();
-    void load_from_file(const StringView&);
+    void load_from_file(StringView);
 
     int opacity_percent() const { return m_opacity_percent; }
     void set_opacity_percent(int percent);
@@ -34,7 +35,7 @@ public:
     Function<void()> on_click;
 
 protected:
-    explicit ImageWidget(const StringView& text = {});
+    explicit ImageWidget(StringView text = {});
 
     virtual void mousedown_event(GUI::MouseEvent&) override;
     virtual void paint_event(PaintEvent&) override;

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Ali Mohammad Pur <mpfard@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +9,7 @@
 #include <LibCore/File.h>
 #include <LibCore/FileStream.h>
 #include <LibLine/Editor.h>
+#include <LibMain/Main.h>
 #include <LibWasm/AbstractMachine/AbstractMachine.h>
 #include <LibWasm/AbstractMachine/BytecodeInterpreter.h>
 #include <LibWasm/Printer/Printer.h>
@@ -22,24 +24,6 @@ static bool g_continue { false };
 static void (*old_signal)(int);
 static Wasm::DebuggerBytecodeInterpreter g_interpreter;
 
-static void print_buffer(ReadonlyBytes buffer, int split)
-{
-    for (size_t i = 0; i < buffer.size(); ++i) {
-        if (split > 0) {
-            if (i % split == 0 && i) {
-                out("    ");
-                for (size_t j = i - split; j < i; ++j) {
-                    auto ch = buffer[j];
-                    out("{:c}", ch >= 32 && ch <= 127 ? ch : '.'); // silly hack
-                }
-                outln();
-            }
-        }
-        out("{:02x} ", buffer[i]);
-    }
-    puts("");
-}
-
 static void sigint_handler(int)
 {
     if (!g_continue) {
@@ -53,10 +37,10 @@ static bool post_interpret_hook(Wasm::Configuration&, Wasm::InstructionPointer& 
 {
     if (interpreter.did_trap()) {
         g_continue = false;
-        const_cast<Wasm::Interpreter&>(interpreter).clear_trap();
         warnln("Trapped when executing ip={}", ip);
         g_printer.print(instr);
-        warnln("");
+        warnln("Trap reason: {}", interpreter.trap_reason());
+        const_cast<Wasm::Interpreter&>(interpreter).clear_trap();
     }
     return true;
 }
@@ -143,7 +127,7 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
                     warnln("invalid memory index {} (not found)", args[2]);
                     continue;
                 }
-                print_buffer(mem->data(), 32);
+                warnln("{:>32hex-dump}", mem->data().bytes());
                 continue;
             }
             if (what.is_one_of("i", "instr", "instruction")) {
@@ -224,7 +208,7 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
                 result = config.call(g_interpreter, *address, move(values));
             }
             if (result.is_trap())
-                warnln("Execution trapped!");
+                warnln("Execution trapped: {}", result.trap().reason);
             if (!result.values().is_empty())
                 warnln("Returned:");
             for (auto& value : result.values()) {
@@ -259,7 +243,7 @@ static bool pre_interpret_hook(Wasm::Configuration& config, Wasm::InstructionPoi
     }
 }
 
-static Optional<Wasm::Module> parse(StringView const& filename)
+static Optional<Wasm::Module> parse(StringView filename)
 {
     auto result = Core::File::open(filename, Core::OpenMode::ReadOnly);
     if (result.is_error()) {
@@ -283,7 +267,7 @@ static void print_link_error(Wasm::LinkError const& error)
         warnln("Missing import '{}'", missing);
 }
 
-int main(int argc, char* argv[])
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     char const* filename = nullptr;
     bool print = false;
@@ -331,7 +315,7 @@ int main(int argc, char* argv[])
             return false;
         },
     });
-    parser.parse(argc, argv);
+    parser.parse(arguments);
 
     if (shell_mode) {
         debug = true;
@@ -417,7 +401,8 @@ int main(int argc, char* argv[])
                                 first = false;
                             else
                                 argument_builder.append(", "sv);
-                            argument_builder.append(StringView(stream.copy_into_contiguous_buffer()).trim_whitespace());
+                            ByteBuffer buffer = stream.copy_into_contiguous_buffer();
+                            argument_builder.append(StringView(buffer).trim_whitespace());
                         }
                         dbgln("[wasm runtime] Stub function {} was called with the following arguments: {}", name, argument_builder.to_string());
                         Vector<Wasm::Value> result;
@@ -530,14 +515,16 @@ int main(int argc, char* argv[])
             if (debug)
                 launch_repl();
 
-            if (result.is_trap())
-                warnln("Execution trapped!");
-            if (!result.values().is_empty())
-                warnln("Returned:");
-            for (auto& value : result.values()) {
-                Wasm::Printer printer { stream };
-                g_stdout.write("  -> "sv.bytes());
-                g_printer.print(value);
+            if (result.is_trap()) {
+                warnln("Execution trapped: {}", result.trap().reason);
+            } else {
+                if (!result.values().is_empty())
+                    warnln("Returned:");
+                for (auto& value : result.values()) {
+                    Wasm::Printer printer { stream };
+                    g_stdout.write("  -> "sv.bytes());
+                    g_printer.print(value);
+                }
             }
         }
     }

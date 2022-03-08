@@ -1,20 +1,24 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2020-2022, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Badge.h>
 #include <AK/HashMap.h>
 #include <AK/String.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
+#include <LibJS/Heap/MarkedVector.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/IndexedProperties.h>
-#include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/PrimitiveString.h>
-#include <LibJS/Runtime/PropertyName.h>
+#include <LibJS/Runtime/PrivateEnvironment.h>
+#include <LibJS/Runtime/PropertyDescriptor.h>
+#include <LibJS/Runtime/PropertyKey.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/Value.h>
 
@@ -25,23 +29,23 @@ public:                               \
     using Base = base_class;          \
     virtual const char* class_name() const override { return #class_; }
 
-struct PropertyDescriptor {
-    PropertyAttributes attributes;
+struct PrivateElement {
+    enum class Kind {
+        Field,
+        Method,
+        Accessor
+    };
+
+    PrivateName key;
+    Kind kind { Kind::Field };
     Value value;
-    Function* getter { nullptr };
-    Function* setter { nullptr };
-
-    static PropertyDescriptor from_dictionary(VM&, const Object&);
-
-    bool is_accessor_descriptor() const { return getter || setter; }
-    bool is_data_descriptor() const { return !(value.is_empty() && !attributes.has_writable()); }
-    bool is_generic_descriptor() const { return !is_accessor_descriptor() && !is_data_descriptor(); }
 };
 
 class Object : public Cell {
 public:
-    static Object* create_empty(GlobalObject&);
+    static Object* create(GlobalObject&, Object* prototype);
 
+    Object(GlobalObject&, Object* prototype);
     explicit Object(Object& prototype);
     explicit Object(Shape&);
     virtual void initialize(GlobalObject&) override;
@@ -53,79 +57,117 @@ public:
         KeyAndValue,
     };
 
-    enum class GetOwnPropertyReturnType {
-        All,
-        StringOnly,
-        SymbolOnly,
-    };
-
-    enum class PutOwnPropertyMode {
-        Put,
-        DefineProperty,
-    };
-
     enum class IntegrityLevel {
         Sealed,
         Frozen,
     };
 
-    Shape& shape() { return *m_shape; }
-    const Shape& shape() const { return *m_shape; }
+    enum class ShouldThrowExceptions {
+        No,
+        Yes,
+    };
 
-    GlobalObject& global_object() const { return *shape().global_object(); }
+    // Please DO NOT make up your own non-standard methods unless you
+    // have a very good reason to do so. If any object abstract
+    // operation from the spec is missing, add it instead.
+    // Functionality for implementation details like shapes and
+    // property storage are obviously exempt from this rule :^)
+    //
+    // Methods named [[Foo]]() in the spec are named internal_foo()
+    // here, as they are "The [[Foo]] internal method of a ... object".
+    // They must be virtual and may be overridden. All other methods
+    // follow the regular PascalCase name converted to camel_case
+    // naming convention and must not be virtual.
 
-    virtual Value get(const PropertyName&, Value receiver = {}, bool without_side_effects = false) const;
-    Value get_without_side_effects(const PropertyName&) const;
+    // 7.1 Type Conversion, https://tc39.es/ecma262/#sec-type-conversion
 
-    virtual bool has_property(const PropertyName&) const;
-    bool has_own_property(const PropertyName&) const;
+    ThrowCompletionOr<Value> ordinary_to_primitive(Value::PreferredType preferred_type) const;
 
-    virtual bool put(const PropertyName&, Value, Value receiver = {});
+    // 7.2 Testing and Comparison Operations, https://tc39.es/ecma262/#sec-testing-and-comparison-operations
 
-    Value get_own_property(const PropertyName&, Value receiver, bool without_side_effects = false) const;
-    MarkedValueList get_own_properties(PropertyKind, bool only_enumerable_properties = false, GetOwnPropertyReturnType = GetOwnPropertyReturnType::All) const;
-    MarkedValueList get_enumerable_own_property_names(PropertyKind) const;
-    virtual Optional<PropertyDescriptor> get_own_property_descriptor(const PropertyName&) const;
-    Value get_own_property_descriptor_object(const PropertyName&) const;
+    ThrowCompletionOr<bool> is_extensible() const;
 
-    virtual bool define_property(const StringOrSymbol& property_name, const Object& descriptor, bool throw_exceptions = true);
-    bool define_property(const PropertyName&, Value value, PropertyAttributes attributes = default_attributes, bool throw_exceptions = true);
-    bool define_property_without_transition(const PropertyName&, Value value, PropertyAttributes attributes = default_attributes, bool throw_exceptions = true);
-    bool define_accessor(const PropertyName&, Function* getter, Function* setter, PropertyAttributes attributes = default_attributes, bool throw_exceptions = true);
+    // 7.3 Operations on Objects, https://tc39.es/ecma262/#sec-operations-on-objects
 
-    bool define_native_function(PropertyName const&, AK::Function<Value(VM&, GlobalObject&)>, i32 length = 0, PropertyAttributes attributes = default_attributes);
-    bool define_native_property(PropertyName const&, AK::Function<Value(VM&, GlobalObject&)> getter, AK::Function<void(VM&, GlobalObject&, Value)> setter, PropertyAttributes attributes = default_attributes);
-    bool define_native_accessor(PropertyName const&, AK::Function<Value(VM&, GlobalObject&)> getter, AK::Function<Value(VM&, GlobalObject&)> setter, PropertyAttributes attributes = default_attributes);
+    ThrowCompletionOr<Value> get(PropertyKey const&) const;
+    ThrowCompletionOr<bool> set(PropertyKey const&, Value, ShouldThrowExceptions);
+    ThrowCompletionOr<bool> create_data_property(PropertyKey const&, Value);
+    ThrowCompletionOr<bool> create_method_property(PropertyKey const&, Value);
+    ThrowCompletionOr<bool> create_data_property_or_throw(PropertyKey const&, Value);
+    ThrowCompletionOr<bool> create_non_enumerable_data_property_or_throw(PropertyKey const&, Value);
+    ThrowCompletionOr<bool> define_property_or_throw(PropertyKey const&, PropertyDescriptor const&);
+    ThrowCompletionOr<bool> delete_property_or_throw(PropertyKey const&);
+    ThrowCompletionOr<bool> has_property(PropertyKey const&) const;
+    ThrowCompletionOr<bool> has_own_property(PropertyKey const&) const;
+    ThrowCompletionOr<bool> set_integrity_level(IntegrityLevel);
+    ThrowCompletionOr<bool> test_integrity_level(IntegrityLevel) const;
+    ThrowCompletionOr<MarkedVector<Value>> enumerable_own_property_names(PropertyKind kind) const;
+    ThrowCompletionOr<Object*> copy_data_properties(Value source, HashTable<PropertyKey> const& seen_names, GlobalObject& global_object);
 
-    void define_properties(Value properties);
+    PrivateElement* private_element_find(PrivateName const& name);
+    ThrowCompletionOr<void> private_field_add(PrivateName const& name, Value value);
+    ThrowCompletionOr<void> private_method_or_accessor_add(PrivateElement element);
+    ThrowCompletionOr<Value> private_get(PrivateName const& name);
+    ThrowCompletionOr<void> private_set(PrivateName const& name, Value value);
+    ThrowCompletionOr<void> define_field(Variant<PropertyKey, PrivateName> name, ECMAScriptFunctionObject* initializer);
 
-    virtual bool delete_property(const PropertyName&);
+    // 10.1 Ordinary Object Internal Methods and Internal Slots, https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
 
-    virtual bool is_array() const { return false; }
+    virtual ThrowCompletionOr<Object*> internal_get_prototype_of() const;
+    virtual ThrowCompletionOr<bool> internal_set_prototype_of(Object* prototype);
+    virtual ThrowCompletionOr<bool> internal_is_extensible() const;
+    virtual ThrowCompletionOr<bool> internal_prevent_extensions();
+    virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const;
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor const&);
+    virtual ThrowCompletionOr<bool> internal_has_property(PropertyKey const&) const;
+    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const&, Value receiver) const;
+    virtual ThrowCompletionOr<bool> internal_set(PropertyKey const&, Value value, Value receiver);
+    virtual ThrowCompletionOr<bool> internal_delete(PropertyKey const&);
+    virtual ThrowCompletionOr<MarkedVector<Value>> internal_own_property_keys() const;
+
+    ThrowCompletionOr<bool> ordinary_set_with_own_descriptor(PropertyKey const&, Value, Value, Optional<PropertyDescriptor>);
+
+    // 10.4.7 Immutable Prototype Exotic Objects, https://tc39.es/ecma262/#sec-immutable-prototype-exotic-objects
+
+    ThrowCompletionOr<bool> set_immutable_prototype(Object* prototype);
+
+    // 20.1 Object Objects, https://tc39.es/ecma262/#sec-object-objects
+
+    ThrowCompletionOr<Object*> define_properties(Value properties);
+
+    // Implementation-specific storage abstractions
+
+    Optional<ValueAndAttributes> storage_get(PropertyKey const&) const;
+    bool storage_has(PropertyKey const&) const;
+    void storage_set(PropertyKey const&, ValueAndAttributes const&);
+    void storage_delete(PropertyKey const&);
+
+    // Non-standard methods
+
+    Value get_without_side_effects(const PropertyKey&) const;
+
+    void define_direct_property(PropertyKey const& property_key, Value value, PropertyAttributes attributes) { storage_set(property_key, { value, attributes }); };
+    void define_direct_accessor(PropertyKey const&, FunctionObject* getter, FunctionObject* setter, PropertyAttributes attributes);
+
+    void define_native_function(PropertyKey const&, Function<ThrowCompletionOr<Value>(VM&, GlobalObject&)>, i32 length, PropertyAttributes attributes);
+    void define_native_accessor(PropertyKey const&, Function<ThrowCompletionOr<Value>(VM&, GlobalObject&)> getter, Function<ThrowCompletionOr<Value>(VM&, GlobalObject&)> setter, PropertyAttributes attributes);
+
     virtual bool is_function() const { return false; }
     virtual bool is_typed_array() const { return false; }
     virtual bool is_string_object() const { return false; }
     virtual bool is_global_object() const { return false; }
     virtual bool is_proxy_object() const { return false; }
     virtual bool is_native_function() const { return false; }
-    virtual bool is_lexical_environment() const { return false; }
+    virtual bool is_ecmascript_function_object() const { return false; }
+
+    // B.3.7 The [[IsHTMLDDA]] Internal Slot, https://tc39.es/ecma262/#sec-IsHTMLDDA-internal-slot
+    virtual bool is_htmldda() const { return false; }
+
+    bool has_parameter_map() const { return m_has_parameter_map; }
+    void set_has_parameter_map() { m_has_parameter_map = true; }
 
     virtual const char* class_name() const override { return "Object"; }
     virtual void visit_edges(Cell::Visitor&) override;
-
-    virtual Object* prototype();
-    virtual const Object* prototype() const;
-    virtual bool set_prototype(Object* prototype);
-    bool has_prototype(const Object* prototype) const;
-
-    virtual bool is_extensible() const { return m_is_extensible; }
-    virtual bool prevent_extensions();
-
-    bool set_integrity_level(IntegrityLevel);
-    bool test_integrity_level(IntegrityLevel);
-
-    virtual Value value_of() const { return Value(const_cast<Object*>(this)); }
-    virtual Value ordinary_to_primitive(Value::PreferredType preferred_type) const;
 
     Value get_direct(size_t index) const { return m_storage[index]; }
 
@@ -133,26 +175,12 @@ public:
     IndexedProperties& indexed_properties() { return m_indexed_properties; }
     void set_indexed_property_elements(Vector<Value>&& values) { m_indexed_properties = IndexedProperties(move(values)); }
 
-    void install_error_cause(Value options);
+    Shape& shape() { return *m_shape; }
+    Shape const& shape() const { return *m_shape; }
 
-    [[nodiscard]] Value invoke_internal(const StringOrSymbol& property_name, Optional<MarkedValueList> arguments);
-
-    template<typename... Args>
-    [[nodiscard]] ALWAYS_INLINE Value invoke(const StringOrSymbol& property_name, Args... args)
-    {
-        if constexpr (sizeof...(Args) > 0) {
-            MarkedValueList arglist { heap() };
-            (..., arglist.append(move(args)));
-            return invoke(property_name, move(arglist));
-        }
-
-        return invoke(property_name);
-    }
+    GlobalObject& global_object() const { return *shape().global_object(); }
 
     void ensure_shape_is_unique();
-
-    void enable_transitions() { m_transitions_enabled = true; }
-    void disable_transitions() { m_transitions_enabled = false; }
 
     template<typename T>
     bool fast_is() const = delete;
@@ -163,32 +191,24 @@ protected:
     explicit Object(GlobalObjectTag);
     Object(ConstructWithoutPrototypeTag, GlobalObject&);
 
-    virtual Value get_by_index(u32 property_index) const;
-    virtual bool put_by_index(u32 property_index, Value);
+    void set_prototype(Object*);
+
+    // [[Extensible]]
+    bool m_is_extensible { true };
+
+    // [[ParameterMap]]
+    bool m_has_parameter_map { false };
 
 private:
-    bool put_own_property(const StringOrSymbol& property_name, Value, PropertyAttributes attributes, PutOwnPropertyMode = PutOwnPropertyMode::Put, bool throw_exceptions = true);
-    bool put_own_property_by_index(u32 property_index, Value, PropertyAttributes attributes, PutOwnPropertyMode = PutOwnPropertyMode::Put, bool throw_exceptions = true);
+    void set_shape(Shape& shape) { m_shape = &shape; }
 
-    Value call_native_property_getter(NativeProperty& property, Value this_value) const;
-    void call_native_property_setter(NativeProperty& property, Value this_value, Value) const;
+    Object* prototype() { return shape().prototype(); }
+    Object const* prototype() const { return shape().prototype(); }
 
-    void set_shape(Shape&);
-
-    bool m_is_extensible { true };
-    bool m_transitions_enabled { true };
     Shape* m_shape { nullptr };
     Vector<Value> m_storage;
     IndexedProperties m_indexed_properties;
+    OwnPtr<Vector<PrivateElement>> m_private_elements; // [[PrivateElements]]
 };
-
-template<>
-[[nodiscard]] ALWAYS_INLINE Value Object::invoke(const StringOrSymbol& property_name, MarkedValueList arguments) { return invoke_internal(property_name, move(arguments)); }
-
-template<>
-[[nodiscard]] ALWAYS_INLINE Value Object::invoke(const StringOrSymbol& property_name, Optional<MarkedValueList> arguments) { return invoke_internal(property_name, move(arguments)); }
-
-template<>
-[[nodiscard]] ALWAYS_INLINE Value Object::invoke(const StringOrSymbol& property_name) { return invoke(property_name, Optional<MarkedValueList> {}); }
 
 }

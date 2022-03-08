@@ -12,7 +12,10 @@
 #include "RefPtr.h"
 #include "StdLibExtras.h"
 #ifdef KERNEL
-#    include <Kernel/Arch/x86/CPU.h>
+#    include <Kernel/Arch/Processor.h>
+#    include <Kernel/Arch/ScopedCritical.h>
+#else
+#    include <sched.h>
 #endif
 
 namespace AK {
@@ -65,20 +68,20 @@ public:
 
     bool is_null() const
     {
-        return !unsafe_ptr<void>();
+        return unsafe_ptr<void>() == nullptr;
     }
 
     void revoke()
     {
         auto current_consumers = m_consumers.fetch_or(1u, AK::MemoryOrder::memory_order_relaxed);
         VERIFY(!(current_consumers & 1u));
-        // We flagged revokation, now wait until everyone trying to obtain
+        // We flagged revocation, now wait until everyone trying to obtain
         // a strong reference is done
         while (current_consumers > 0) {
 #ifdef KERNEL
             Kernel::Processor::wait_check();
 #else
-            // TODO: yield?
+            sched_yield();
 #endif
             current_consumers = m_consumers.load(AK::MemoryOrder::memory_order_acquire) & ~1u;
         }
@@ -93,7 +96,7 @@ private:
     {
     }
     mutable Atomic<void*> m_ptr;
-    mutable Atomic<unsigned> m_consumers; // LSB indicates revokation in progress
+    mutable Atomic<unsigned> m_consumers; // LSB indicates revocation in progress
 };
 
 template<typename T>
@@ -102,15 +105,24 @@ private:
     class Link;
 
 public:
+#ifndef KERNEL
     template<typename U = T>
-    WeakPtr<U> make_weak_ptr() const;
+    WeakPtr<U> make_weak_ptr() const
+    {
+        return MUST(try_make_weak_ptr<U>());
+    }
+#endif
+    template<typename U = T>
+    ErrorOr<WeakPtr<U>> try_make_weak_ptr() const;
 
 protected:
     Weakable() = default;
 
     ~Weakable()
     {
+#ifdef KERNEL
         m_being_destroyed.store(true, AK::MemoryOrder::memory_order_release);
+#endif
         revoke_weak_ptrs();
     }
 
@@ -122,7 +134,9 @@ protected:
 
 private:
     mutable RefPtr<WeakLink> m_link;
+#ifdef KERNEL
     Atomic<bool> m_being_destroyed { false };
+#endif
 };
 
 }

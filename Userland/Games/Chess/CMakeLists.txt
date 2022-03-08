@@ -1,3 +1,10 @@
+serenity_component(
+    Chess
+    RECOMMENDED
+    TARGETS Chess
+    DEPENDS ChessEngine
+)
+
 set(SOURCES
     main.cpp
     ChessWidget.cpp
@@ -6,4 +13,4 @@ set(SOURCES
 )
 
 serenity_app(Chess ICON app-chess)
-target_link_libraries(Chess LibChess LibGUI LibCore)
+target_link_libraries(Chess LibChess LibConfig LibGUI LibCore LibMain LibDesktop)

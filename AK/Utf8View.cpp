@@ -11,41 +11,6 @@
 
 namespace AK {
 
-Utf8View::Utf8View(const String& string)
-    : m_string(string)
-{
-}
-
-Utf8View::Utf8View(const StringView& string)
-    : m_string(string)
-{
-}
-
-Utf8View::Utf8View(const char* string)
-    : m_string(string)
-{
-}
-
-const unsigned char* Utf8View::begin_ptr() const
-{
-    return (const unsigned char*)m_string.characters_without_null_termination();
-}
-
-const unsigned char* Utf8View::end_ptr() const
-{
-    return begin_ptr() + m_string.length();
-}
-
-Utf8CodePointIterator Utf8View::begin() const
-{
-    return { begin_ptr(), m_string.length() };
-}
-
-Utf8CodePointIterator Utf8View::end() const
-{
-    return { end_ptr(), 0 };
-}
-
 Utf8CodePointIterator Utf8View::iterator_at_byte_offset(size_t byte_offset) const
 {
     size_t current_offset = 0;
@@ -65,10 +30,19 @@ size_t Utf8View::byte_offset_of(const Utf8CodePointIterator& it) const
     return it.m_ptr - begin_ptr();
 }
 
-Utf8View Utf8View::substring_view(size_t byte_offset, size_t byte_length) const
+size_t Utf8View::byte_offset_of(size_t code_point_offset) const
 {
-    StringView string = m_string.substring_view(byte_offset, byte_length);
-    return Utf8View { string };
+    size_t byte_offset = 0;
+
+    for (auto it = begin(); !it.done(); ++it) {
+        if (code_point_offset == 0)
+            return byte_offset;
+
+        byte_offset += it.underlying_code_point_length_in_bytes();
+        --code_point_offset;
+    }
+
+    return byte_offset;
 }
 
 Utf8View Utf8View::unicode_substring_view(size_t code_point_offset, size_t code_point_length) const
@@ -173,20 +147,45 @@ bool Utf8View::starts_with(const Utf8View& start) const
     return true;
 }
 
-Utf8CodePointIterator::Utf8CodePointIterator(const unsigned char* ptr, size_t length)
-    : m_ptr(ptr)
-    , m_length(length)
+bool Utf8View::contains(u32 needle) const
 {
+    for (u32 code_point : *this) {
+        if (code_point == needle)
+            return true;
+    }
+    return false;
 }
 
-bool Utf8CodePointIterator::operator==(const Utf8CodePointIterator& other) const
+Utf8View Utf8View::trim(const Utf8View& characters, TrimMode mode) const
 {
-    return m_ptr == other.m_ptr && m_length == other.m_length;
-}
+    size_t substring_start = 0;
+    size_t substring_length = byte_length();
 
-bool Utf8CodePointIterator::operator!=(const Utf8CodePointIterator& other) const
-{
-    return !(*this == other);
+    if (mode == TrimMode::Left || mode == TrimMode::Both) {
+        for (auto code_point = begin(); code_point != end(); ++code_point) {
+            if (substring_length == 0)
+                return {};
+            if (!characters.contains(*code_point))
+                break;
+            substring_start += code_point.underlying_code_point_length_in_bytes();
+            substring_length -= code_point.underlying_code_point_length_in_bytes();
+        }
+    }
+
+    if (mode == TrimMode::Right || mode == TrimMode::Both) {
+        size_t seen_whitespace_length = 0;
+        for (auto code_point = begin(); code_point != end(); ++code_point) {
+            if (characters.contains(*code_point))
+                seen_whitespace_length += code_point.underlying_code_point_length_in_bytes();
+            else
+                seen_whitespace_length = 0;
+        }
+        if (seen_whitespace_length >= substring_length)
+            return {};
+        substring_length -= seen_whitespace_length;
+    }
+
+    return substring_view(substring_start, substring_length);
 }
 
 Utf8CodePointIterator& Utf8CodePointIterator::operator++()

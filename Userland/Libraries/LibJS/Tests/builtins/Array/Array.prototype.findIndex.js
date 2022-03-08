@@ -3,15 +3,6 @@ test("length is 1", () => {
 });
 
 describe("errors", () => {
-    test("requires at least one argument", () => {
-        expect(() => {
-            [].findIndex();
-        }).toThrowWithMessage(
-            TypeError,
-            "Array.prototype.findIndex() requires at least one argument"
-        );
-    });
-
     test("callback must be a function", () => {
         expect(() => {
             [].findIndex(undefined);
@@ -65,4 +56,14 @@ describe("normal behavior", () => {
         ).toBe(1);
         expect(callbackCalled).toBe(2);
     });
+});
+
+test("is unscopable", () => {
+    expect(Array.prototype[Symbol.unscopables].findIndex).toBeTrue();
+    const array = [];
+    with (array) {
+        expect(() => {
+            findIndex;
+        }).toThrowWithMessage(ReferenceError, "'findIndex' is not defined");
+    }
 });

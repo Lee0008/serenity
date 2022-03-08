@@ -8,7 +8,6 @@
 
 #include <AK/Function.h>
 #include <AK/RefCounted.h>
-#include <AK/String.h>
 #include <Kernel/Interrupts/IRQHandler.h>
 #include <Kernel/Time/TimeManagement.h>
 
@@ -35,7 +34,7 @@ public:
     // classes then should forward this to e.g. GenericInterruptHandler.
     virtual void will_be_destroyed() = 0;
 
-    virtual const char* model() const = 0;
+    virtual StringView model() const = 0;
     virtual HardwareTimerType timer_type() const = 0;
     virtual Function<void(const RegisterState&)> set_callback(Function<void(const RegisterState&)>) = 0;
 
@@ -67,10 +66,10 @@ public:
         IRQHandler::will_be_destroyed();
     }
 
-    virtual const char* purpose() const override
+    virtual StringView purpose() const override
     {
         if (TimeManagement::the().is_system_timer(*this))
-            return "System Timer";
+            return "System Timer"sv;
         return model();
     }
 
@@ -92,10 +91,14 @@ protected:
     {
     }
 
-    virtual void handle_irq(const RegisterState& regs) override
+    virtual bool handle_irq(const RegisterState& regs) override
     {
-        if (m_callback)
+        // Note: if we have an IRQ on this line, it's going to be the timer always
+        if (m_callback) {
             m_callback(regs);
+            return true;
+        }
+        return false;
     }
 
     u64 m_frequency { OPTIMAL_TICKS_PER_SECOND_RATE };
@@ -114,7 +117,7 @@ public:
         GenericInterruptHandler::will_be_destroyed();
     }
 
-    virtual const char* purpose() const override
+    virtual StringView purpose() const override
     {
         return model();
     }
@@ -128,9 +131,9 @@ public:
 
     virtual size_t sharing_devices_count() const override { return 0; }
     virtual bool is_shared_handler() const override { return false; }
-    virtual bool is_sharing_with_others() const { return false; }
+    virtual bool is_sharing_with_others() const override { return false; }
     virtual HandlerType type() const override { return HandlerType::IRQHandler; }
-    virtual const char* controller() const override { return nullptr; }
+    virtual StringView controller() const override { return nullptr; }
     virtual bool eoi() override;
 
     virtual u32 frequency() const override { return (u32)m_frequency; }
@@ -142,10 +145,14 @@ protected:
     {
     }
 
-    virtual void handle_interrupt(const RegisterState& regs) override
+    virtual bool handle_interrupt(const RegisterState& regs) override
     {
-        if (m_callback)
+        // Note: if we have an IRQ on this line, it's going to be the timer always
+        if (m_callback) {
             m_callback(regs);
+            return true;
+        }
+        return false;
     }
 
     u64 m_frequency { OPTIMAL_TICKS_PER_SECOND_RATE };

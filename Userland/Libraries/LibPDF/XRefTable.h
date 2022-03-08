@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2021-2022, Matthew Olsson <mattco@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,6 +7,9 @@
 #pragma once
 
 #include <AK/Format.h>
+#include <AK/RefCounted.h>
+#include <AK/String.h>
+#include <AK/Vector.h>
 
 namespace PDF {
 
@@ -26,7 +29,7 @@ struct XRefSection {
 
 class XRefTable final : public RefCounted<XRefTable> {
 public:
-    bool merge(XRefTable&& other)
+    PDFErrorOr<void> merge(XRefTable&& other)
     {
         auto this_size = m_entries.size();
         auto other_size = other.m_entries.size();
@@ -45,11 +48,11 @@ public:
                 m_entries[i] = other_entry;
             } else if (other_entry.byte_offset != invalid_byte_offset) {
                 // Both xref tables have an entry for the same object index
-                return false;
+                return Error { Error::Type::Parse, "Conflicting xref entry during merge" };
             }
         }
 
-        return true;
+        return {};
     }
 
     void add_section(XRefSection const& section)
@@ -98,9 +101,9 @@ namespace AK {
 
 template<>
 struct Formatter<PDF::XRefEntry> : Formatter<StringView> {
-    void format(FormatBuilder& builder, PDF::XRefEntry const& entry)
+    ErrorOr<void> format(FormatBuilder& builder, PDF::XRefEntry const& entry)
     {
-        Formatter<StringView>::format(builder,
+        return Formatter<StringView>::format(builder,
             String::formatted("XRefEntry {{ offset={} generation={} used={} }}",
                 entry.byte_offset,
                 entry.generation_number,
@@ -110,14 +113,14 @@ struct Formatter<PDF::XRefEntry> : Formatter<StringView> {
 
 template<>
 struct Formatter<PDF::XRefTable> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::XRefTable const& table)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::XRefTable const& table)
     {
         StringBuilder builder;
         builder.append("XRefTable {");
         for (auto& entry : table.m_entries)
             builder.appendff("\n  {}", entry);
         builder.append("\n}");
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <bits/stdint.h>
+#include <bits/wchar.h>
 
 #ifndef PAGE_SIZE
 #    define PAGE_SIZE 4096
@@ -52,6 +53,7 @@
 #define LLONG_MIN LONG_LONG_MIN
 
 #define ULONG_LONG_MAX 18446744073709551615ULL
+#define ULLONG_MAX ULONG_LONG_MAX
 
 #define CHAR_MIN SCHAR_MIN
 #define CHAR_MAX SCHAR_MAX
@@ -72,13 +74,15 @@
 #define LLONG_WIDTH 64
 #define ULLONG_WIDTH 64
 
-#define MB_LEN_MAX 16
-
 #define ARG_MAX 65536
 
 #define PTHREAD_STACK_MIN 65536
 
 #define SSIZE_MAX 2147483647
+
+#define LINK_MAX 4096
+
+#define TZNAME_MAX 64
 
 #ifdef __USE_POSIX
 #    include <bits/posix1_lim.h>

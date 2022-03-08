@@ -1,3 +1,9 @@
+serenity_component(
+    Run
+    REQUIRED
+    TARGETS Run
+)
+
 compile_gml(Run.gml RunGML.h run_gml)
 
 set(SOURCES
@@ -8,4 +14,4 @@ set(SOURCES
 )
 
 serenity_app(Run ICON app-run)
-target_link_libraries(Run LibCore LibDesktop LibGUI)
+target_link_libraries(Run LibCore LibDesktop LibGUI LibMain)

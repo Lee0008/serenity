@@ -5,7 +5,7 @@
  */
 
 #include <LibWeb/DOM/Element.h>
-#include <LibWeb/HTML/Parser/HTMLDocumentParser.h>
+#include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/Parser/StackOfOpenElements.h>
 
 namespace Web::HTML {
@@ -96,8 +96,8 @@ bool StackOfOpenElements::contains(const FlyString& tag_name) const
 void StackOfOpenElements::pop_until_an_element_with_tag_name_has_been_popped(const FlyString& tag_name)
 {
     while (m_elements.last().local_name() != tag_name)
-        pop();
-    pop();
+        (void)pop();
+    (void)pop();
 }
 
 DOM::Element* StackOfOpenElements::topmost_special_node_below(const DOM::Element& formatting_element)
@@ -107,7 +107,7 @@ DOM::Element* StackOfOpenElements::topmost_special_node_below(const DOM::Element
         auto& element = m_elements[i];
         if (&element == &formatting_element)
             break;
-        if (HTMLDocumentParser::is_special_tag(element.local_name(), element.namespace_()))
+        if (HTMLParser::is_special_tag(element.local_name(), element.namespace_()))
             found_element = &element;
     }
     return found_element;
@@ -123,7 +123,7 @@ StackOfOpenElements::LastElementResult StackOfOpenElements::last_element_with_ta
     return { nullptr, -1 };
 }
 
-DOM::Element* StackOfOpenElements::element_before(const DOM::Element& target)
+DOM::Element* StackOfOpenElements::element_immediately_above(DOM::Element const& target)
 {
     bool found_target = false;
     for (ssize_t i = m_elements.size() - 1; i >= 0; --i) {

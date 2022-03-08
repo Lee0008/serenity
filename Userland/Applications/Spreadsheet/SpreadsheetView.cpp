@@ -1,12 +1,11 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "SpreadsheetView.h"
 #include "CellTypeDialog.h"
-#include "SpreadsheetModel.h"
 #include <AK/ScopeGuard.h>
 #include <AK/URL.h>
 #include <LibCore/MimeData.h>
@@ -21,27 +20,23 @@
 
 namespace Spreadsheet {
 
-SpreadsheetView::~SpreadsheetView()
-{
-}
-
-void SpreadsheetView::EditingDelegate::set_value(const GUI::Variant& value)
+void SpreadsheetView::EditingDelegate::set_value(GUI::Variant const& value, GUI::ModelEditingDelegate::SelectionBehavior selection_behavior)
 {
     if (value.as_string().is_null()) {
-        StringModelEditingDelegate::set_value("");
+        StringModelEditingDelegate::set_value("", selection_behavior);
         commit();
         return;
     }
 
     if (m_has_set_initial_value)
-        return StringModelEditingDelegate::set_value(value);
+        return StringModelEditingDelegate::set_value(value, selection_behavior);
 
     m_has_set_initial_value = true;
     const auto option = m_sheet.at({ (size_t)index().column(), (size_t)index().row() });
     if (option)
-        return StringModelEditingDelegate::set_value(option->source());
+        return StringModelEditingDelegate::set_value(option->source(), selection_behavior);
 
-    StringModelEditingDelegate::set_value("");
+    StringModelEditingDelegate::set_value("", selection_behavior);
 }
 
 void InfinitelyScrollableTableView::did_scroll()
@@ -82,15 +77,14 @@ void InfinitelyScrollableTableView::mousemove_event(GUI::MouseEvent& event)
         sheet.disable_updates();
         ScopeGuard sheet_update_enabler { [&] { sheet.enable_updates(); } };
 
-        auto holding_left_button = !!(event.buttons() & GUI::MouseButton::Left);
-        auto rect = content_rect(index);
-        auto distance = rect.center().absolute_relative_distance_to(event.position());
-        if (distance.x() >= rect.width() / 2 - 5 && distance.y() >= rect.height() / 2 - 5) {
+        auto holding_left_button = !!(event.buttons() & GUI::MouseButton::Primary);
+        if (m_is_dragging_for_copy) {
             set_override_cursor(Gfx::StandardCursor::Crosshair);
             m_should_intercept_drag = false;
             if (holding_left_button) {
                 m_has_committed_to_dragging = true;
                 // Force a drag to happen by moving the mousedown position to the center of the cell.
+                auto rect = content_rect(index);
                 m_left_mousedown_position = rect.center();
             }
         } else if (!m_should_intercept_drag) {
@@ -125,6 +119,17 @@ void InfinitelyScrollableTableView::mousemove_event(GUI::MouseEvent& event)
     TableView::mousemove_event(event);
 }
 
+void InfinitelyScrollableTableView::mousedown_event(GUI::MouseEvent& event)
+{
+    if (this->model()) {
+        auto index = index_at_event_position(event.position());
+        auto rect = content_rect(index);
+        auto distance = rect.center().absolute_relative_distance_to(event.position());
+        m_is_dragging_for_copy = distance.x() >= rect.width() / 2 - 5 && distance.y() >= rect.height() / 2 - 5;
+    }
+    AbstractTableView::mousedown_event(event);
+}
+
 void InfinitelyScrollableTableView::mouseup_event(GUI::MouseEvent& event)
 {
     m_should_intercept_drag = false;
@@ -134,21 +139,22 @@ void InfinitelyScrollableTableView::mouseup_event(GUI::MouseEvent& event)
 
 void SpreadsheetView::update_with_model()
 {
-    m_table_view->model()->update();
+    m_sheet_model->update();
     m_table_view->update();
 }
 
 SpreadsheetView::SpreadsheetView(Sheet& sheet)
     : m_sheet(sheet)
+    , m_sheet_model(SheetModel::create(*m_sheet))
 {
-    set_layout<GUI::VerticalBoxLayout>().set_margins({ 2, 2, 2, 2 });
+    set_layout<GUI::VerticalBoxLayout>().set_margins(2);
     m_table_view = add<InfinitelyScrollableTableView>();
     m_table_view->set_grid_style(GUI::TableView::GridStyle::Both);
     m_table_view->set_selection_behavior(GUI::AbstractView::SelectionBehavior::SelectItems);
     m_table_view->set_edit_triggers(GUI::AbstractView::EditTrigger::EditKeyPressed | GUI::AbstractView::AnyKeyPressed | GUI::AbstractView::DoubleClicked);
     m_table_view->set_tab_key_navigation_enabled(true);
     m_table_view->row_header().set_visible(true);
-    m_table_view->set_model(SheetModel::create(*m_sheet));
+    m_table_view->set_model(m_sheet_model);
     m_table_view->on_reaching_vertical_end = [&]() {
         for (size_t i = 0; i < 100; ++i) {
             auto index = m_sheet->add_row();
@@ -163,6 +169,7 @@ SpreadsheetView::SpreadsheetView(Sheet& sheet)
             m_table_view->set_column_width(last_column_index, 50);
             m_table_view->set_default_column_width(last_column_index, 50);
             m_table_view->set_column_header_alignment(last_column_index, Gfx::TextAlignment::Center);
+            m_table_view->set_column_painting_delegate(last_column_index, make<TableCellPainter>(*m_table_view));
         }
         update_with_model();
     };
@@ -256,7 +263,7 @@ SpreadsheetView::SpreadsheetView(Sheet& sheet)
         ScopeGuard update_after_drop { [this] { update(); } };
 
         if (event.mime_data().has_format("text/x-spreadsheet-data")) {
-            auto data = event.mime_data().data("text/x-spreadsheet-data");
+            auto const& data = event.mime_data().data("text/x-spreadsheet-data");
             StringView urls { data.data(), data.size() };
             Vector<Position> source_positions, target_positions;
 
@@ -303,6 +310,11 @@ void SpreadsheetView::show_event(GUI::ShowEvent&)
 
         on_selection_changed(move(selected_positions));
     }
+}
+
+void SpreadsheetView::move_cursor(GUI::AbstractView::CursorMovement direction)
+{
+    m_table_view->move_cursor(direction, GUI::AbstractView::SelectionUpdate::Set);
 }
 
 void SpreadsheetView::TableCellPainter::paint(GUI::Painter& painter, const Gfx::IntRect& rect, const Gfx::Palette& palette, const GUI::ModelIndex& index)

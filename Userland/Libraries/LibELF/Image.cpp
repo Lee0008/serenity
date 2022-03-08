@@ -13,6 +13,7 @@
 #include <AK/StringView.h>
 #include <LibELF/Image.h>
 #include <LibELF/Validation.h>
+#include <limits.h>
 
 namespace ELF {
 
@@ -32,26 +33,6 @@ Image::Image(const u8* buffer, size_t size, bool verbose_logging)
 Image::~Image()
 {
 }
-
-#if ELF_IMAGE_DEBUG
-static const char* object_file_type_to_string(Elf32_Half type)
-{
-    switch (type) {
-    case ET_NONE:
-        return "None";
-    case ET_REL:
-        return "Relocatable";
-    case ET_EXEC:
-        return "Executable";
-    case ET_DYN:
-        return "Shared object";
-    case ET_CORE:
-        return "Core";
-    default:
-        return "(?)";
-    }
-}
-#endif
 
 StringView Image::section_index_to_string(unsigned index) const
 {
@@ -82,7 +63,7 @@ void Image::dump() const
         return;
     }
 
-    dbgln("    type:    {}", object_file_type_to_string(header().e_type));
+    dbgln("    type:    {}", ELF::Image::object_file_type_to_string(header().e_type).value_or("(?)"));
     dbgln("    machine: {}", header().e_machine);
     dbgln("    entry:   {:x}", header().e_entry);
     dbgln("    shoff:   {}", header().e_shoff);
@@ -138,14 +119,21 @@ unsigned Image::program_header_count() const
 
 bool Image::parse()
 {
-    if (m_size < sizeof(Elf32_Ehdr) || !validate_elf_header(header(), m_size, m_verbose_logging)) {
+    if (m_size < sizeof(ElfW(Ehdr)) || !validate_elf_header(header(), m_size, m_verbose_logging)) {
         if (m_verbose_logging)
             dbgln("ELF::Image::parse(): ELF Header not valid");
         m_valid = false;
         return false;
     }
 
-    if (!validate_program_headers(header(), m_size, m_buffer, m_size, nullptr, m_verbose_logging)) {
+    auto result_or_error = validate_program_headers(header(), m_size, { m_buffer, m_size }, nullptr, m_verbose_logging);
+    if (result_or_error.is_error()) {
+        if (m_verbose_logging)
+            dbgln("ELF::Image::parse(): Failed validating ELF Program Headers");
+        m_valid = false;
+        return false;
+    }
+    if (!result_or_error.value()) {
         if (m_verbose_logging)
             dbgln("ELF::Image::parse(): ELF Program Headers not valid");
         m_valid = false;
@@ -208,31 +196,31 @@ const char* Image::raw_data(unsigned offset) const
     return reinterpret_cast<const char*>(m_buffer) + offset;
 }
 
-const Elf32_Ehdr& Image::header() const
+const ElfW(Ehdr) & Image::header() const
 {
-    VERIFY(m_size >= sizeof(Elf32_Ehdr));
-    return *reinterpret_cast<const Elf32_Ehdr*>(raw_data(0));
+    VERIFY(m_size >= sizeof(ElfW(Ehdr)));
+    return *reinterpret_cast<const ElfW(Ehdr)*>(raw_data(0));
 }
 
-const Elf32_Phdr& Image::program_header_internal(unsigned index) const
+const ElfW(Phdr) & Image::program_header_internal(unsigned index) const
 {
     VERIFY(m_valid);
     VERIFY(index < header().e_phnum);
-    return *reinterpret_cast<const Elf32_Phdr*>(raw_data(header().e_phoff + (index * sizeof(Elf32_Phdr))));
+    return *reinterpret_cast<const ElfW(Phdr)*>(raw_data(header().e_phoff + (index * sizeof(ElfW(Phdr)))));
 }
 
-const Elf32_Shdr& Image::section_header(unsigned index) const
+const ElfW(Shdr) & Image::section_header(unsigned index) const
 {
     VERIFY(m_valid);
     VERIFY(index < header().e_shnum);
-    return *reinterpret_cast<const Elf32_Shdr*>(raw_data(header().e_shoff + (index * header().e_shentsize)));
+    return *reinterpret_cast<const ElfW(Shdr)*>(raw_data(header().e_shoff + (index * header().e_shentsize)));
 }
 
 Image::Symbol Image::symbol(unsigned index) const
 {
     VERIFY(m_valid);
     VERIFY(index < symbol_count());
-    auto* raw_syms = reinterpret_cast<const Elf32_Sym*>(raw_data(section(m_symbol_table_section_index).offset()));
+    auto* raw_syms = reinterpret_cast<const ElfW(Sym)*>(raw_data(section(m_symbol_table_section_index).offset()));
     return Symbol(*this, index, raw_syms[index]);
 }
 
@@ -253,7 +241,7 @@ Image::ProgramHeader Image::program_header(unsigned index) const
 Image::Relocation Image::RelocationSection::relocation(unsigned index) const
 {
     VERIFY(index < relocation_count());
-    auto* rels = reinterpret_cast<const Elf32_Rel*>(m_image.raw_data(offset()));
+    auto* rels = reinterpret_cast<const ElfW(Rel)*>(m_image.raw_data(offset()));
     return Relocation(m_image, rels[index]);
 }
 
@@ -263,7 +251,7 @@ Optional<Image::RelocationSection> Image::Section::relocations() const
     builder.append(".rel"sv);
     builder.append(name());
 
-    auto relocation_section = m_image.lookup_section(builder.to_string());
+    auto relocation_section = m_image.lookup_section(builder.string_view());
     if (!relocation_section.has_value())
         return {};
 
@@ -271,7 +259,7 @@ Optional<Image::RelocationSection> Image::Section::relocations() const
     return static_cast<RelocationSection>(relocation_section.value());
 }
 
-Optional<Image::Section> Image::lookup_section(const StringView& name) const
+Optional<Image::Section> Image::lookup_section(StringView name) const
 {
     VERIFY(m_valid);
     for (unsigned i = 0; i < section_count(); ++i) {
@@ -282,13 +270,98 @@ Optional<Image::Section> Image::lookup_section(const StringView& name) const
     return {};
 }
 
+Optional<StringView> Image::object_file_type_to_string(ElfW(Half) type)
+{
+    switch (type) {
+    case ET_NONE:
+        return "None"sv;
+    case ET_REL:
+        return "Relocatable"sv;
+    case ET_EXEC:
+        return "Executable"sv;
+    case ET_DYN:
+        return "Shared object"sv;
+    case ET_CORE:
+        return "Core"sv;
+    default:
+        return {};
+    }
+}
+
+Optional<StringView> Image::object_machine_type_to_string(ElfW(Half) type)
+{
+    switch (type) {
+    case ET_NONE:
+        return "None"sv;
+    case EM_M32:
+        return "AT&T WE 32100"sv;
+    case EM_SPARC:
+        return "SPARC"sv;
+    case EM_386:
+        return "Intel 80386"sv;
+    case EM_68K:
+        return "Motorola 68000"sv;
+    case EM_88K:
+        return "Motorola 88000"sv;
+    case EM_486:
+        return "Intel 80486"sv;
+    case EM_860:
+        return "Intel 80860"sv;
+    case EM_MIPS:
+        return "MIPS R3000 Big-Endian only"sv;
+    case EM_X86_64:
+        return "x86_64"sv;
+    default:
+        return {};
+    }
+}
+
+Optional<StringView> Image::object_abi_type_to_string(Elf_Byte type)
+{
+    switch (type) {
+    case ELFOSABI_SYSV:
+        return "SYSV"sv;
+    case ELFOSABI_HPUX:
+        return "HP-UX"sv;
+    case ELFOSABI_NETBSD:
+        return "NetBSD"sv;
+    case ELFOSABI_LINUX:
+        return "Linux"sv;
+    case ELFOSABI_HURD:
+        return "GNU Hurd"sv;
+    case ELFOSABI_86OPEN:
+        return "86Open"sv;
+    case ELFOSABI_SOLARIS:
+        return "Solaris"sv;
+    case ELFOSABI_MONTEREY:
+        return "AIX"sv;
+    case ELFOSABI_IRIX:
+        return "IRIX"sv;
+    case ELFOSABI_FREEBSD:
+        return "FreeBSD"sv;
+    case ELFOSABI_TRU64:
+        return "Tru64"sv;
+    case ELFOSABI_MODESTO:
+        return "Novell Modesto"sv;
+    case ELFOSABI_OPENBSD:
+        return "OpenBSD"sv;
+    case ELFOSABI_ARM:
+        return "ARM"sv;
+    case ELFOSABI_STANDALONE:
+        return "Standalone"sv;
+    default:
+        return {};
+    }
+}
+
 StringView Image::Symbol::raw_data() const
 {
     auto section = this->section();
     return { section.raw_data() + (value() - section.address()), size() };
 }
 
-Optional<Image::Symbol> Image::find_demangled_function(const StringView& name) const
+#ifndef KERNEL
+Optional<Image::Symbol> Image::find_demangled_function(StringView name) const
 {
     Optional<Image::Symbol> found;
     for_each_symbol([&](const Image::Symbol& symbol) {
@@ -329,7 +402,7 @@ Image::SortedSymbol* Image::find_sorted_symbol(FlatPtr address) const
     return &m_sorted_symbols[index];
 }
 
-Optional<Image::Symbol> Image::find_symbol(u32 address, u32* out_offset) const
+Optional<Image::Symbol> Image::find_symbol(FlatPtr address, u32* out_offset) const
 {
     auto symbol_count = this->symbol_count();
     if (!symbol_count)
@@ -354,7 +427,7 @@ NEVER_INLINE void Image::sort_symbols() const
     });
 }
 
-String Image::symbolicate(u32 address, u32* out_offset) const
+String Image::symbolicate(FlatPtr address, u32* out_offset) const
 {
     auto symbol_count = this->symbol_count();
     if (!symbol_count) {
@@ -380,5 +453,6 @@ String Image::symbolicate(u32 address, u32* out_offset) const
     }
     return String::formatted("{} +{:#x}", demangled_name, address - symbol->address);
 }
+#endif
 
 } // end namespace ELF

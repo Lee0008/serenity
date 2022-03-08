@@ -1,4 +1,4 @@
-FROM ubuntu:21.04
+FROM ubuntu:21.10
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -8,22 +8,25 @@ RUN apt-get update -y \
         ccache \
         cmake \
         curl \
+        g++-11 \
+        gcc-11 \
+        e2fsprogs \
         genext2fs \
-        gettext \
         git \
         imagemagick \
-        libmpfr-dev \
-        libmpc-dev \
         libgmp-dev \
-        e2fsprogs \
+        libgtk-3-dev \
+        libmpc-dev \
+        libmpfr-dev \
+        libpixman-1-dev \
+        libsdl2-dev \
+        libspice-server-dev \
         ninja-build \
         qemu-utils \
         rsync \
         sudo \
+        texinfo \
         tzdata \
         unzip \
-        wget
-
-WORKDIR /serenity
-
-RUN /bin/bash
+    && rm -rf /var/lib/apt/lists/ \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 900 --slave /usr/bin/g++ g++ /usr/bin/g++-11

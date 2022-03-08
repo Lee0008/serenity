@@ -24,8 +24,9 @@ void CharacterData::set_data(String data)
     if (m_data == data)
         return;
     m_data = move(data);
-    // FIXME: This is definitely too aggressive.
-    document().schedule_forced_layout();
+    if (parent())
+        parent()->children_changed();
+    set_needs_style_update(true);
 }
 
 }

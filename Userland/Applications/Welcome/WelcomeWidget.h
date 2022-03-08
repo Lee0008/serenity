@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, the SerenityOS Developers
+ * Copyright (c) 2021-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,7 +13,7 @@ class WelcomeWidget final : public GUI::Widget {
     C_OBJECT(WelcomeWidget);
 
 public:
-    virtual ~WelcomeWidget() override;
+    virtual ~WelcomeWidget() override = default;
 
 private:
     WelcomeWidget();
@@ -29,6 +29,7 @@ private:
     RefPtr<GUI::Button> m_help_button;
     RefPtr<GUI::Button> m_new_button;
     RefPtr<GUI::Label> m_tip_label;
+    RefPtr<GUI::CheckBox> m_startup_checkbox;
     RefPtr<Web::OutOfProcessWebView> m_web_view;
 
     size_t m_initial_tip_index { 0 };

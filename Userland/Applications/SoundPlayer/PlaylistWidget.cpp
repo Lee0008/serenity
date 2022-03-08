@@ -6,7 +6,6 @@
 
 #include "PlaylistWidget.h"
 #include "Player.h"
-#include "SoundPlayerWidgetAdvancedView.h"
 #include <AK/LexicalPath.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/HeaderView.h>
@@ -25,7 +24,7 @@ PlaylistWidget::PlaylistWidget()
         auto index = m_table_view->index_at_event_position(point);
         if (!index.is_valid())
             return;
-        player->open_file(m_table_view->model()->data(index, static_cast<GUI::ModelRole>(PlaylistModelCustomRole::FilePath)).as_string());
+        player->play_file_path(m_table_view->model()->data(index, static_cast<GUI::ModelRole>(PlaylistModelCustomRole::FilePath)).as_string());
     };
 }
 
@@ -36,7 +35,7 @@ GUI::Variant PlaylistModel::data(const GUI::ModelIndex& index, GUI::ModelRole ro
     if (role == GUI::ModelRole::Display) {
         switch (index.column()) {
         case 0:
-            return m_playlist_items[index.row()].extended_info->track_display_title.value_or(LexicalPath(m_playlist_items[index.row()].path).title());
+            return m_playlist_items[index.row()].extended_info->track_display_title.value_or(LexicalPath::title(m_playlist_items[index.row()].path));
         case 1:
             return format_duration(m_playlist_items[index.row()].extended_info->track_length_in_seconds.value_or(0));
         case 2:
@@ -93,14 +92,12 @@ String PlaylistModel::column_name(int column) const
     VERIFY_NOT_REACHED();
 }
 
-void PlaylistModel::update()
-{
-}
+PlaylistTableView::PlaylistTableView() = default;
 
 void PlaylistTableView::doubleclick_event(GUI::MouseEvent& event)
 {
     AbstractView::doubleclick_event(event);
-    if (event.button() == GUI::Left) {
+    if (event.button() == GUI::Primary) {
         if (on_doubleclick)
             on_doubleclick(event.position());
     }

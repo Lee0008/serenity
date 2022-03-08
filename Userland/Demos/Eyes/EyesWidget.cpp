@@ -1,33 +1,19 @@
 /*
  * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "EyesWidget.h"
+#include <AK/Math.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
-#include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Palette.h>
-#include <math.h>
 
-EyesWidget::~EyesWidget()
+void EyesWidget::track_mouse_move(Gfx::IntPoint const& point)
 {
-}
-
-void EyesWidget::track_cursor_globally()
-{
-    VERIFY(window());
-    auto window_id = window()->window_id();
-    VERIFY(window_id >= 0);
-
-    set_global_cursor_tracking(true);
-    GUI::WindowServerConnection::the().set_global_cursor_tracking(window_id, true);
-}
-
-void EyesWidget::mousemove_event(GUI::MouseEvent& event)
-{
-    m_mouse_position = event.position();
+    m_mouse_position = point - window()->position();
     update();
 }
 
@@ -78,7 +64,7 @@ Gfx::IntPoint EyesWidget::pupil_center(Gfx::IntRect& eyeball_bounds) const
     auto mouse_vector = m_mouse_position - eyeball_bounds.center();
     double dx = mouse_vector.x();
     double dy = mouse_vector.y();
-    double mouse_distance = sqrt(dx * dx + dy * dy);
+    double mouse_distance = AK::hypot(dx, dy);
 
     if (mouse_distance == 0.0)
         return eyeball_bounds.center();
@@ -89,17 +75,17 @@ Gfx::IntPoint EyesWidget::pupil_center(Gfx::IntRect& eyeball_bounds) const
     double max_distance_along_this_direction;
 
     // clang-format off
-    if (dx != 0 && abs(dx) >= abs(dy)) {
+    if (dx != 0 && AK::abs(dx) >= AK::abs(dy)) {
         double slope = dy / dx;
         double slope_squared = slope * slope;
-        max_distance_along_this_direction = 0.25 * sqrt(
+        max_distance_along_this_direction = 0.25 * AK::sqrt(
             (slope_squared + 1) /
             (1 / width_squared + slope_squared / height_squared)
         );
-    } else if (dy != 0 && abs(dy) >= abs(dx)) {
+    } else if (dy != 0 && AK::abs(dy) >= AK::abs(dx)) {
         double slope = dx / dy;
         double slope_squared = slope * slope;
-        max_distance_along_this_direction = 0.25 * sqrt(
+        max_distance_along_this_direction = 0.25 * AK::sqrt(
             (slope_squared + 1) /
             (slope_squared / width_squared + 1 / height_squared)
         );

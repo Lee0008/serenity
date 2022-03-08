@@ -6,7 +6,9 @@
 
 #include "FontEditor.h"
 #include <AK/URL.h>
+#include <LibConfig/Client.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/System.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Icon.h>
@@ -15,75 +17,45 @@
 #include <LibGUI/Window.h>
 #include <LibGfx/BitmapFont.h>
 #include <LibGfx/FontDatabase.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <LibMain/Main.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd thread rpath unix cpath wpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd thread rpath unix cpath wpath"));
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    if (pledge("stdio recvfd sendfd thread rpath unix cpath wpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Desktop::Launcher::add_allowed_handler_with_only_specific_urls("/bin/Help", { URL::create_with_file_protocol("/usr/share/man/man1/FontEditor.md") }));
+    TRY(Desktop::Launcher::seal_allowlist());
 
-    if (!Desktop::Launcher::add_allowed_handler_with_only_specific_urls(
-            "/bin/Help",
-            { URL::create_with_file_protocol("/usr/share/man/man1/FontEditor.md") })
-        || !Desktop::Launcher::seal_allowlist()) {
-        warnln("Failed to set up allowed launch URLs");
-        return 1;
-    }
+    Config::pledge_domain("FontEditor");
+    TRY(Core::System::pledge("stdio recvfd sendfd thread rpath cpath wpath"));
 
-    if (pledge("stdio recvfd sendfd thread rpath cpath wpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    const char* path = nullptr;
+    char const* path = nullptr;
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(path, "The font file for editing.", "file", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
-
-    RefPtr<Gfx::BitmapFont> edited_font;
-    if (path == nullptr) {
-        path = "Untitled.font";
-        edited_font = static_ptr_cast<Gfx::BitmapFont>(Gfx::FontDatabase::default_font().clone());
-    } else {
-        auto bitmap_font = Gfx::BitmapFont::load_from_file(path);
-        if (!bitmap_font) {
-            String message = String::formatted("Couldn't load font: {}\n", path);
-            GUI::MessageBox::show(nullptr, message, "Font Editor", GUI::MessageBox::Type::Error);
-            return 1;
-        }
-        edited_font = static_ptr_cast<Gfx::BitmapFont>(bitmap_font->clone());
-        if (!edited_font) {
-            String message = String::formatted("Couldn't load font: {}\n", path);
-            GUI::MessageBox::show(nullptr, message, "Font Editor", GUI::MessageBox::Type::Error);
-            return 1;
-        }
-    }
+    args_parser.parse(arguments);
 
     auto app_icon = GUI::Icon::default_icon("app-font-editor");
 
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_icon(app_icon.bitmap_for_size(16));
-    window->resize(440, 470);
+    window->resize(640, 470);
 
-    auto& font_editor = window->set_main_widget<FontEditorWidget>(path, move(edited_font));
-    font_editor.update_title();
+    auto font_editor = TRY(window->try_set_main_widget<FontEditorWidget>());
+    font_editor->initialize_menubar(*window);
 
-    auto menubar = GUI::Menubar::construct();
-    font_editor.initialize_menubar(menubar);
-    window->set_menubar(move(menubar));
+    if (path) {
+        auto success = font_editor->open_file(path);
+        if (!success)
+            return 1;
+    } else {
+        auto mutable_font = static_ptr_cast<Gfx::BitmapFont>(Gfx::FontDatabase::default_font().clone())->unmasked_character_set();
+        font_editor->initialize({}, move(mutable_font));
+    }
 
     window->on_close_request = [&]() -> GUI::Window::CloseRequestDecision {
-        if (font_editor.request_close())
+        if (font_editor->request_close())
             return GUI::Window::CloseRequestDecision::Close;
         return GUI::Window::CloseRequestDecision::StayOpen;
     };

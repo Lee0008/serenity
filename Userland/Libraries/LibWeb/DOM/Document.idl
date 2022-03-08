@@ -1,6 +1,27 @@
+#import <CSS/StyleSheetList.idl>
+#import <DOM/Comment.idl>
+#import <DOM/DOMImplementation.idl>
+#import <DOM/DocumentFragment.idl>
+#import <DOM/DocumentType.idl>
+#import <DOM/Element.idl>
+#import <DOM/Event.idl>
+#import <DOM/HTMLCollection.idl>
+#import <DOM/Node.idl>
+#import <DOM/NodeList.idl>
+#import <DOM/Range.idl>
+#import <DOM/Text.idl>
+#import <HTML/HTMLElement.idl>
+#import <HTML/HTMLHeadElement.idl>
+#import <HTML/HTMLScriptElement.idl>
+
 interface Document : Node {
 
     constructor();
+
+    boolean hasFocus();
+
+    // FIXME: These attributes currently don't do anything.
+    [PutForwards=href, LegacyUnforgeable] readonly attribute Location? location;
 
     readonly attribute DOMImplementation implementation;
 
@@ -11,11 +32,23 @@ interface Document : Node {
 
     readonly attribute Window? defaultView;
 
+    [CEReactions] Document open(optional DOMString unused1, optional DOMString unused2);
+    // FIXME: implement ExceptionOr<HTML::Window> Document::open(...)
+    // WindowProxy? open(USVString url, DOMString name, DOMString features);
+    [CEReactions] undefined close();
+    [CEReactions] undefined write(DOMString... text);
+    [CEReactions] undefined writeln(DOMString... text);
+
     attribute DOMString cookie;
+
+    readonly attribute USVString referrer;
+
+    readonly attribute Element? activeElement;
 
     Element? getElementById(DOMString id);
     HTMLCollection getElementsByName(DOMString name);
     HTMLCollection getElementsByTagName(DOMString tagName);
+    HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
     HTMLCollection getElementsByClassName(DOMString className);
 
     readonly attribute HTMLCollection applets;
@@ -35,6 +68,7 @@ interface Document : Node {
     Range createRange();
     Event createEvent(DOMString interface);
 
+    [CEReactions, NewObject] Node importNode(Node node, optional boolean deep = false);
     [CEReactions, ImplementedAs=adopt_node_binding] Node adoptNode(Node node);
 
     [ImplementedAs=style_sheets_for_bindings] readonly attribute StyleSheetList styleSheets;
@@ -56,8 +90,14 @@ interface Document : Node {
     readonly attribute Element? lastElementChild;
     readonly attribute unsigned long childElementCount;
 
+    [CEReactions, Unscopable] undefined prepend((Node or DOMString)... nodes);
+    [CEReactions, Unscopable] undefined append((Node or DOMString)... nodes);
+    [CEReactions, Unscopable] undefined replaceChildren((Node or DOMString)... nodes);
+
     Element? querySelector(DOMString selectors);
-    ArrayFromVector querySelectorAll(DOMString selectors);
+    [NewObject] NodeList querySelectorAll(DOMString selectors);
+
+    [SameObject] readonly attribute HTMLCollection children;
 
     // FIXME: These should all come from a GlobalEventHandlers mixin
     attribute EventHandler onabort;
@@ -129,5 +169,8 @@ interface Document : Node {
     attribute EventHandler onwebkitanimationstart;
     attribute EventHandler onwebkittransitionend;
     attribute EventHandler onwheel;
+
+    readonly boolean hidden;
+    readonly DOMString visibilityState;
 
 };

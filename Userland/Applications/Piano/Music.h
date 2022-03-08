@@ -23,57 +23,24 @@ struct Sample {
     i16 right;
 };
 
-constexpr int sample_count = 1024;
+// HACK: needs to increase with device sample rate, but all of the sample_count stuff is static for now
+constexpr int sample_count = 1 << 12;
 
 constexpr int buffer_size = sample_count * sizeof(Sample);
 
 constexpr double sample_rate = 44100;
 
-constexpr double volume_factor = 1800;
+// Headroom for the synth
+constexpr double volume_factor = 0.1;
 
 enum Switch {
     Off,
     On,
 };
 
-struct RollNote {
-    u32 length() const { return (off_sample - on_sample) + 1; }
-
-    u32 on_sample;
-    u32 off_sample;
-};
-
 enum Direction {
     Down,
     Up,
-};
-
-enum Wave {
-    Sine,
-    Triangle,
-    Square,
-    Saw,
-    Noise,
-    RecordedSample,
-};
-
-constexpr const char* wave_strings[] = {
-    "Sine",
-    "Triangle",
-    "Square",
-    "Saw",
-    "Noise",
-    "Frame",
-};
-
-constexpr int first_wave = Sine;
-constexpr int last_wave = RecordedSample;
-
-enum Envelope {
-    Done,
-    Attack,
-    Decay,
-    Release,
 };
 
 enum KeyColor {
@@ -138,6 +105,9 @@ const Color left_wave_colors[] = {
     },
 };
 
+// HACK: make the display code shut up for now
+constexpr int RecordedSample = 5;
+
 const Color right_wave_colors[] = {
     // Sine
     {
@@ -183,13 +153,7 @@ constexpr int black_keys_per_octave = 5;
 constexpr int octave_min = 1;
 constexpr int octave_max = 7;
 
-// These values represent the user-side bounds, the application may use a different scale.
-constexpr int attack_max = 1000;
-constexpr int decay_max = 1000;
-constexpr int sustain_max = 1000;
-constexpr int release_max = 1000;
 constexpr int volume_max = 1000;
-constexpr int delay_max = 8;
 
 constexpr double beats_per_minute = 60;
 constexpr int beats_per_bar = 4;

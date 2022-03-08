@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,7 +19,7 @@ class ToolboxWidget final : public GUI::Widget {
     C_OBJECT(ToolboxWidget);
 
 public:
-    virtual ~ToolboxWidget() override;
+    virtual ~ToolboxWidget() override = default;
 
     Function<void(Tool*)> on_tool_selection;
 
@@ -29,6 +30,8 @@ public:
             callback(tool);
     }
 
+    Tool* active_tool() const { return m_active_tool; }
+
 private:
     friend class ToolButton;
 
@@ -38,6 +41,7 @@ private:
     RefPtr<GUI::Toolbar> m_toolbar;
     GUI::ActionGroup m_action_group;
     NonnullOwnPtrVector<Tool> m_tools;
+    Tool* m_active_tool { nullptr };
 };
 
 }

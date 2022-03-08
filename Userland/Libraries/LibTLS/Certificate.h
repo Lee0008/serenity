@@ -23,6 +23,7 @@ enum class CertificateKeyAlgorithm {
     RSA_MD5 = 0x04,
     RSA_SHA1 = 0x05,
     RSA_SHA256 = 0x0b,
+    RSA_SHA384 = 0x0c,
     RSA_SHA512 = 0x0d,
 };
 
@@ -67,7 +68,7 @@ public:
     static DefaultRootCACertificates& the() { return s_the; }
 
 private:
-    static AK::Singleton<DefaultRootCACertificates> s_the;
+    static Singleton<DefaultRootCACertificates> s_the;
 
     Vector<Certificate> m_ca_certificates;
 };

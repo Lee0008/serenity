@@ -4,17 +4,18 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Process.h>
 #include <Kernel/TTY/TTY.h>
 
 namespace Kernel {
 
-KResultOr<pid_t> Process::sys$getsid(pid_t pid)
+ErrorOr<FlatPtr> Process::sys$getsid(pid_t pid)
 {
-    REQUIRE_PROMISE(proc);
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::proc));
     if (pid == 0)
         return sid().value();
-    ScopedSpinLock lock(g_processes_lock);
     auto process = Process::from_pid(pid);
     if (!process)
         return ESRCH;
@@ -23,9 +24,10 @@ KResultOr<pid_t> Process::sys$getsid(pid_t pid)
     return process->sid().value();
 }
 
-KResultOr<pid_t> Process::sys$setsid()
+ErrorOr<FlatPtr> Process::sys$setsid()
 {
-    REQUIRE_PROMISE(proc);
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::proc));
     InterruptDisabler disabler;
     bool found_process_with_same_pgid_as_my_pid = false;
     Process::for_each_in_pgrp(pid().value(), [&](auto&) {
@@ -35,35 +37,36 @@ KResultOr<pid_t> Process::sys$setsid()
     if (found_process_with_same_pgid_as_my_pid)
         return EPERM;
     // Create a new Session and a new ProcessGroup.
-    m_pg = ProcessGroup::create(ProcessGroupID(pid().value()));
+
+    m_pg = TRY(ProcessGroup::try_create(ProcessGroupID(pid().value())));
     m_tty = nullptr;
     ProtectedDataMutationScope scope { *this };
-    m_sid = pid().value();
+    m_protected_values.sid = pid().value();
     return sid().value();
 }
 
-KResultOr<pid_t> Process::sys$getpgid(pid_t pid)
+ErrorOr<FlatPtr> Process::sys$getpgid(pid_t pid)
 {
-    REQUIRE_PROMISE(proc);
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::proc));
     if (pid == 0)
         return pgid().value();
-    ScopedSpinLock lock(g_processes_lock); // FIXME: Use a ProcessHandle
     auto process = Process::from_pid(pid);
     if (!process)
         return ESRCH;
     return process->pgid().value();
 }
 
-KResultOr<pid_t> Process::sys$getpgrp()
+ErrorOr<FlatPtr> Process::sys$getpgrp()
 {
-    REQUIRE_PROMISE(stdio);
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::stdio));
     return pgid().value();
 }
 
 SessionID Process::get_sid_from_pgid(ProcessGroupID pgid)
 {
     // FIXME: This xor sys$setsid() uses the wrong locking mechanism.
-    ScopedSpinLock lock(g_processes_lock);
 
     SessionID sid { -1 };
     Process::for_each_in_pgrp(pgid, [&](auto& process) {
@@ -74,10 +77,10 @@ SessionID Process::get_sid_from_pgid(ProcessGroupID pgid)
     return sid;
 }
 
-KResultOr<int> Process::sys$setpgid(pid_t specified_pid, pid_t specified_pgid)
+ErrorOr<FlatPtr> Process::sys$setpgid(pid_t specified_pid, pid_t specified_pgid)
 {
-    REQUIRE_PROMISE(proc);
-    ScopedSpinLock lock(g_processes_lock); // FIXME: Use a ProcessHandle
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::proc));
     ProcessID pid = specified_pid ? ProcessID(specified_pid) : this->pid();
     if (specified_pgid < 0) {
         // The value of the pgid argument is less than 0, or is not a value supported by the implementation.
@@ -115,10 +118,7 @@ KResultOr<int> Process::sys$setpgid(pid_t specified_pid, pid_t specified_pgid)
         return EPERM;
     }
     // FIXME: There are more EPERM conditions to check for here..
-    process->m_pg = ProcessGroup::find_or_create(new_pgid);
-    if (!process->m_pg) {
-        return ENOMEM;
-    }
+    process->m_pg = TRY(ProcessGroup::try_find_or_create(new_pgid));
     return 0;
 }
 

@@ -1,7 +1,6 @@
 @GUI::Widget {
     name: "main"
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
         spacing: 2
     }
@@ -32,8 +31,8 @@
                 spacing: 0
             }
 
-            @PixelPaint::ImageEditor {
-                name: "image_editor"
+            @GUI::TabWidget {
+                name: "tab_widget"
             }
 
             @PixelPaint::PaletteWidget {
@@ -44,14 +43,12 @@
         @GUI::Widget {
             fill_with_background_color: true
             fixed_width: 200
-
-            layout: @GUI::VerticalBoxLayout {
-            }
+            layout: @GUI::VerticalBoxLayout {}
 
             @GUI::GroupBox {
                 title: "Layers"
                 layout: @GUI::VerticalBoxLayout {
-                    margins: [4, 16, 4, 8]
+                    margins: [6]
                 }
 
                 @PixelPaint::LayerListWidget {
@@ -61,10 +58,12 @@
 
             @PixelPaint::LayerPropertiesWidget {
                 name: "layer_properties_widget"
+                max_height: 94
             }
 
             @PixelPaint::ToolPropertiesWidget {
                 name: "tool_properties_widget"
+                max_height: 144
             }
         }
     }

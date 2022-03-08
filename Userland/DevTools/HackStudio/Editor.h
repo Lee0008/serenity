@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * 2018-2021, the SerenityOS developers
+ * Copyright (c) 2020-2022, Itamar S. <itamar8910@gmail.com>
+ * Copyright (c) 2018-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -21,9 +22,11 @@ namespace HackStudio {
 class EditorWrapper;
 
 class Editor final : public GUI::TextEditor {
-    C_OBJECT(Editor)
+    C_OBJECT_ABSTRACT(Editor)
 public:
-    virtual ~Editor() override;
+    static ErrorOr<NonnullRefPtr<Editor>> try_create();
+
+    virtual ~Editor() override = default;
 
     Function<void()> on_focus;
     Function<void(String)> on_open;
@@ -34,8 +37,10 @@ public:
     const Vector<size_t>& breakpoint_lines() const { return code_document().breakpoint_lines(); }
     Vector<size_t>& breakpoint_lines() { return code_document().breakpoint_lines(); }
     Optional<size_t> execution_position() const { return code_document().execution_position(); }
+    bool is_program_running() const { return execution_position().has_value(); }
     void set_execution_position(size_t line_number);
     void clear_execution_position();
+    void set_debug_mode(bool);
 
     const CodeDocument& code_document() const;
     CodeDocument& code_document();
@@ -52,6 +57,7 @@ public:
         return *m_language_client;
     }
     virtual void set_cursor(const GUI::TextPosition& a_position) override;
+    void set_semantic_syntax_highlighting(bool value);
 
 private:
     virtual void focusin_event(GUI::FocusEvent&) override;
@@ -62,6 +68,7 @@ private:
     virtual void drop_event(GUI::DropEvent&) override;
     virtual void enter_event(Core::Event&) override;
     virtual void leave_event(Core::Event&) override;
+    virtual void keydown_event(GUI::KeyEvent&) override;
 
     void show_documentation_tooltip_if_available(const String&, const Gfx::IntPoint& screen_location);
     void navigate_to_include_if_available(String);
@@ -92,11 +99,22 @@ private:
     Optional<AutoCompleteRequestData> get_autocomplete_request_data();
 
     void flush_file_content_to_langauge_server();
+    void set_syntax_highlighter_for(const CodeDocument&);
+    void set_language_client_for(const CodeDocument&);
+    void set_autocomplete_provider_for(CodeDocument const&);
+    void handle_function_parameters_hint_request();
+    void on_token_info_timer_tick();
+    void on_tokens_info_result(Vector<GUI::AutocompleteProvider::TokenInfo> const& tokens_info);
+    void create_tokens_info_timer();
+    ErrorOr<void> initialize_documentation_tooltip();
+    ErrorOr<void> initialize_parameters_hint_tooltip();
 
     explicit Editor();
 
     RefPtr<GUI::Window> m_documentation_tooltip_window;
+    RefPtr<GUI::Window> m_parameters_hint_tooltip_window;
     RefPtr<Web::OutOfProcessWebView> m_documentation_page_view;
+    RefPtr<Web::OutOfProcessWebView> m_parameter_hint_page_view;
     String m_last_parsed_token;
     GUI::TextPosition m_previous_text_position { 0, 0 };
     bool m_hovering_editor { false };
@@ -104,8 +122,9 @@ private:
     bool m_autocomplete_in_focus { false };
     RefPtr<GUI::Action> m_evaluate_expression_action;
     RefPtr<GUI::Action> m_move_execution_to_line_action;
-
+    RefPtr<Core::Timer> m_tokens_info_timer; // Used for querying language server for syntax highlighting info
     OwnPtr<LanguageClient> m_language_client;
+    bool m_use_semantic_syntax_highlighting { false };
 };
 
 }

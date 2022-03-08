@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -19,8 +20,8 @@ class Square {
     AK_MAKE_NONCOPYABLE(Square);
 
 public:
-    Square();
-    ~Square();
+    Square() = default;
+    ~Square() = default;
 
     Field* field { nullptr };
     bool is_swept { false };
@@ -43,25 +44,75 @@ class Field final : public GUI::Frame {
     friend class SquareLabel;
 
 public:
-    Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_button, Function<void(Gfx::IntSize)> on_size_changed);
-    virtual ~Field() override;
+    virtual ~Field() override = default;
 
+    enum class Difficulty {
+        Beginner,
+        Intermediate,
+        Expert,
+        Madwoman,
+        Custom
+    };
+
+    StringView difficulty_to_string(Difficulty difficulty) const
+    {
+        switch (difficulty) {
+        case Difficulty::Beginner:
+            return "beginner"sv;
+        case Difficulty::Intermediate:
+            return "intermediate"sv;
+        case Difficulty::Expert:
+            return "expert"sv;
+        case Difficulty::Madwoman:
+            return "madwoman"sv;
+        case Difficulty::Custom:
+            return "custom"sv;
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    }
+
+    Optional<Difficulty> difficulty_from_string(StringView difficulty_string) const
+    {
+        if (difficulty_string.matches("beginner"))
+            return Difficulty::Beginner;
+
+        if (difficulty_string.equals_ignoring_case("intermediate"))
+            return Difficulty::Intermediate;
+
+        if (difficulty_string.equals_ignoring_case("expert"))
+            return Difficulty::Expert;
+
+        if (difficulty_string.equals_ignoring_case("madwoman"))
+            return Difficulty::Madwoman;
+
+        if (difficulty_string.equals_ignoring_case("custom"))
+            return Difficulty::Custom;
+
+        return {};
+    }
+
+    Difficulty difficulty() const { return m_difficulty; }
     size_t rows() const { return m_rows; }
     size_t columns() const { return m_columns; }
     size_t mine_count() const { return m_mine_count; }
     int square_size() const { return 15; }
     bool is_single_chording() const { return m_single_chording; }
 
-    void set_field_size(size_t rows, size_t columns, size_t mine_count);
+    void set_field_difficulty(Difficulty difficulty);
+    void set_field_size(Difficulty difficulty, size_t rows, size_t columns, size_t mine_count);
+
     void set_single_chording(bool new_val);
 
     void reset();
 
 private:
+    Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_button, Function<void(Gfx::IntSize)> on_size_changed);
+
     virtual void paint_event(GUI::PaintEvent&) override;
 
     void on_square_clicked(Square&);
-    void on_square_right_clicked(Square&);
+    void on_square_secondary_clicked(Square&);
     void on_square_middle_clicked(Square&);
     void on_square_chorded(Square&);
     void game_over();
@@ -86,6 +137,7 @@ private:
     };
     void set_face(Face);
 
+    Difficulty m_difficulty { Difficulty::Beginner };
     size_t m_rows { 0 };
     size_t m_columns { 0 };
     size_t m_mine_count { 0 };

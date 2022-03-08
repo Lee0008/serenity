@@ -6,15 +6,11 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/Debug.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <AK/MemoryStream.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/Types.h>
 #include <LibGfx/ICOLoader.h>
 #include <LibGfx/PNGLoader.h>
-#include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 namespace Gfx {
@@ -25,7 +21,7 @@ struct ICONDIR {
     u16 must_be_1 = 0;
     u16 image_count = 0;
 };
-static_assert(sizeof(ICONDIR) == 6);
+static_assert(AssertSize<ICONDIR, 6>());
 
 struct ICONDIRENTRY {
     u8 width;
@@ -37,7 +33,7 @@ struct ICONDIRENTRY {
     u32 size;
     u32 offset;
 };
-static_assert(sizeof(ICONDIRENTRY) == 16);
+static_assert(AssertSize<ICONDIRENTRY, 16>());
 
 struct [[gnu::packed]] BMPFILEHEADER {
     u8 signature[2];
@@ -92,27 +88,6 @@ struct ICOLoadingContext {
     Vector<ICOImageDescriptor> images;
     size_t largest_index;
 };
-
-RefPtr<Gfx::Bitmap> load_ico(const StringView& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    ICOImageDecoderPlugin decoder((const u8*)file_or_error.value()->data(), file_or_error.value()->size());
-    auto bitmap = decoder.bitmap();
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded ICO: {}", bitmap->size(), LexicalPath::canonicalized_path(path)));
-    return bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_ico_from_memory(const u8* data, size_t length)
-{
-    ICOImageDecoderPlugin decoder(data, length);
-    auto bitmap = decoder.bitmap();
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded ICO: <memory>", bitmap->size()));
-    return bitmap;
-}
 
 static Optional<size_t> decode_ico_header(InputMemoryStream& stream)
 {
@@ -247,9 +222,10 @@ static bool load_ico_bmp(ICOLoadingContext& context, ICOImageDescriptor& desc)
         return false;
     }
 
-    desc.bitmap = Bitmap::create_purgeable(BitmapFormat::BGRA8888, { desc.width, desc.height });
-    if (!desc.bitmap)
+    auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRA8888, { desc.width, desc.height });
+    if (bitmap_or_error.is_error())
         return false;
+    desc.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
     Bitmap& bitmap = *desc.bitmap;
     const u8* image_base = context.data + desc.offset + sizeof(info);
     const BMP_ARGB* data_base = (const BMP_ARGB*)image_base;
@@ -287,11 +263,12 @@ static bool load_ico_bitmap(ICOLoadingContext& context, Optional<size_t> index)
 
     PNGImageDecoderPlugin png_decoder(context.data + desc.offset, desc.size);
     if (png_decoder.sniff()) {
-        desc.bitmap = png_decoder.bitmap();
-        if (!desc.bitmap) {
+        auto decoded_png_frame = png_decoder.frame(0);
+        if (decoded_png_frame.is_error() || !decoded_png_frame.value().image) {
             dbgln_if(ICO_DEBUG, "load_ico_bitmap: failed to load PNG encoded image index: {}", real_index);
             return false;
         }
+        desc.bitmap = decoded_png_frame.value().image;
         return true;
     } else {
         if (!load_ico_bmp(context, desc)) {
@@ -328,36 +305,17 @@ IntSize ICOImageDecoderPlugin::size()
     return { m_context->images[m_context->largest_index].width, m_context->images[m_context->largest_index].height };
 }
 
-RefPtr<Gfx::Bitmap> ICOImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == ICOLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < ICOLoadingContext::State::BitmapDecoded) {
-        // NOTE: This forces the chunk decoding to happen.
-        bool success = load_ico_bitmap(*m_context, {});
-        if (!success) {
-            m_context->state = ICOLoadingContext::State::Error;
-            return nullptr;
-        }
-        m_context->state = ICOLoadingContext::State::BitmapDecoded;
-    }
-
-    VERIFY(m_context->images[m_context->largest_index].bitmap);
-    return m_context->images[m_context->largest_index].bitmap;
-}
-
 void ICOImageDecoderPlugin::set_volatile()
 {
     if (m_context->images[0].bitmap)
         m_context->images[0].bitmap->set_volatile();
 }
 
-bool ICOImageDecoderPlugin::set_nonvolatile()
+bool ICOImageDecoderPlugin::set_nonvolatile(bool& was_purged)
 {
     if (!m_context->images[0].bitmap)
         return false;
-    return m_context->images[0].bitmap->set_nonvolatile();
+    return m_context->images[0].bitmap->set_nonvolatile(was_purged);
 }
 
 bool ICOImageDecoderPlugin::sniff()
@@ -381,12 +339,26 @@ size_t ICOImageDecoderPlugin::frame_count()
     return 1;
 }
 
-ImageFrameDescriptor ICOImageDecoderPlugin::frame(size_t i)
+ErrorOr<ImageFrameDescriptor> ICOImageDecoderPlugin::frame(size_t index)
 {
-    if (i > 0) {
-        return { bitmap(), 0 };
+    if (index > 0)
+        return Error::from_string_literal("ICOImageDecoderPlugin: Invalid frame index"sv);
+
+    if (m_context->state == ICOLoadingContext::State::Error)
+        return Error::from_string_literal("ICOImageDecoderPlugin: Decoding failed"sv);
+
+    if (m_context->state < ICOLoadingContext::State::BitmapDecoded) {
+        // NOTE: This forces the chunk decoding to happen.
+        bool success = load_ico_bitmap(*m_context, {});
+        if (!success) {
+            m_context->state = ICOLoadingContext::State::Error;
+            return Error::from_string_literal("ICOImageDecoderPlugin: Decoding failed"sv);
+        }
+        m_context->state = ICOLoadingContext::State::BitmapDecoded;
     }
-    return {};
+
+    VERIFY(m_context->images[m_context->largest_index].bitmap);
+    return ImageFrameDescriptor { m_context->images[m_context->largest_index].bitmap, 0 };
 }
 
 }

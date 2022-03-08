@@ -4,38 +4,36 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/IO.h>
 #include <Kernel/KSyms.h>
 #include <Kernel/Process.h>
 #include <Kernel/UserOrKernelBuffer.h>
+#include <Kernel/kstdio.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$dump_backtrace()
+ErrorOr<FlatPtr> Process::sys$dump_backtrace()
 {
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
     dump_backtrace();
     return 0;
 }
 
-KResultOr<int> Process::sys$dbgputch(u8 ch)
+ErrorOr<FlatPtr> Process::sys$dbgputstr(Userspace<const char*> characters, size_t size)
 {
-    IO::out8(IO::BOCHS_DEBUG_PORT, ch);
-    return 0;
-}
-
-KResultOr<size_t> Process::sys$dbgputstr(Userspace<const u8*> characters, int length)
-{
-    if (length <= 0)
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
+    if (size == 0)
         return 0;
 
-    auto buffer = UserOrKernelBuffer::for_user_buffer(characters, length);
-    if (!buffer.has_value())
-        return EFAULT;
-    return buffer.value().read_buffered<1024>(length, [&](u8 const* buffer, size_t buffer_size) {
-        for (size_t i = 0; i < buffer_size; ++i)
-            IO::out8(IO::BOCHS_DEBUG_PORT, buffer[i]);
-        return buffer_size;
-    });
+    if (size <= 1024) {
+        char buffer[1024];
+        TRY(copy_from_user(buffer, characters, size));
+        dbgputstr(buffer, size);
+        return size;
+    }
+
+    auto string = TRY(try_copy_kstring_from_user(characters, size));
+    dbgputstr(string->view());
+    return string->length();
 }
 
 }

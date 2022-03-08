@@ -6,9 +6,7 @@
 
 #pragma once
 
-#include <AK/String.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 
 namespace Kernel {
@@ -17,13 +15,13 @@ public:
     explicit UnhandledInterruptHandler(u8 interrupt_vector);
     virtual ~UnhandledInterruptHandler();
 
-    virtual void handle_interrupt(const RegisterState&) override;
+    virtual bool handle_interrupt(const RegisterState&) override;
 
     [[noreturn]] virtual bool eoi() override;
 
     virtual HandlerType type() const override { return HandlerType::UnhandledInterruptHandler; }
-    virtual const char* purpose() const override { return "Unhandled Interrupt Handler"; }
-    virtual const char* controller() const override { VERIFY_NOT_REACHED(); }
+    virtual StringView purpose() const override { return "Unhandled Interrupt Handler"sv; }
+    virtual StringView controller() const override { VERIFY_NOT_REACHED(); }
 
     virtual size_t sharing_devices_count() const override { return 0; }
     virtual bool is_shared_handler() const override { return false; }

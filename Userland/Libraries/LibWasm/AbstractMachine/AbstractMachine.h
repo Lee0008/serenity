@@ -34,6 +34,7 @@ TYPEDEF_DISTINCT_NUMERIC_GENERAL(u64, true, true, false, false, false, true, Ext
 TYPEDEF_DISTINCT_NUMERIC_GENERAL(u64, true, true, false, false, false, true, TableAddress);
 TYPEDEF_DISTINCT_NUMERIC_GENERAL(u64, true, true, false, false, false, true, GlobalAddress);
 TYPEDEF_DISTINCT_NUMERIC_GENERAL(u64, true, true, false, false, false, true, ElementAddress);
+TYPEDEF_DISTINCT_NUMERIC_GENERAL(u64, true, true, false, false, false, true, DataAddress);
 TYPEDEF_DISTINCT_NUMERIC_GENERAL(u64, true, true, false, false, false, true, MemoryAddress);
 
 // FIXME: These should probably be made generic/virtual if/when we decide to do something more
@@ -66,37 +67,18 @@ class Value {
 public:
     Value()
         : m_value(0)
-        , m_type(ValueType::I32)
     {
     }
 
     using AnyValueType = Variant<i32, i64, float, double, Reference>;
     explicit Value(AnyValueType value)
         : m_value(move(value))
-        , m_type(ValueType::I32)
     {
-        if (m_value.has<i32>())
-            m_type = ValueType { ValueType::I32 };
-        else if (m_value.has<i64>())
-            m_type = ValueType { ValueType::I64 };
-        else if (m_value.has<float>())
-            m_type = ValueType { ValueType::F32 };
-        else if (m_value.has<double>())
-            m_type = ValueType { ValueType::F64 };
-        else if (m_value.has<Reference>() && m_value.get<Reference>().ref().has<Reference::Func>())
-            m_type = ValueType { ValueType::FunctionReference };
-        else if (m_value.has<Reference>() && m_value.get<Reference>().ref().has<Reference::Extern>())
-            m_type = ValueType { ValueType::ExternReference };
-        else if (m_value.has<Reference>())
-            m_type = m_value.get<Reference>().ref().get<Reference::Null>().type;
-        else
-            VERIFY_NOT_REACHED();
     }
 
     template<typename T>
     requires(sizeof(T) == sizeof(u64)) explicit Value(ValueType type, T raw_value)
         : m_value(0)
-        , m_type(type)
     {
         switch (type.kind()) {
         case ValueType::Kind::ExternReference:
@@ -130,34 +112,13 @@ public:
         }
     }
 
-    Value(Value const& value)
-        : m_value(AnyValueType { value.m_value })
-        , m_type(value.m_type)
-    {
-    }
-
-    Value(Value&& value)
-        : m_value(move(value.m_value))
-        , m_type(move(value.m_type))
-    {
-    }
-
-    Value& operator=(Value&& value)
-    {
-        m_value = move(value.m_value);
-        m_type = move(value.m_type);
-        return *this;
-    }
-
-    Value& operator=(Value const& value)
-    {
-        m_value = value.m_value;
-        m_type = value.m_type;
-        return *this;
-    }
+    ALWAYS_INLINE Value(Value const& value) = default;
+    ALWAYS_INLINE Value(Value&& value) = default;
+    ALWAYS_INLINE Value& operator=(Value&& value) = default;
+    ALWAYS_INLINE Value& operator=(Value const& value) = default;
 
     template<typename T>
-    Optional<T> to()
+    ALWAYS_INLINE Optional<T> to()
     {
         Optional<T> result;
         m_value.visit(
@@ -184,37 +145,52 @@ public:
         return result;
     }
 
-    auto& type() const { return m_type; }
+    ValueType type() const
+    {
+        return ValueType(m_value.visit(
+            [](i32) { return ValueType::Kind::I32; },
+            [](i64) { return ValueType::Kind::I64; },
+            [](float) { return ValueType::Kind::F32; },
+            [](double) { return ValueType::Kind::F64; },
+            [&](Reference const& type) {
+                return type.ref().visit(
+                    [](Reference::Func const&) { return ValueType::Kind::FunctionReference; },
+                    [](Reference::Null const& null_type) {
+                        return null_type.type.kind() == ValueType::ExternReference ? ValueType::Kind::NullExternReference : ValueType::Kind::NullFunctionReference;
+                    },
+                    [](Reference::Extern const&) { return ValueType::Kind::ExternReference; });
+            }));
+    }
     auto& value() const { return m_value; }
 
 private:
     AnyValueType m_value;
-    ValueType m_type;
 };
 
 struct Trap {
-    // Empty value type
+    String reason;
 };
 
 class Result {
 public:
     explicit Result(Vector<Value> values)
-        : m_values(move(values))
+        : m_result(move(values))
     {
     }
 
-    Result(Trap)
-        : m_is_trap(true)
+    Result(Trap trap)
+        : m_result(move(trap))
     {
     }
 
-    auto& values() const { return m_values; }
-    auto& values() { return m_values; }
-    auto is_trap() const { return m_is_trap; }
+    auto is_trap() const { return m_result.has<Trap>(); }
+    auto& values() const { return m_result.get<Vector<Value>>(); }
+    auto& values() { return m_result.get<Vector<Value>>(); }
+    auto& trap() const { return m_result.get<Trap>(); }
+    auto& trap() { return m_result.get<Trap>(); }
 
 private:
-    Vector<Value> m_values;
-    bool m_is_trap { false };
+    Variant<Vector<Value>, Trap> m_result;
 };
 
 using ExternValue = Variant<FunctionAddress, TableAddress, MemoryAddress, GlobalAddress>;
@@ -239,12 +215,14 @@ class ModuleInstance {
 public:
     explicit ModuleInstance(
         Vector<FunctionType> types, Vector<FunctionAddress> function_addresses, Vector<TableAddress> table_addresses,
-        Vector<MemoryAddress> memory_addresses, Vector<GlobalAddress> global_addresses, Vector<ExportInstance> exports)
+        Vector<MemoryAddress> memory_addresses, Vector<GlobalAddress> global_addresses, Vector<DataAddress> data_addresses,
+        Vector<ExportInstance> exports)
         : m_types(move(types))
         , m_functions(move(function_addresses))
         , m_tables(move(table_addresses))
         , m_memories(move(memory_addresses))
         , m_globals(move(global_addresses))
+        , m_datas(move(data_addresses))
         , m_exports(move(exports))
     {
     }
@@ -257,6 +235,7 @@ public:
     auto& memories() const { return m_memories; }
     auto& globals() const { return m_globals; }
     auto& elements() const { return m_elements; }
+    auto& datas() const { return m_datas; }
     auto& exports() const { return m_exports; }
 
     auto& types() { return m_types; }
@@ -265,6 +244,7 @@ public:
     auto& memories() { return m_memories; }
     auto& globals() { return m_globals; }
     auto& elements() { return m_elements; }
+    auto& datas() { return m_datas; }
     auto& exports() { return m_exports; }
 
 private:
@@ -274,6 +254,7 @@ private:
     Vector<MemoryAddress> m_memories;
     Vector<GlobalAddress> m_globals;
     Vector<ElementAddress> m_elements;
+    Vector<DataAddress> m_datas;
     Vector<ExportInstance> m_exports;
 };
 
@@ -326,6 +307,23 @@ public:
     auto& elements() { return m_elements; }
     auto& type() const { return m_type; }
 
+    bool grow(size_t size_to_grow, Reference const& fill_value)
+    {
+        if (size_to_grow == 0)
+            return true;
+        auto new_size = m_elements.size() + size_to_grow;
+        if (auto max = m_type.limits().max(); max.has_value()) {
+            if (max.value() < new_size)
+                return false;
+        }
+        auto previous_size = m_elements.size();
+        if (m_elements.try_resize(new_size).is_error())
+            return false;
+        for (size_t i = previous_size; i < m_elements.size(); ++i)
+            m_elements[i] = fill_value;
+        return true;
+    }
+
 private:
     Vector<Optional<Reference>> m_elements;
     TableType const& m_type;
@@ -333,10 +331,14 @@ private:
 
 class MemoryInstance {
 public:
-    explicit MemoryInstance(MemoryType const& type)
-        : m_type(type)
+    static ErrorOr<MemoryInstance> create(MemoryType const& type)
     {
-        grow(m_type.limits().min() * Constants::page_size);
+        MemoryInstance instance { type };
+
+        if (!instance.grow(type.limits().min() * Constants::page_size))
+            return Error::from_string_literal("Failed to grow to requested size");
+
+        return { move(instance) };
     }
 
     auto& type() const { return m_type; }
@@ -348,11 +350,17 @@ public:
     {
         if (size_to_grow == 0)
             return true;
-        auto new_size = m_data.size() + size_to_grow;
-        if (m_type.limits().max().value_or(new_size) < new_size)
+        u64 new_size = m_data.size() + size_to_grow;
+        // Can't grow past 2^16 pages.
+        if (new_size >= Constants::page_size * 65536)
             return false;
+        if (auto max = m_type.limits().max(); max.has_value()) {
+            if (max.value() * Constants::page_size < new_size)
+                return false;
+        }
         auto previous_size = m_size;
-        m_data.resize(new_size);
+        if (m_data.try_resize(new_size).is_error())
+            return false;
         m_size = new_size;
         // The spec requires that we zero out everything on grow
         __builtin_memset(m_data.offset_pointer(previous_size), 0, size_to_grow);
@@ -360,6 +368,11 @@ public:
     }
 
 private:
+    explicit MemoryInstance(MemoryType const& type)
+        : m_type(type)
+    {
+    }
+
     MemoryType const& m_type;
     size_t m_size { 0 };
     ByteBuffer m_data;
@@ -375,6 +388,7 @@ public:
 
     auto is_mutable() const { return m_mutable; }
     auto& value() const { return m_value; }
+    GlobalType type() const { return { m_value.type(), is_mutable() }; }
     void set_value(Value value)
     {
         VERIFY(is_mutable());
@@ -384,6 +398,22 @@ public:
 private:
     bool m_mutable { false };
     Value m_value;
+};
+
+class DataInstance {
+public:
+    explicit DataInstance(Vector<u8> data)
+        : m_data(move(data))
+    {
+    }
+
+    size_t size() const { return m_data.size(); }
+
+    Vector<u8>& data() { return m_data; }
+    Vector<u8> const& data() const { return m_data; }
+
+private:
+    Vector<u8> m_data;
 };
 
 class ElementInstance {
@@ -410,6 +440,7 @@ public:
     Optional<FunctionAddress> allocate(HostFunction&&);
     Optional<TableAddress> allocate(TableType const&);
     Optional<MemoryAddress> allocate(MemoryType const&);
+    Optional<DataAddress> allocate_data(Vector<u8>);
     Optional<GlobalAddress> allocate(GlobalType const&, Value);
     Optional<ElementAddress> allocate(ValueType const&, Vector<Reference>);
 
@@ -417,6 +448,7 @@ public:
     TableInstance* get(TableAddress);
     MemoryInstance* get(MemoryAddress);
     GlobalInstance* get(GlobalAddress);
+    DataInstance* get(DataAddress);
     ElementInstance* get(ElementAddress);
 
 private:
@@ -425,6 +457,7 @@ private:
     Vector<MemoryInstance> m_memories;
     Vector<GlobalInstance> m_globals;
     Vector<ElementInstance> m_elements;
+    Vector<DataInstance> m_datas;
 };
 
 class Label {
@@ -491,6 +524,8 @@ class AbstractMachine {
 public:
     explicit AbstractMachine() = default;
 
+    // Validate a module; permanently sets the module's validity status.
+    ErrorOr<void, ValidationError> validate(Module&);
     // Load and instantiate a module, and link it into this interpreter.
     InstantiationResult instantiate(Module const&, Vector<ExternValue>);
     Result invoke(FunctionAddress, Vector<Value>);
@@ -499,10 +534,13 @@ public:
     auto& store() const { return m_store; }
     auto& store() { return m_store; }
 
+    void enable_instruction_count_limit() { m_should_limit_instruction_count = true; }
+
 private:
     Optional<InstantiationError> allocate_all_initial_phase(Module const&, ModuleInstance&, Vector<ExternValue>&, Vector<Value>& global_values);
     Optional<InstantiationError> allocate_all_final_phase(Module const&, ModuleInstance&, Vector<Vector<Reference>>& elements);
     Store m_store;
+    bool m_should_limit_instruction_count { false };
 };
 
 class Linker {

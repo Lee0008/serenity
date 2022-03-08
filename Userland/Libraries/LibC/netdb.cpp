@@ -27,12 +27,13 @@ static in_addr_t* __gethostbyname_address_list_buffer[2];
 
 static hostent __gethostbyaddr_buffer;
 static in_addr_t* __gethostbyaddr_address_list_buffer[2];
-// XXX: IPCCompiler depends on LibC. Because of this, it cannot be compiled
+// IPCCompiler depends on LibC. Because of this, it cannot be compiled
 // before LibC is. However, the lookup magic can only be obtained from the
 // endpoint itself if IPCCompiler has compiled the IPC file, so this creates
 // a chicken-and-egg situation. Because of this, the LookupServer endpoint magic
 // is hardcoded here.
-static constexpr i32 lookup_server_endpoint_magic = 9001;
+// Keep the name synchronized with LookupServer/LookupServer.ipc.
+static constexpr u32 lookup_server_endpoint_magic = "LookupServer"sv.hash();
 
 // Get service entry buffers and file information for the getservent() family of functions.
 static FILE* services_file = nullptr;
@@ -86,6 +87,8 @@ static String gethostbyname_name_buffer;
 
 hostent* gethostbyname(const char* name)
 {
+    h_errno = 0;
+
     auto ipv4_address = IPv4Address::from_string(name);
 
     if (ipv4_address.has_value()) {
@@ -103,78 +106,90 @@ hostent* gethostbyname(const char* name)
     }
 
     int fd = connect_to_lookup_server();
-    if (fd < 0)
+    if (fd < 0) {
+        h_errno = TRY_AGAIN;
         return nullptr;
+    }
 
     auto close_fd_on_exit = ScopeGuard([fd] {
         close(fd);
     });
 
-    size_t name_length = strlen(name);
+    size_t unsigned_name_length = strlen(name);
+    VERIFY(unsigned_name_length <= NumericLimits<i32>::max());
+    i32 name_length = static_cast<i32>(unsigned_name_length);
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 name_length;
     } request_header = {
         (u32)(sizeof(request_header) - sizeof(request_header.message_size) + name_length),
         lookup_server_endpoint_magic,
         1,
-        (i32)name_length,
+        name_length,
     };
-    int nsent = write(fd, &request_header, sizeof(request_header));
-    if (nsent < 0) {
-        perror("write");
+    if (auto nsent = write(fd, &request_header, sizeof(request_header)); nsent < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nsent != sizeof(request_header)) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY((size_t)nsent == sizeof(request_header));
-    nsent = write(fd, name, name_length);
-    if (nsent < 0) {
-        perror("write");
+
+    if (auto nsent = write(fd, name, name_length); nsent < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nsent != name_length) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY((size_t)nsent == name_length);
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 code;
         u64 addresses_count;
     } response_header;
 
-    int nrecv = read(fd, &response_header, sizeof(response_header));
-    if (nrecv < 0) {
-        perror("recv");
+    if (auto nreceived = read(fd, &response_header, sizeof(response_header)); nreceived < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nreceived != sizeof(response_header)) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY((size_t)nrecv == sizeof(response_header));
     if (response_header.endpoint_magic != lookup_server_endpoint_magic || response_header.message_id != 2) {
-        dbgln("Received an unexpected message");
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
     if (response_header.code != 0) {
-        // TODO: return a specific error.
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY(response_header.addresses_count > 0);
-
+    if (response_header.addresses_count == 0) {
+        h_errno = HOST_NOT_FOUND;
+        return nullptr;
+    }
     i32 response_length;
-    nrecv = read(fd, &response_length, sizeof(response_length));
-    if (nrecv < 0) {
-        perror("recv");
+    if (auto nreceived = read(fd, &response_length, sizeof(response_length)); nreceived < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nreceived != sizeof(response_length)
+        || response_length != sizeof(__gethostbyname_address)) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY((size_t)nrecv == sizeof(response_length));
-    VERIFY(response_length == sizeof(__gethostbyname_address));
 
-    nrecv = read(fd, &__gethostbyname_address, response_length);
-    if (nrecv < 0) {
-        perror("recv");
+    if (auto nreceived = read(fd, &__gethostbyname_address, response_length); nreceived < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nreceived != response_length) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY(nrecv == response_length);
 
     gethostbyname_name_buffer = name;
     __gethostbyname_buffer.h_name = const_cast<char*>(gethostbyname_name_buffer.characters());
@@ -192,6 +207,8 @@ static String gethostbyaddr_name_buffer;
 
 hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 {
+    h_errno = 0;
+
     if (type != AF_INET) {
         errno = EAFNOSUPPORT;
         return nullptr;
@@ -203,8 +220,10 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
     }
 
     int fd = connect_to_lookup_server();
-    if (fd < 0)
+    if (fd < 0) {
+        h_errno = TRY_AGAIN;
         return nullptr;
+    }
 
     auto close_fd_on_exit = ScopeGuard([fd] {
         close(fd);
@@ -214,59 +233,62 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 address_length;
     } request_header = {
         sizeof(request_header) - sizeof(request_header.message_size) + sizeof(in_addr),
         lookup_server_endpoint_magic,
         3,
-        (i32)sizeof(in_addr),
+        sizeof(in_addr),
     };
-    int nsent = write(fd, &request_header, sizeof(request_header));
-    if (nsent < 0) {
-        perror("write");
+    if (auto nsent = write(fd, &request_header, sizeof(request_header)); nsent < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nsent != sizeof(request_header)) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY((size_t)nsent == sizeof(request_header));
-    nsent = write(fd, &in_addr, sizeof(in_addr));
-    if (nsent < 0) {
-        perror("write");
+    if (auto nsent = write(fd, &in_addr, sizeof(in_addr)); nsent < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nsent != sizeof(in_addr)) {
+        h_errno = TRY_AGAIN;
         return nullptr;
     }
-    VERIFY((size_t)nsent == sizeof(in_addr));
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 code;
         i32 name_length;
     } response_header;
 
-    int nrecv = read(fd, &response_header, sizeof(response_header));
-    if (nrecv < 0) {
-        perror("recv");
+    if (auto nreceived = read(fd, &response_header, sizeof(response_header)); nreceived < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nreceived != sizeof(response_header)) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY((size_t)nrecv == sizeof(response_header));
-    if (response_header.endpoint_magic != lookup_server_endpoint_magic || response_header.message_id != 4) {
-        dbgln("Received an unexpected message");
-        return nullptr;
-    }
-    if (response_header.code != 0) {
-        // TODO: return a specific error.
+    if (response_header.endpoint_magic != lookup_server_endpoint_magic
+        || response_header.message_id != 4
+        || response_header.code != 0) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
 
     char* buffer;
     auto string_impl = StringImpl::create_uninitialized(response_header.name_length, buffer);
-    nrecv = read(fd, buffer, response_header.name_length);
-    if (nrecv < 0) {
-        perror("recv");
+
+    if (auto nreceived = read(fd, buffer, response_header.name_length); nreceived < 0) {
+        h_errno = TRY_AGAIN;
+        return nullptr;
+    } else if (nreceived != response_header.name_length) {
+        h_errno = NO_RECOVERY;
         return nullptr;
     }
-    VERIFY(nrecv == response_header.name_length);
 
     gethostbyaddr_name_buffer = move(string_impl);
     __gethostbyaddr_buffer.h_name = buffer;
@@ -282,7 +304,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
 struct servent* getservent()
 {
-    //If the services file is not open, attempt to open it and return null if it fails.
+    // If the services file is not open, attempt to open it and return null if it fails.
     if (!services_file) {
         services_file = fopen(services_path, "r");
 
@@ -424,10 +446,8 @@ void endservent()
 // false if failure occurs.
 static bool fill_getserv_buffers(const char* line, ssize_t read)
 {
-    //Splitting the line by tab delimiter and filling the servent buffers name, port, and protocol members.
-    String string_line = String(line, read);
-    string_line.replace(" ", "\t", true);
-    auto split_line = string_line.split('\t');
+    // Splitting the line by tab delimiter and filling the servent buffers name, port, and protocol members.
+    auto split_line = StringView(line, read).replace(" ", "\t", true).split('\t');
 
     // This indicates an incorrect file format.
     // Services file entries should always at least contain
@@ -450,11 +470,7 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
     __getserv_port_buffer = number.value();
 
     // Remove any annoying whitespace at the end of the protocol.
-    port_protocol_split[1].replace(" ", "", true);
-    port_protocol_split[1].replace("\t", "", true);
-    port_protocol_split[1].replace("\n", "", true);
-
-    __getserv_protocol_buffer = port_protocol_split[1];
+    __getserv_protocol_buffer = port_protocol_split[1].replace(" ", "", true).replace("\t", "", true).replace("\n", "", true);
     __getserv_alias_list_buffer.clear();
 
     // If there are aliases for the service, we will fill the alias list buffer.
@@ -465,7 +481,8 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
                 break;
             }
             auto alias = split_line[i].to_byte_buffer();
-            alias.append("\0", sizeof(char));
+            if (alias.try_append("\0", sizeof(char)).is_error())
+                return false;
             __getserv_alias_list_buffer.append(move(alias));
         }
     }
@@ -609,8 +626,7 @@ void endprotoent()
 static bool fill_getproto_buffers(const char* line, ssize_t read)
 {
     String string_line = String(line, read);
-    string_line.replace(" ", "\t", true);
-    auto split_line = string_line.split('\t');
+    auto split_line = string_line.replace(" ", "\t", true).split('\t');
 
     // This indicates an incorrect file format. Protocols file entries should
     // always have at least a name and a protocol.
@@ -635,7 +651,8 @@ static bool fill_getproto_buffers(const char* line, ssize_t read)
             if (split_line[i].starts_with('#'))
                 break;
             auto alias = split_line[i].to_byte_buffer();
-            alias.append("\0", sizeof(char));
+            if (alias.try_append("\0", sizeof(char)).is_error())
+                return false;
             __getproto_alias_list_buffer.append(move(alias));
         }
     }
@@ -645,8 +662,6 @@ static bool fill_getproto_buffers(const char* line, ssize_t read)
 
 int getaddrinfo(const char* __restrict node, const char* __restrict service, const struct addrinfo* __restrict hints, struct addrinfo** __restrict res)
 {
-    dbgln("getaddrinfo: node={}, service={}, hints->ai_family={}", (const char*)node, (const char*)service, hints ? hints->ai_family : 0);
-
     *res = nullptr;
 
     if (hints && hints->ai_family != AF_INET && hints->ai_family != AF_UNSPEC)
@@ -792,8 +807,8 @@ int getnameinfo(const struct sockaddr* __restrict addr, socklen_t addrlen, char*
     const sockaddr_in* sin = reinterpret_cast<const sockaddr_in*>(addr);
 
     if (host && hostlen > 0) {
-        if (flags & NI_NAMEREQD)
-            dbgln("getnameinfo flag NI_NAMEREQD not implemented");
+        if (flags != 0)
+            dbgln("getnameinfo flags are not implemented: {:#x}", flags);
 
         if (!inet_ntop(AF_INET, &sin->sin_addr, host, hostlen)) {
             if (errno == ENOSPC)

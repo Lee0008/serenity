@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,7 +14,7 @@
 ProcessFileDescriptorMapWidget::ProcessFileDescriptorMapWidget()
 {
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 4, 4, 4, 4 });
+    layout()->set_margins(4);
     m_table_view = add<GUI::TableView>();
 
     Vector<GUI::JsonArrayModel::FieldSpec> pid_fds_fields;
@@ -38,11 +39,7 @@ ProcessFileDescriptorMapWidget::ProcessFileDescriptorMapWidget()
     });
 
     m_model = GUI::JsonArrayModel::create({}, move(pid_fds_fields));
-    m_table_view->set_model(GUI::SortingProxyModel::create(*m_model));
-}
-
-ProcessFileDescriptorMapWidget::~ProcessFileDescriptorMapWidget()
-{
+    m_table_view->set_model(MUST(GUI::SortingProxyModel::create(*m_model)));
 }
 
 void ProcessFileDescriptorMapWidget::set_pid(pid_t pid)

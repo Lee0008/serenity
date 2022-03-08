@@ -5,15 +5,16 @@
  */
 
 #include <Kernel/FileSystem/AnonymousFile.h>
-#include <Kernel/FileSystem/FileDescription.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
+#include <Kernel/Memory/AnonymousVMObject.h>
 #include <Kernel/Process.h>
-#include <Kernel/VM/AnonymousVMObject.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$anon_create(size_t size, int options)
+ErrorOr<FlatPtr> Process::sys$anon_create(size_t size, int options)
 {
-    REQUIRE_PROMISE(stdio);
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
+    TRY(require_promise(Pledge::stdio));
 
     if (!size)
         return EINVAL;
@@ -21,22 +22,14 @@ KResultOr<int> Process::sys$anon_create(size_t size, int options)
     if (size % PAGE_SIZE)
         return EINVAL;
 
-    int new_fd = alloc_fd();
-    if (new_fd < 0)
-        return new_fd;
+    if (size > NumericLimits<ssize_t>::max())
+        return EINVAL;
 
-    auto vmobject = AnonymousVMObject::create_with_size(size, AllocationStrategy::Reserve);
-    if (!vmobject)
-        return ENOMEM;
+    auto new_fd = TRY(allocate_fd());
+    auto vmobject = TRY(Memory::AnonymousVMObject::try_create_purgeable_with_size(size, AllocationStrategy::Reserve));
+    auto anon_file = TRY(AnonymousFile::try_create(move(vmobject)));
+    auto description = TRY(OpenFileDescription::try_create(move(anon_file)));
 
-    auto anon_file = AnonymousFile::create(vmobject.release_nonnull());
-    if (!anon_file)
-        return ENOMEM;
-    auto description_or_error = FileDescription::create(*anon_file);
-    if (description_or_error.is_error())
-        return description_or_error.error();
-
-    auto description = description_or_error.release_value();
     description->set_writable(true);
     description->set_readable(true);
 
@@ -44,8 +37,8 @@ KResultOr<int> Process::sys$anon_create(size_t size, int options)
     if (options & O_CLOEXEC)
         fd_flags |= FD_CLOEXEC;
 
-    m_fds[new_fd].set(move(description), fd_flags);
-    return new_fd;
+    m_fds.with_exclusive([&](auto& fds) { fds[new_fd.fd].set(move(description), fd_flags); });
+    return new_fd.fd;
 }
 
 }

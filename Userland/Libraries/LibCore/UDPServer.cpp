@@ -8,7 +8,6 @@
 #include <AK/Types.h>
 #include <LibCore/Notifier.h>
 #include <LibCore/UDPServer.h>
-#include <LibCore/UDPSocket.h>
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -64,7 +63,8 @@ bool UDPServer::bind(const IPv4Address& address, u16 port)
 
 ByteBuffer UDPServer::receive(size_t size, sockaddr_in& in)
 {
-    auto buf = ByteBuffer::create_uninitialized(size);
+    // FIXME: Handle possible OOM situation.
+    auto buf = ByteBuffer::create_uninitialized(size).release_value_but_fixme_should_propagate_errors();
     socklen_t in_len = sizeof(in);
     ssize_t rlen = ::recvfrom(m_fd, buf.data(), size, 0, (sockaddr*)&in, &in_len);
     if (rlen < 0) {
@@ -100,6 +100,20 @@ Optional<u16> UDPServer::local_port() const
         return {};
 
     return ntohs(address.sin_port);
+}
+
+ErrorOr<size_t> UDPServer::send(ReadonlyBytes buffer, sockaddr_in const& to)
+{
+    if (m_fd < 0) {
+        return Error::from_errno(EBADF);
+    }
+
+    auto result = ::sendto(m_fd, buffer.data(), buffer.size(), 0, (sockaddr const*)&to, sizeof(to));
+    if (result < 0) {
+        return Error::from_errno(errno);
+    }
+
+    return result;
 }
 
 }

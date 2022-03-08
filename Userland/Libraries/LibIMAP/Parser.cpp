@@ -22,7 +22,7 @@ ParseStatus Parser::parse(ByteBuffer&& buffer, bool expecting_tag)
 
     if (try_consume("+")) {
         consume(" ");
-        auto data = parse_while([](u8 x) { return x != '\r'; });
+        auto data = consume_until_end_of_line();
         consume("\r\n");
         return { true, { ContinueRequest { data } } };
     }
@@ -131,16 +131,16 @@ void Parser::parse_untagged()
     if (number.has_value()) {
         consume(" ");
         auto data_type = parse_atom().to_string();
-        if (data_type.matches("EXISTS")) {
+        if (data_type == "EXISTS"sv) {
             m_response.data().set_exists(number.value());
             consume("\r\n");
-        } else if (data_type.matches("RECENT")) {
+        } else if (data_type == "RECENT"sv) {
             m_response.data().set_recent(number.value());
             consume("\r\n");
-        } else if (data_type.matches("FETCH")) {
+        } else if (data_type == "FETCH"sv) {
             auto fetch_response = parse_fetch_response();
             m_response.data().add_fetch_response(number.value(), move(fetch_response));
-        } else if (data_type.matches("EXPUNGE")) {
+        } else if (data_type == "EXPUNGE"sv) {
             m_response.data().add_expunged(number.value());
             consume("\r\n");
         }
@@ -164,30 +164,36 @@ void Parser::parse_untagged()
         consume(" ");
         if (try_consume("[")) {
             auto actual_type = parse_atom();
-            consume(" ");
-            if (actual_type.matches("UIDNEXT")) {
+            if (actual_type == "CLOSED"sv) {
+                // No-op.
+            } else if (actual_type == "UIDNEXT"sv) {
+                consume(" ");
                 auto n = parse_number();
                 m_response.data().set_uid_next(n);
-            } else if (actual_type.matches("UIDVALIDITY")) {
+            } else if (actual_type == "UIDVALIDITY"sv) {
+                consume(" ");
                 auto n = parse_number();
                 m_response.data().set_uid_validity(n);
-            } else if (actual_type.matches("UNSEEN")) {
+            } else if (actual_type == "UNSEEN"sv) {
+                consume(" ");
                 auto n = parse_number();
                 m_response.data().set_unseen(n);
-            } else if (actual_type.matches("PERMANENTFLAGS")) {
+            } else if (actual_type == "PERMANENTFLAGS"sv) {
+                consume(" ");
                 auto flags = parse_list(+[](StringView x) { return String(x); });
                 m_response.data().set_permanent_flags(move(flags));
+            } else if (actual_type == "HIGHESTMODSEQ"sv) {
+                consume(" ");
+                parse_number();
+                // No-op for now.
             } else {
                 dbgln("Unknown: {}", actual_type);
-                parse_while([](u8 x) { return x != ']'; });
+                consume_while([](u8 x) { return x != ']'; });
             }
             consume("]");
-            parse_while([](u8 x) { return x != '\r'; });
-            consume("\r\n");
-        } else {
-            parse_while([](u8 x) { return x != '\r'; });
-            consume("\r\n");
         }
+        consume_until_end_of_line();
+        consume("\r\n");
     } else if (try_consume("SEARCH")) {
         Vector<unsigned> ids;
         while (!try_consume("\r\n")) {
@@ -197,7 +203,7 @@ void Parser::parse_untagged()
         }
         m_response.data().set_search_results(move(ids));
     } else if (try_consume("BYE")) {
-        auto message = parse_while([](u8 x) { return x != '\r'; });
+        auto message = consume_until_end_of_line();
         consume("\r\n");
         m_response.data().set_bye(message.is_empty() ? Optional<String>() : Optional<String>(message));
     } else if (try_consume("STATUS")) {
@@ -212,15 +218,15 @@ void Parser::parse_untagged()
             auto value = parse_number();
 
             auto type = StatusItemType::Recent;
-            if (status_att.matches("MESSAGES")) {
+            if (status_att == "MESSAGES"sv) {
                 type = StatusItemType::Messages;
-            } else if (status_att.matches("UNSEEN")) {
+            } else if (status_att == "UNSEEN"sv) {
                 type = StatusItemType::Unseen;
-            } else if (status_att.matches("UIDNEXT")) {
+            } else if (status_att == "UIDNEXT"sv) {
                 type = StatusItemType::UIDNext;
-            } else if (status_att.matches("UIDVALIDITY")) {
+            } else if (status_att == "UIDVALIDITY"sv) {
                 type = StatusItemType::UIDValidity;
-            } else if (status_att.matches("RECENT")) {
+            } else if (status_att == "RECENT"sv) {
                 type = StatusItemType::Recent;
             } else {
                 dbgln("Unmatched status attribute: {}", status_att);
@@ -236,7 +242,7 @@ void Parser::parse_untagged()
         try_consume(" "); // Not in the spec but the Outlook server sends a space for some reason.
         consume("\r\n");
     } else {
-        auto x = parse_while([](u8 x) { return x != '\r'; });
+        auto x = consume_until_end_of_line();
         consume("\r\n");
         dbgln("ignored {}", x);
     }
@@ -244,7 +250,7 @@ void Parser::parse_untagged()
 
 StringView Parser::parse_quoted_string()
 {
-    auto str = parse_while([](u8 x) { return x != '"'; });
+    auto str = consume_while([](u8 x) { return x != '"'; });
     consume("\"");
     return str;
 }
@@ -292,7 +298,7 @@ FetchResponseData Parser::parse_fetch_response()
         }
         case FetchCommand::DataItemType::InternalDate: {
             consume(" \"");
-            auto date_view = parse_while([](u8 x) { return x != '"'; });
+            auto date_view = consume_while([](u8 x) { return x != '"'; });
             consume("\"");
             auto date = Core::DateTime::parse("%d-%b-%Y %H:%M:%S %z", date_view).value();
             fetch_response.set_internal_date(date);
@@ -309,7 +315,7 @@ FetchResponseData Parser::parse_fetch_response()
             break;
         case FetchCommand::DataItemType::BodySection: {
             auto body = parse_nstring();
-            fetch_response.add_body_data(move(data_item), body.has_value() ? body.release_value() : Optional<String>());
+            fetch_response.add_body_data(move(data_item), Optional<String>(move(body)));
             break;
         }
         }
@@ -428,8 +434,8 @@ BodyStructure Parser::parse_one_part_body()
         auto data = BodyStructureData {
             type,
             subtype,
-            id.has_value() ? Optional<String>(id.value()) : Optional<String>(),
-            description.has_value() ? Optional<String>(description.value()) : Optional<String>(),
+            Optional<String>(move(id)),
+            Optional<String>(move(description)),
             encoding,
             params,
             num_octets,
@@ -490,8 +496,8 @@ BodyStructure Parser::parse_one_part_body()
         BodyStructureData data {
             type,
             subtype,
-            id.has_value() ? Optional<String>(id.value()) : Optional<String>(),
-            description.has_value() ? Optional<String>(description.value()) : Optional<String>(),
+            Optional<String>(move(id)),
+            Optional<String>(move(description)),
             encoding,
             params,
             num_octets,
@@ -516,8 +522,8 @@ BodyStructure Parser::parse_one_part_body()
         BodyStructureData data {
             type,
             subtype,
-            id.has_value() ? Optional<String>(id.value()) : Optional<String>(),
-            description.has_value() ? Optional<String>(description.value()) : Optional<String>(),
+            Optional<String>(move(id)),
+            Optional<String>(move(description)),
             encoding,
             params,
             num_octets,
@@ -574,7 +580,7 @@ ListItem Parser::parse_list_item()
         flags |= static_cast<unsigned>(flag);
     }
     consume(" \"");
-    auto reference = parse_while([](u8 x) { return x != '"'; });
+    auto reference = consume_while([](u8 x) { return x != '"'; });
     consume("\" ");
     auto mailbox = parse_astring();
     consume("\r\n");
@@ -613,11 +619,11 @@ ResponseStatus Parser::parse_status()
 {
     auto atom = parse_atom();
 
-    if (atom.matches("OK")) {
+    if (atom == "OK"sv) {
         return ResponseStatus::OK;
-    } else if (atom.matches("BAD")) {
+    } else if (atom == "BAD"sv) {
         return ResponseStatus::Bad;
-    } else if (atom.matches("NO")) {
+    } else if (atom == "NO"sv) {
         return ResponseStatus::No;
     }
 
@@ -634,7 +640,7 @@ Vector<T> Parser::parse_list(T converter(StringView))
     while (!try_consume(")")) {
         if (!first)
             consume(" ");
-        auto item = parse_while([](u8 x) {
+        auto item = consume_while([](u8 x) {
             return x != ' ' && x != ')';
         });
         x.append(converter(item));
@@ -646,38 +652,38 @@ Vector<T> Parser::parse_list(T converter(StringView))
 
 MailboxFlag Parser::parse_mailbox_flag(StringView s)
 {
-    if (s.matches("\\All"))
+    if (s == "\\All"sv)
         return MailboxFlag::All;
-    if (s.matches("\\Drafts"))
+    if (s == "\\Drafts"sv)
         return MailboxFlag::Drafts;
-    if (s.matches("\\Flagged"))
+    if (s == "\\Flagged"sv)
         return MailboxFlag::Flagged;
-    if (s.matches("\\HasChildren"))
+    if (s == "\\HasChildren"sv)
         return MailboxFlag::HasChildren;
-    if (s.matches("\\HasNoChildren"))
+    if (s == "\\HasNoChildren"sv)
         return MailboxFlag::HasNoChildren;
-    if (s.matches("\\Important"))
+    if (s == "\\Important"sv)
         return MailboxFlag::Important;
-    if (s.matches("\\Junk"))
+    if (s == "\\Junk"sv)
         return MailboxFlag::Junk;
-    if (s.matches("\\Marked"))
+    if (s == "\\Marked"sv)
         return MailboxFlag::Marked;
-    if (s.matches("\\Noinferiors"))
+    if (s == "\\Noinferiors"sv)
         return MailboxFlag::NoInferiors;
-    if (s.matches("\\Noselect"))
+    if (s == "\\Noselect"sv)
         return MailboxFlag::NoSelect;
-    if (s.matches("\\Sent"))
+    if (s == "\\Sent"sv)
         return MailboxFlag::Sent;
-    if (s.matches("\\Trash"))
+    if (s == "\\Trash"sv)
         return MailboxFlag::Trash;
-    if (s.matches("\\Unmarked"))
+    if (s == "\\Unmarked"sv)
         return MailboxFlag::Unmarked;
 
     dbgln("Unrecognized mailbox flag {}", s);
     return MailboxFlag::Unknown;
 }
 
-StringView Parser::parse_while(Function<bool(u8)> should_consume)
+StringView Parser::consume_while(Function<bool(u8)> should_consume)
 {
     int chars = 0;
     while (!at_end() && should_consume(m_buffer[position])) {
@@ -687,15 +693,20 @@ StringView Parser::parse_while(Function<bool(u8)> should_consume)
     return StringView(m_buffer.data() + position - chars, chars);
 }
 
+StringView Parser::consume_until_end_of_line()
+{
+    return consume_while([](u8 x) { return x != '\r'; });
+}
+
 FetchCommand::DataItem Parser::parse_fetch_data_item()
 {
-    auto msg_attr = parse_while([](u8 x) { return is_ascii_alpha(x) != 0; });
+    auto msg_attr = consume_while([](u8 x) { return is_ascii_alpha(x) != 0; });
     if (msg_attr.equals_ignoring_case("BODY") && try_consume("[")) {
         auto data_item = FetchCommand::DataItem {
             .type = FetchCommand::DataItemType::BodySection,
             .section = { {} }
         };
-        auto section_type = parse_while([](u8 x) { return x != ']' && x != ' '; });
+        auto section_type = consume_while([](u8 x) { return x != ']' && x != ' '; });
         if (section_type.equals_ignoring_case("HEADER.FIELDS")) {
             data_item.section->type = FetchCommand::DataItem::SectionType::HeaderFields;
             data_item.section->headers = Vector<String>();
@@ -716,12 +727,12 @@ FetchCommand::DataItem Parser::parse_fetch_data_item()
             consume("]");
         } else if (is_ascii_digit(section_type[0])) {
             data_item.section->type = FetchCommand::DataItem::SectionType::Parts;
-            data_item.section->parts = Vector<int>();
+            data_item.section->parts = Vector<unsigned>();
 
             while (!try_consume("]")) {
-                auto num = parse_number();
-                if (num != (unsigned)-1) {
-                    data_item.section->parts->append((int)num);
+                auto num = try_parse_number();
+                if (num.has_value()) {
+                    data_item.section->parts->append(num.value());
                     continue;
                 }
                 auto atom = parse_atom();
@@ -791,18 +802,17 @@ Address Parser::parse_address()
 {
     consume("(");
     auto address = Address();
-    // I hate this so much. Why is there no Optional.map??
     auto name = parse_nstring();
-    address.name = name.has_value() ? Optional<String>(name.value()) : Optional<String>();
+    address.name = Optional<String>(move(name));
     consume(" ");
     auto source_route = parse_nstring();
-    address.source_route = source_route.has_value() ? Optional<String>(source_route.value()) : Optional<String>();
+    address.source_route = Optional<String>(move(source_route));
     consume(" ");
     auto mailbox = parse_nstring();
-    address.mailbox = mailbox.has_value() ? Optional<String>(mailbox.value()) : Optional<String>();
+    address.mailbox = Optional<String>(move(mailbox));
     consume(" ");
     auto host = parse_nstring();
-    address.host = host.has_value() ? Optional<String>(host.value()) : Optional<String>();
+    address.host = Optional<String>(move(host));
     consume(")");
     return address;
 }

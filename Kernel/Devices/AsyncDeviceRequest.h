@@ -8,10 +8,10 @@
 
 #include <AK/IntrusiveList.h>
 #include <AK/NonnullRefPtr.h>
+#include <Kernel/Memory/ScopedAddressSpaceSwitcher.h>
 #include <Kernel/Process.h>
 #include <Kernel/Thread.h>
 #include <Kernel/UserOrKernelBuffer.h>
-#include <Kernel/VM/ProcessPagingScope.h>
 #include <Kernel/WaitQueue.h>
 
 namespace Kernel {
@@ -54,14 +54,14 @@ public:
 
     virtual ~AsyncDeviceRequest();
 
-    virtual const char* name() const = 0;
+    virtual StringView name() const = 0;
     virtual void start() = 0;
 
     void add_sub_request(NonnullRefPtr<AsyncDeviceRequest>);
 
     [[nodiscard]] RequestWaitResult wait(Time* = nullptr);
 
-    void do_start(ScopedSpinLock<SpinLock<u8>>&& requests_lock)
+    void do_start(SpinlockLocker<Spinlock>&& requests_lock)
     {
         if (is_completed_result(m_result))
             return;
@@ -81,38 +81,38 @@ public:
     void* get_private() const { return m_private; }
 
     template<typename... Args>
-    [[nodiscard]] bool write_to_buffer(UserOrKernelBuffer& buffer, Args... args)
+    ErrorOr<void> write_to_buffer(UserOrKernelBuffer& buffer, Args... args)
     {
         if (in_target_context(buffer))
             return buffer.write(forward<Args>(args)...);
-        ProcessPagingScope paging_scope(m_process);
+        ScopedAddressSpaceSwitcher switcher(m_process);
         return buffer.write(forward<Args>(args)...);
     }
 
     template<size_t BUFFER_BYTES, typename... Args>
-    [[nodiscard]] KResultOr<size_t> write_to_buffer_buffered(UserOrKernelBuffer& buffer, Args... args)
+    ErrorOr<size_t> write_to_buffer_buffered(UserOrKernelBuffer& buffer, Args... args)
     {
         if (in_target_context(buffer))
             return buffer.write_buffered<BUFFER_BYTES>(forward<Args>(args)...);
-        ProcessPagingScope paging_scope(m_process);
+        ScopedAddressSpaceSwitcher switcher(m_process);
         return buffer.write_buffered<BUFFER_BYTES>(forward<Args>(args)...);
     }
 
     template<typename... Args>
-    [[nodiscard]] bool read_from_buffer(const UserOrKernelBuffer& buffer, Args... args)
+    ErrorOr<void> read_from_buffer(const UserOrKernelBuffer& buffer, Args... args)
     {
         if (in_target_context(buffer))
             return buffer.read(forward<Args>(args)...);
-        ProcessPagingScope paging_scope(m_process);
+        ScopedAddressSpaceSwitcher switcher(m_process);
         return buffer.read(forward<Args>(args)...);
     }
 
     template<size_t BUFFER_BYTES, typename... Args>
-    [[nodiscard]] KResultOr<size_t> read_from_buffer_buffered(const UserOrKernelBuffer& buffer, Args... args)
+    ErrorOr<size_t> read_from_buffer_buffered(const UserOrKernelBuffer& buffer, Args... args)
     {
         if (in_target_context(buffer))
             return buffer.read_buffered<BUFFER_BYTES>(forward<Args>(args)...);
-        ProcessPagingScope paging_scope(m_process);
+        ScopedAddressSpaceSwitcher switcher(m_process);
         return buffer.read_buffered<BUFFER_BYTES>(forward<Args>(args)...);
     }
 
@@ -129,7 +129,7 @@ private:
     {
         if (buffer.is_kernel_buffer())
             return true;
-        return m_process == Process::current();
+        return m_process == &Process::current();
     }
 
     [[nodiscard]] static bool is_completed_result(RequestResult result)
@@ -143,14 +143,14 @@ private:
     RequestResult m_result { Pending };
     IntrusiveListNode<AsyncDeviceRequest, RefPtr<AsyncDeviceRequest>> m_list_node;
 
-    typedef IntrusiveList<AsyncDeviceRequest, RefPtr<AsyncDeviceRequest>, &AsyncDeviceRequest::m_list_node> AsyncDeviceSubRequestList;
+    using AsyncDeviceSubRequestList = IntrusiveList<&AsyncDeviceRequest::m_list_node>;
 
     AsyncDeviceSubRequestList m_sub_requests_pending;
     AsyncDeviceSubRequestList m_sub_requests_complete;
     WaitQueue m_queue;
     NonnullRefPtr<Process> m_process;
     void* m_private { nullptr };
-    mutable SpinLock<u8> m_lock;
+    mutable Spinlock m_lock;
 };
 
 }

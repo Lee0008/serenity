@@ -6,10 +6,11 @@
 
 #include <AK/Assertions.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
-#include <Kernel/IO.h>
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Interrupts/PIC.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
@@ -147,7 +148,7 @@ void PIC::complete_eoi() const
 void PIC::hard_disable()
 {
     InterruptDisabler disabler;
-    remap(0x20);
+    remap(pic_disabled_vector_base);
     IO::out8(PIC0_CMD, 0xff);
     IO::out8(PIC1_CMD, 0xff);
     m_cached_irq_mask = 0xffff;
@@ -160,7 +161,7 @@ void PIC::remap(u8 offset)
     IO::out8(PIC0_CTL, ICW1_INIT | ICW1_ICW4);
     IO::out8(PIC1_CTL, ICW1_INIT | ICW1_ICW4);
 
-    /* ICW2 (upper 5 bits specify ISR indices, lower 3 idunno) */
+    /* ICW2 (upper 5 bits specify ISR indices, lower 3 don't specify anything) */
     IO::out8(PIC0_CMD, offset);
     IO::out8(PIC1_CMD, offset + 0x08);
 
@@ -187,7 +188,7 @@ UNMAP_AFTER_INIT void PIC::initialize()
     IO::out8(PIC0_CTL, ICW1_INIT | ICW1_ICW4);
     IO::out8(PIC1_CTL, ICW1_INIT | ICW1_ICW4);
 
-    /* ICW2 (upper 5 bits specify ISR indices, lower 3 idunno) */
+    /* ICW2 (upper 5 bits specify ISR indices, lower 3 don't specify anything) */
     IO::out8(PIC0_CMD, IRQ_VECTOR_BASE);
     IO::out8(PIC1_CMD, IRQ_VECTOR_BASE + 0x08);
 

@@ -11,7 +11,7 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/CheckBox.h>
 #include <LibGUI/ComboBox.h>
-#include <LibGUI/FontPickerWeightModel.h>
+#include <LibGUI/ItemListModel.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Painter.h>
@@ -20,11 +20,8 @@
 #include <LibGUI/Widget.h>
 #include <LibGUI/Wizards/WizardDialog.h>
 #include <LibGfx/BitmapFont.h>
-#include <LibGfx/Font.h>
+#include <LibGfx/FontStyleMapping.h>
 #include <LibGfx/Palette.h>
-
-static constexpr int s_max_width = 32;
-static constexpr int s_max_height = 36;
 
 namespace GUI {
 
@@ -93,13 +90,13 @@ private:
     }
     virtual void mousemove_event(MouseEvent& event) override
     {
-        if (event.buttons() & (GUI::MouseButton::Left | GUI::MouseButton::Right))
+        if (event.buttons() & (GUI::MouseButton::Primary | GUI::MouseButton::Secondary))
             draw_at_mouse(event);
     }
-    void draw_at_mouse(const MouseEvent& event)
+    void draw_at_mouse(MouseEvent const& event)
     {
-        bool set = event.buttons() & MouseButton::Left;
-        bool unset = event.buttons() & MouseButton::Right;
+        bool set = event.buttons() & MouseButton::Primary;
+        bool unset = event.buttons() & MouseButton::Secondary;
         if (!(set ^ unset))
             return;
         int x = (event.x() - 1) / m_scale;
@@ -114,13 +111,13 @@ private:
         update();
     }
 
-    int m_scale { 20 };
+    int m_scale { 10 };
     int m_width { 20 };
     int m_height { 20 };
     int m_glyph_width { 20 };
     int m_mean_line { 2 };
     int m_baseline { 16 };
-    u8 m_bits[s_max_width][s_max_height] {};
+    u8 m_bits[Gfx::GlyphBitmap::max_width()][Gfx::GlyphBitmap::max_height()] {};
 };
 
 }
@@ -130,34 +127,24 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
 {
     set_title("New Font");
 
-    m_font_properties_page = GUI::WizardPage::construct("Font properties", "Edit details about this font.");
+    m_font_properties_page = GUI::WizardPage::construct("Typeface properties", "Edit details about this font.");
     m_font_properties_page->body_widget().load_from_gml(new_font_dialog_page_1_gml);
 
     m_name_textbox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::TextBox>("name_textbox");
     m_family_textbox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::TextBox>("family_textbox");
-    m_type_combobox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::ComboBox>("type_combobox");
-    m_type_info_label = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::Label>("type_info_label");
     m_weight_combobox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::ComboBox>("weight_combobox");
+    m_slope_combobox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::ComboBox>("slope_combobox");
     m_presentation_spinbox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::SpinBox>("presentation_spinbox");
 
-    m_type_info_label->set_text("\xE2\x84\xB9\t");
-    m_type_info_label->set_tooltip("Font type governs maximum glyph count");
-
-    for (auto& it : GUI::font_weight_names)
+    for (auto& it : Gfx::font_weight_names)
         m_font_weight_list.append(it.name);
     m_weight_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_weight_list));
     m_weight_combobox->set_selected_index(3);
 
-    StringBuilder type_count;
-    for (int i = 0; i < Gfx::FontTypes::__Count; i++) {
-        type_count.appendff("{} ({})",
-            Gfx::BitmapFont::type_name_by_type(static_cast<Gfx::FontTypes>(i)),
-            Gfx::BitmapFont::glyph_count_by_type(static_cast<Gfx::FontTypes>(i)));
-        m_font_type_list.append(type_count.to_string());
-        type_count.clear();
-    }
-    m_type_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_type_list));
-    m_type_combobox->set_selected_index(0);
+    for (auto& it : Gfx::font_slope_names)
+        m_font_slope_list.append(it.name);
+    m_slope_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_slope_list));
+    m_slope_combobox->set_selected_index(0);
 
     m_presentation_spinbox->set_value(12);
 
@@ -182,8 +169,8 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
 
     m_glyph_height_spinbox->set_value(20);
     m_glyph_width_spinbox->set_value(20);
-    m_glyph_height_spinbox->set_max(s_max_height);
-    m_glyph_width_spinbox->set_max(s_max_width);
+    m_glyph_height_spinbox->set_max(Gfx::GlyphBitmap::max_height());
+    m_glyph_width_spinbox->set_max(Gfx::GlyphBitmap::max_width());
     m_mean_line_spinbox->set_value(2);
     m_baseline_spinbox->set_value(16);
     m_mean_line_spinbox->set_max(max(m_glyph_height_spinbox->value() - 2, 0));
@@ -197,7 +184,7 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
 
     m_glyph_width_spinbox->on_change = [&](int value) {
         preview_editor.set_preview_size(value, m_glyph_height_spinbox->value());
-        deferred_invoke([&](auto&) {
+        deferred_invoke([&] {
             m_glyph_editor_container->set_fixed_height(1 + preview_editor.height() + preview_editor.frame_thickness() * 2);
         });
     };
@@ -205,7 +192,7 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
         preview_editor.set_preview_size(m_glyph_width_spinbox->value(), value);
         m_mean_line_spinbox->set_max(max(value - 2, 0));
         m_baseline_spinbox->set_max(max(value - 2, 0));
-        deferred_invoke([&](auto&) {
+        deferred_invoke([&] {
             m_glyph_editor_container->set_fixed_height(1 + preview_editor.height() + preview_editor.frame_thickness() * 2);
         });
     };
@@ -225,8 +212,8 @@ void NewFontDialog::save_metadata()
 {
     m_new_font_metadata.name = m_name_textbox->text();
     m_new_font_metadata.family = m_family_textbox->text();
-    m_new_font_metadata.weight = GUI::name_to_weight(m_weight_combobox->text());
-    m_new_font_metadata.type = static_cast<Gfx::FontTypes>(m_type_combobox->selected_index());
+    m_new_font_metadata.weight = Gfx::name_to_weight(m_weight_combobox->text());
+    m_new_font_metadata.slope = Gfx::name_to_slope(m_slope_combobox->text());
     m_new_font_metadata.presentation_size = m_presentation_spinbox->value();
 
     m_new_font_metadata.baseline = m_baseline_spinbox->value();

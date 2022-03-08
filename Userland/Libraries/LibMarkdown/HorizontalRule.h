@@ -10,6 +10,7 @@
 #include <AK/StringView.h>
 #include <AK/Vector.h>
 #include <LibMarkdown/Block.h>
+#include <LibMarkdown/LineIterator.h>
 
 namespace Markdown {
 
@@ -20,9 +21,10 @@ public:
     }
     virtual ~HorizontalRule() override { }
 
-    virtual String render_to_html() const override;
+    virtual String render_to_html(bool tight = false) const override;
     virtual String render_for_terminal(size_t view_width = 0) const override;
-    static OwnPtr<HorizontalRule> parse(Vector<StringView>::ConstIterator& lines);
+    virtual RecursionDecision walk(Visitor&) const override;
+    static OwnPtr<HorizontalRule> parse(LineIterator& lines);
 };
 
 }

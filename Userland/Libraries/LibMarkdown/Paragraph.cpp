@@ -6,47 +6,43 @@
 
 #include <AK/StringBuilder.h>
 #include <LibMarkdown/Paragraph.h>
+#include <LibMarkdown/Visitor.h>
 
 namespace Markdown {
 
-String Paragraph::render_to_html() const
+String Paragraph::render_to_html(bool tight) const
 {
     StringBuilder builder;
-    builder.append("<p>");
-    bool first = true;
-    for (auto& line : m_lines) {
-        if (!first)
-            builder.append(' ');
-        first = false;
-        builder.append(line.text().render_to_html());
-    }
-    builder.append("</p>\n");
+
+    if (!tight)
+        builder.append("<p>");
+
+    builder.append(m_text.render_to_html());
+
+    if (!tight)
+        builder.append("</p>");
+
+    builder.append('\n');
+
     return builder.build();
 }
 
 String Paragraph::render_for_terminal(size_t) const
 {
     StringBuilder builder;
-    bool first = true;
-    for (auto& line : m_lines) {
-        if (!first)
-            builder.append(' ');
-        first = false;
-        builder.append(line.text().render_for_terminal());
-    }
+    builder.append("  ");
+    builder.append(m_text.render_for_terminal());
     builder.append("\n\n");
     return builder.build();
 }
 
-OwnPtr<Paragraph::Line> Paragraph::Line::parse(Vector<StringView>::ConstIterator& lines)
+RecursionDecision Paragraph::walk(Visitor& visitor) const
 {
-    if (lines.is_end())
-        return {};
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
 
-    auto text = Text::parse(*lines++);
-    if (!text.has_value())
-        return {};
-
-    return make<Paragraph::Line>(text.release_value());
+    return m_text.walk(visitor);
 }
+
 }

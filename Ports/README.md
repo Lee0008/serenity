@@ -62,6 +62,10 @@ By default, run `make` with the port's [`makeopts`](#makeopts).
 
 By default, run `make install` with the port's [`installopts`](#installopts).
 
+#### `shell`
+
+Open a shell in the `$workdir` with the build environment set.
+
 #### `installdepends`
 
 Install all ports from the port's [`depends`](#depends) list.
@@ -84,6 +88,24 @@ By default, [`clean`](#clean) and [`clean_dist`](#clean_dist) combined.
 Remove the port's files from the Serenity build directory, if it has a `plist`
 file.
 
+#### `dev`
+
+Start a development session with guided patch importing.
+This mode has a bunch of nice features:
+
+- Drops the user in a git repository backed by another (local) git repository
+  that acts as the "clean", patched version of the port that is ready to be built
+- The "remote" repository can be pushed to, pulled from and generally anything that
+  you'd want to do with a remote repo.
+- After leaving the dev shell, all patches are updated and the user will be prompted
+  whether they wish to generate a new patch readme file.
+
+This mode takes an extra `--no-depends` option, that if given, will cause the dependency
+fetch and build steps to be skipped.
+
+This mode can also assist in migrating old patches to new versions through a guided
+semi-automated process.
+
 #### `--auto`
 
 Same as no option, but mark the port as having been installed automatically.
@@ -102,7 +124,7 @@ port="foo"
 version="1.2.3"
 useconfigure="true"
 files="https://example.com/foo-${version}.tar.gz foo-${version}.tar.gz"
-depends="bar baz"
+depends=("bar" "baz")
 ```
 
 The script in the shebang, [`.port_include.sh`](./.port_include.sh), is where
@@ -147,6 +169,16 @@ Options passed to the port's [`configscript`](#configscript) in the default
 `--host=i686-pc-serenity` is always passed, override the `configure` function
 if that's undesirable.
 
+#### `use_fresh_config_sub`
+
+Boolean option (`false` by default), will replace the `config.sub` pointed to by
+`config_sub_path` as part of the patching process if set to true.
+
+#### `config_sub_path`
+
+Path to the `config.sub` file used by autoconf, starting at `$workdir`.
+This is set to `config.sub` by default.
+
 #### `configscript`
 
 Name of the script that will be run in the default `configure` function when
@@ -156,8 +188,14 @@ Defaults to `configure`.
 
 #### `depends`
 
-A space-separated list of other SerenityOS ports the port depends on and which
-will be installed during the `installdepends` step.
+An array of other SerenityOS ports the port depends on and which will be
+installed during the `installdepends` step.
+
+For example:
+
+```bash
+depends=("ncurses" "gettext")
+```
 
 #### `files`
 
@@ -257,6 +295,7 @@ build() {
 The following can be overridden, the names should be self-explanatory as they
 mostly match the [available options](#options):
 
+- `pre_fetch`
 - `post_fetch`
 - `pre_configure`
 - `configure`.

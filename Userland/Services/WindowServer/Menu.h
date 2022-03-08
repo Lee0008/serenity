@@ -15,23 +15,23 @@
 #include <LibGfx/Forward.h>
 #include <LibGfx/Rect.h>
 #include <WindowServer/Cursor.h>
+#include <WindowServer/Event.h>
 #include <WindowServer/MenuItem.h>
-#include <WindowServer/Window.h>
 
 namespace WindowServer {
 
-class ClientConnection;
+class ConnectionFromClient;
 class Menubar;
+class Window;
 
 class Menu final : public Core::Object {
     C_OBJECT(Menu);
 
 public:
-    Menu(ClientConnection*, int menu_id, String name);
     virtual ~Menu() override;
 
-    ClientConnection* client() { return m_client; }
-    const ClientConnection* client() const { return m_client; }
+    ConnectionFromClient* client() { return m_client; }
+    const ConnectionFromClient* client() const { return m_client; }
     int menu_id() const { return m_menu_id; }
 
     bool is_open() const;
@@ -75,7 +75,7 @@ public:
     void set_rect_in_window_menubar(const Gfx::IntRect& rect) { m_rect_in_window_menubar = rect; }
 
     Window* menu_window() { return m_menu_window.ptr(); }
-    Window& ensure_menu_window();
+    Window& ensure_menu_window(Gfx::IntPoint const&);
 
     Window* window_menu_of() { return m_window_menu_of; }
     void set_window_menu_of(Window& window) { m_window_menu_of = window; }
@@ -93,10 +93,13 @@ public:
     static constexpr int right_padding() { return 14; }
 
     void draw();
+    void draw(MenuItem const&, bool = false);
     const Gfx::Font& font() const;
 
     MenuItem* item_with_identifier(unsigned);
+    bool remove_item_with_identifier(unsigned);
     void redraw();
+    void redraw(MenuItem const&);
 
     MenuItem* hovered_item() const;
 
@@ -126,10 +129,13 @@ public:
     const Vector<size_t>* items_with_alt_shortcut(u32 alt_shortcut) const;
 
 private:
+    Menu(ConnectionFromClient*, int menu_id, String name);
+
     virtual void event(Core::Event&) override;
 
     void handle_mouse_move_event(const MouseEvent&);
     size_t visible_item_count() const;
+    Gfx::IntRect stripe_rect();
 
     int item_index_at(const Gfx::IntPoint&);
     static constexpr int padding_between_text_and_shortcut() { return 50; }
@@ -138,7 +144,7 @@ private:
 
     void start_activation_animation(MenuItem&);
 
-    ClientConnection* m_client { nullptr };
+    ConnectionFromClient* m_client { nullptr };
     int m_menu_id { 0 };
     String m_name;
     u32 m_alt_shortcut_character { 0 };
@@ -159,6 +165,6 @@ private:
     HashMap<u32, Vector<size_t>> m_alt_shortcut_character_to_item_indices;
 };
 
-u32 find_ampersand_shortcut_character(const StringView&);
+u32 find_ampersand_shortcut_character(StringView);
 
 }

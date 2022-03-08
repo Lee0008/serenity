@@ -5,11 +5,15 @@
  */
 
 #include <AK/Assertions.h>
+#include <AK/ByteBuffer.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <serenity.h>
 #include <signal.h>
@@ -20,23 +24,58 @@
 #include <time.h>
 #include <unistd.h>
 
-static int total_pings;
+static uint32_t total_pings;
 static int successful_pings;
+static Optional<size_t> count;
 static uint32_t total_ms;
 static int min_ms;
 static int max_ms;
 static const char* host;
+static int payload_size = -1;
+// variable part of header can be 0 to 40 bytes
+// https://datatracker.ietf.org/doc/html/rfc791#section-3.1
+static constexpr int max_optional_header_size_in_bytes = 40;
+static constexpr int min_header_size_in_bytes = 5;
 
-int main(int argc, char** argv)
+static void closing_statistics()
 {
-    if (pledge("stdio id inet unix sigaction", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    int packet_loss = 100;
+
+    outln();
+    outln("--- {} ping statistics ---", host);
+
+    if (total_pings)
+        packet_loss -= 100.0f * successful_pings / total_pings;
+    outln("{} packets transmitted, {} received, {}% packet loss",
+        total_pings, successful_pings, packet_loss);
+
+    int average_ms = 0;
+    if (successful_pings)
+        average_ms = total_ms / successful_pings;
+    outln("rtt min/avg/max = {}/{}/{} ms", min_ms, average_ms, max_ms);
+
+    exit(0);
+};
+
+ErrorOr<int> serenity_main(Main::Arguments arguments)
+{
+    TRY(Core::System::pledge("stdio id inet unix sigaction"));
 
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(host, "Host to ping", "host");
-    args_parser.parse(argc, argv);
+    args_parser.add_option(count, "Stop after sending specified number of ECHO_REQUEST packets.", "count", 'c', "count");
+    args_parser.add_option(payload_size, "Amount of bytes to send as payload in the ECHO_REQUEST packets.", "size", 's', "size");
+    args_parser.parse(arguments);
+
+    if (count.has_value() && (count.value() < 1 || count.value() > UINT32_MAX)) {
+        warnln("invalid count argument: '{}': out of range: 1 <= value <= {}", count.value(), UINT32_MAX);
+        return 1;
+    }
+
+    if (payload_size < 0) {
+        // Use the default.
+        payload_size = 32 - sizeof(struct icmphdr);
+    }
 
     int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (fd < 0) {
@@ -84,37 +123,10 @@ int main(int argc, char** argv)
 
     peer_address.sin_addr.s_addr = *(const in_addr_t*)hostent->h_addr_list[0];
 
-    struct PingPacket {
-        struct icmphdr header;
-        char msg[64 - sizeof(struct icmphdr)];
-    };
-
-    struct PongPacket {
-        // FIXME: IPv4 headers are not actually fixed-size, handle other sizes.
-        char ip_header[20];
-        struct icmphdr header;
-        char msg[64 - sizeof(struct icmphdr)];
-    };
-
     uint16_t seq = 1;
 
     sighandler_t ret = signal(SIGINT, [](int) {
-        int packet_loss = 100;
-
-        outln();
-        outln("--- {} ping statistics ---", host);
-
-        if (total_pings)
-            packet_loss -= 100.0f * successful_pings / total_pings;
-        outln("{} packets transmitted, {} received, {}% packet loss",
-            total_pings, successful_pings, packet_loss);
-
-        int average_ms = 0;
-        if (successful_pings)
-            average_ms = total_ms / successful_pings;
-        outln("rtt min/avg/max = {}/{}/{} ms", min_ms, average_ms, max_ms);
-
-        exit(0);
+        closing_statistics();
     });
 
     if (ret == SIG_ERR) {
@@ -123,49 +135,70 @@ int main(int argc, char** argv)
     }
 
     for (;;) {
-        PingPacket ping_packet;
-        memset(&ping_packet, 0, sizeof(PingPacket));
+        auto ping_packet_result = ByteBuffer::create_zeroed(sizeof(struct icmphdr) + payload_size);
+        if (ping_packet_result.is_error()) {
+            warnln("failed to allocate a large enough buffer for the ping packet");
+            return 1;
+        }
+        auto& ping_packet = ping_packet_result.value();
+        struct icmphdr* ping_hdr = reinterpret_cast<struct icmphdr*>(ping_packet.data());
+        ping_hdr->type = ICMP_ECHO;
+        ping_hdr->code = 0;
+        ping_hdr->un.echo.id = htons(pid);
+        ping_hdr->un.echo.sequence = htons(seq++);
 
-        ping_packet.header.type = ICMP_ECHO;
-        ping_packet.header.code = 0;
-        ping_packet.header.un.echo.id = htons(pid);
-        ping_packet.header.un.echo.sequence = htons(seq++);
+        // Fill payload
+        for (int i = 0; i < payload_size; i++) {
+            ping_packet[i + sizeof(struct icmphdr)] = i & 0xFF;
+        }
 
-        bool fits = String("Hello there!\n").copy_characters_to_buffer(ping_packet.msg, sizeof(ping_packet.msg));
-        // It's a constant string, we can be sure that it fits.
-        VERIFY(fits);
-
-        ping_packet.header.checksum = internet_checksum(&ping_packet, sizeof(PingPacket));
+        ping_hdr->checksum = internet_checksum(ping_packet.data(), ping_packet.size());
 
         struct timeval tv_send;
         gettimeofday(&tv_send, nullptr);
 
-        rc = sendto(fd, &ping_packet, sizeof(PingPacket), 0, (const struct sockaddr*)&peer_address, sizeof(sockaddr_in));
+        if (count.has_value() && total_pings == count.value())
+            closing_statistics();
+        else
+            total_pings++;
+
+        rc = sendto(fd, ping_packet.data(), ping_packet.size(), 0, (const struct sockaddr*)&peer_address, sizeof(sockaddr_in));
         if (rc < 0) {
             perror("sendto");
             return 1;
         }
 
-        total_pings++;
-
         for (;;) {
-            PongPacket pong_packet;
+            auto pong_packet_result = ByteBuffer::create_uninitialized(
+                sizeof(struct ip) + max_optional_header_size_in_bytes + sizeof(struct icmphdr) + payload_size);
+            if (pong_packet_result.is_error()) {
+                warnln("failed to allocate a large enough buffer for the pong packet");
+                return 1;
+            }
+            auto& pong_packet = pong_packet_result.value();
             socklen_t peer_address_size = sizeof(peer_address);
-            rc = recvfrom(fd, &pong_packet, sizeof(PongPacket), 0, (struct sockaddr*)&peer_address, &peer_address_size);
+            rc = recvfrom(fd, pong_packet.data(), pong_packet.size(), 0, (struct sockaddr*)&peer_address, &peer_address_size);
             if (rc < 0) {
                 if (errno == EAGAIN) {
-                    outln("Request (seq={}) timed out.", ntohs(ping_packet.header.un.echo.sequence));
+                    outln("Request (seq={}) timed out.", ntohs(ping_hdr->un.echo.sequence));
                     break;
                 }
                 perror("recvfrom");
                 return 1;
             }
 
-            if (pong_packet.header.type != ICMP_ECHOREPLY)
+            i8 internet_header_length = *pong_packet.data() & 0x0F;
+            if (internet_header_length < min_header_size_in_bytes) {
+                outln("ping: illegal ihl field value {:x}", internet_header_length);
                 continue;
-            if (pong_packet.header.code != 0)
+            }
+
+            struct icmphdr* pong_hdr = reinterpret_cast<struct icmphdr*>(pong_packet.data() + (internet_header_length * 4));
+            if (pong_hdr->type != ICMP_ECHOREPLY)
                 continue;
-            if (ntohs(pong_packet.header.un.echo.id) != pid)
+            if (pong_hdr->code != 0)
+                continue;
+            if (ntohs(pong_hdr->un.echo.id) != pid)
                 continue;
 
             struct timeval tv_receive;
@@ -176,7 +209,7 @@ int main(int argc, char** argv)
 
             int ms = tv_diff.tv_sec * 1000 + tv_diff.tv_usec / 1000;
             successful_pings++;
-            int seq_dif = ntohs(ping_packet.header.un.echo.sequence) - ntohs(pong_packet.header.un.echo.sequence);
+            int seq_dif = ntohs(ping_hdr->un.echo.sequence) - ntohs(pong_hdr->un.echo.sequence);
 
             // Approximation about the timeout of the out of order packet
             if (seq_dif)
@@ -191,21 +224,19 @@ int main(int argc, char** argv)
                 max_ms = ms;
 
             char addr_buf[INET_ADDRSTRLEN];
-            outln("Pong from {}: id={}, seq={}{}, time={}ms",
+            outln("Pong from {}: id={}, seq={}{}, time={}ms, size={}",
                 inet_ntop(AF_INET, &peer_address.sin_addr, addr_buf, sizeof(addr_buf)),
-                ntohs(pong_packet.header.un.echo.id),
-                ntohs(pong_packet.header.un.echo.sequence),
-                pong_packet.header.un.echo.sequence != ping_packet.header.un.echo.sequence ? "(!)" : "",
-                ms);
+                ntohs(pong_hdr->un.echo.id),
+                ntohs(pong_hdr->un.echo.sequence),
+                pong_hdr->un.echo.sequence != ping_hdr->un.echo.sequence ? "(!)" : "",
+                ms, rc);
 
             // If this was a response to an earlier packet, we still need to wait for the current one.
-            if (pong_packet.header.un.echo.sequence != ping_packet.header.un.echo.sequence)
+            if (pong_hdr->un.echo.sequence != ping_hdr->un.echo.sequence)
                 continue;
             break;
         }
 
         sleep(1);
     }
-
-    return 0;
 }

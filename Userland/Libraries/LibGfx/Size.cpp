@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -27,22 +27,20 @@ String FloatSize::to_string() const
 
 namespace IPC {
 
-bool encode(Encoder& encoder, const Gfx::IntSize& size)
+bool encode(Encoder& encoder, Gfx::IntSize const& size)
 {
     encoder << size.width() << size.height();
     return true;
 }
 
-bool decode(Decoder& decoder, Gfx::IntSize& size)
+ErrorOr<void> decode(Decoder& decoder, Gfx::IntSize& size)
 {
     int width = 0;
     int height = 0;
-    if (!decoder.decode(width))
-        return false;
-    if (!decoder.decode(height))
-        return false;
+    TRY(decoder.decode(width));
+    TRY(decoder.decode(height));
     size = { width, height };
-    return true;
+    return {};
 }
 
 }

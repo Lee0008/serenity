@@ -65,15 +65,16 @@ public:
     DOM::Document& document() { return m_document; }
     const DOM::Document& document() const { return m_document; }
 
-    const BrowsingContext& browsing_context() const;
-    BrowsingContext& browsing_context();
+    HTML::BrowsingContext const& browsing_context() const;
+    HTML::BrowsingContext& browsing_context();
 
-    const InitialContainingBlockBox& root() const;
-    InitialContainingBlockBox& root();
+    const InitialContainingBlock& root() const;
+    InitialContainingBlock& root();
 
     bool is_root_element() const;
 
     String class_name() const;
+    String debug_description() const;
 
     bool has_style() const { return m_has_style; }
 
@@ -89,17 +90,22 @@ public:
     virtual void handle_mousedown(Badge<EventHandler>, const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     virtual void handle_mouseup(Badge<EventHandler>, const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     virtual void handle_mousemove(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers);
-    virtual bool handle_mousewheel(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta);
+    virtual bool handle_mousewheel(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta_x, int wheel_delta_y);
 
     virtual void before_children_paint(PaintContext&, PaintPhase) {};
-    virtual void paint(PaintContext&, PaintPhase);
+    virtual void paint(PaintContext&, PaintPhase) = 0;
     virtual void paint_fragment(PaintContext&, const LineBoxFragment&, PaintPhase) const { }
     virtual void after_children_paint(PaintContext&, PaintPhase) {};
 
     // These are used to optimize hot is<T> variants for some classes where dynamic_cast is too slow.
     virtual bool is_box() const { return false; }
-    virtual bool is_block_box() const { return false; }
+    virtual bool is_block_container() const { return false; }
+    virtual bool is_break_node() const { return false; }
     virtual bool is_text_node() const { return false; }
+    virtual bool is_initial_containing_block_box() const { return false; }
+    virtual bool is_svg_box() const { return false; }
+    virtual bool is_svg_geometry_box() const { return false; }
+    virtual bool is_label() const { return false; }
 
     template<typename T>
     bool fast_is() const = delete;
@@ -112,8 +118,8 @@ public:
     bool is_flex_item() const { return m_is_flex_item; }
     void set_flex_item(bool b) { m_is_flex_item = b; }
 
-    const BlockBox* containing_block() const;
-    BlockBox* containing_block() { return const_cast<BlockBox*>(const_cast<const Node*>(this)->containing_block()); }
+    const BlockContainer* containing_block() const;
+    BlockContainer* containing_block() { return const_cast<BlockContainer*>(const_cast<const Node*>(this)->containing_block()); }
 
     bool establishes_stacking_context() const;
 
@@ -129,8 +135,6 @@ public:
     void removed_from(Node&) { }
     void children_changed() { }
 
-    virtual void split_into_lines(InlineFormattingContext&, LayoutMode);
-
     bool is_visible() const { return m_visible; }
     void set_visible(bool visible) { m_visible = visible; }
 
@@ -140,8 +144,6 @@ public:
     void set_children_are_inline(bool value) { m_children_are_inline = value; }
 
     Gfx::FloatPoint box_type_agnostic_position() const;
-
-    float font_size() const;
 
     enum class SelectionState {
         None,        // No selection
@@ -157,16 +159,65 @@ public:
     template<typename Callback>
     void for_each_child_in_paint_order(Callback callback) const
     {
+        // Element traversal using the order defined in https://www.w3.org/TR/CSS2/zindex.html#painting-order.
+        // Note: Some steps are skipped because they are not relevant to node traversal.
+
+        // 3. Stacking contexts formed by positioned descendants with negative z-indices (excluding 0) in z-index order
+        //    (most negative first) then tree order.
+        // FIXME: This does not retrieve elements in the z-index order.
         for_each_child([&](auto& child) {
-            if (is<Box>(child) && downcast<Box>(child).stacking_context())
+            if (!child.is_positioned() || !is<Box>(child))
+                return;
+
+            auto& box_child = verify_cast<Box>(child);
+            auto* stacking_context = box_child.stacking_context();
+            if (stacking_context && box_child.computed_values().z_index().has_value() && box_child.computed_values().z_index().value() < 0)
+                callback(child);
+        });
+
+        // 4. For all its in-flow, non-positioned, block-level descendants in tree order: If the element is a block, list-item,
+        //    or other block equivalent:
+        for_each_child([&](auto& child) {
+            if (is<Box>(child) && verify_cast<Box>(child).stacking_context())
                 return;
             if (!child.is_positioned())
                 callback(child);
         });
+
+        // 5. All non-positioned floating descendants, in tree order. For each one of these, treat the element as if it created
+        //    a new stacking context, but any positioned descendants and descendants which actually create a new stacking context
+        //    should be considered part of the parent stacking context, not this new one.
         for_each_child([&](auto& child) {
-            if (is<Box>(child) && downcast<Box>(child).stacking_context())
+            if (is<Box>(child) && verify_cast<Box>(child).stacking_context())
                 return;
             if (child.is_positioned())
+                callback(child);
+        });
+
+        // 8. All positioned descendants with 'z-index: auto' or 'z-index: 0', in tree order. For those with 'z-index: auto', treat
+        //    the element as if it created a new stacking context, but any positioned descendants and descendants which actually
+        //    create a new stacking context should be considered part of the parent stacking context, not this new one. For those
+        //    with 'z-index: 0', treat the stacking context generated atomically.
+        for_each_child([&](auto& child) {
+            if (!child.is_positioned() || !is<Box>(child))
+                return;
+
+            auto& box_child = verify_cast<Box>(child);
+            auto* stacking_context = box_child.stacking_context();
+            if (stacking_context && box_child.computed_values().z_index().has_value() && box_child.computed_values().z_index().value() == 0)
+                callback(child);
+        });
+
+        // 9. Stacking contexts formed by positioned descendants with z-indices greater than or equal to 1 in z-index order
+        //    (smallest first) then tree order.
+        // FIXME: This does not retrieve elements in the z-index order.
+        for_each_child([&](auto& child) {
+            if (!child.is_positioned() || !is<Box>(child))
+                return;
+
+            auto& box_child = verify_cast<Box>(child);
+            auto* stacking_context = box_child.stacking_context();
+            if (stacking_context && box_child.computed_values().z_index().has_value() && box_child.computed_values().z_index().value() > 0)
                 callback(child);
         });
     }
@@ -199,13 +250,16 @@ public:
 
     const Gfx::Font& font() const { return *m_font; }
     float line_height() const { return m_line_height; }
-    float font_size() const { return m_font_size; }
-    const CSS::ImageStyleValue* background_image() const { return m_background_image; }
+    Vector<CSS::BackgroundLayerData> const& background_layers() const { return computed_values().background_layers(); }
+    const CSS::ImageStyleValue* list_style_image() const { return m_list_style_image; }
 
     NonnullRefPtr<NodeWithStyle> create_anonymous_wrapper() const;
 
     bool has_definite_height() const { return m_has_definite_height; }
     bool has_definite_width() const { return m_has_definite_width; }
+
+    void set_has_definite_height(bool b) { m_has_definite_height = b; }
+    void set_has_definite_width(bool b) { m_has_definite_width = b; }
 
 protected:
     NodeWithStyle(DOM::Document&, DOM::Node*, NonnullRefPtr<CSS::StyleProperties>);
@@ -215,10 +269,7 @@ private:
     CSS::ComputedValues m_computed_values;
     RefPtr<Gfx::Font> m_font;
     float m_line_height { 0 };
-    float m_font_size { 0 };
-    RefPtr<CSS::ImageStyleValue> m_background_image;
-
-    CSS::Position m_position;
+    RefPtr<CSS::ImageStyleValue> m_list_style_image;
 
     bool m_has_definite_height { false };
     bool m_has_definite_width { false };
@@ -249,13 +300,6 @@ inline const Gfx::Font& Node::font() const
     if (m_has_style)
         return static_cast<const NodeWithStyle*>(this)->font();
     return parent()->font();
-}
-
-inline float Node::font_size() const
-{
-    if (m_has_style)
-        return static_cast<const NodeWithStyle*>(this)->font_size();
-    return parent()->font_size();
 }
 
 inline const CSS::ImmutableComputedValues& Node::computed_values() const

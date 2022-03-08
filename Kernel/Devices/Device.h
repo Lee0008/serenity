@@ -15,44 +15,46 @@
 //   - BlockDevice (random access)
 //   - CharacterDevice (sequential)
 #include <AK/DoublyLinkedList.h>
+#include <AK/Error.h>
 #include <AK/Function.h>
 #include <AK/HashMap.h>
+#include <AK/RefPtr.h>
 #include <Kernel/Devices/AsyncDeviceRequest.h>
+#include <Kernel/FileSystem/DeviceFileTypes.h>
 #include <Kernel/FileSystem/File.h>
-#include <Kernel/Lock.h>
+#include <Kernel/FileSystem/SysFS.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
 
 class Device : public File {
+protected:
+    enum class State {
+        Normal,
+        BeingRemoved,
+    };
+
 public:
     virtual ~Device() override;
 
-    unsigned major() const { return m_major; }
-    unsigned minor() const { return m_minor; }
+    MajorNumber major() const { return m_major; }
+    MinorNumber minor() const { return m_minor; }
 
-    virtual String absolute_path(const FileDescription&) const override;
-    virtual String absolute_path() const;
+    virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
 
-    uid_t uid() const { return m_uid; }
-    uid_t gid() const { return m_gid; }
-
-    virtual mode_t required_mode() const = 0;
-    virtual String device_name() const = 0;
+    UserID uid() const { return m_uid; }
+    GroupID gid() const { return m_gid; }
 
     virtual bool is_device() const override { return true; }
-    virtual bool is_disk_device() const { return false; }
-
-    static void for_each(Function<void(Device&)>);
-    static Device* get_device(unsigned major, unsigned minor);
-
+    virtual void will_be_destroyed() override;
+    virtual void after_inserting();
     void process_next_queued_request(Badge<AsyncDeviceRequest>, const AsyncDeviceRequest&);
 
     template<typename AsyncRequestType, typename... Args>
-    NonnullRefPtr<AsyncRequestType> make_request(Args&&... args)
+    ErrorOr<NonnullRefPtr<AsyncRequestType>> try_make_request(Args&&... args)
     {
-        auto request = adopt_ref(*new AsyncRequestType(*this, forward<Args>(args)...));
-        ScopedSpinLock lock(m_requests_lock);
+        auto request = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) AsyncRequestType(*this, forward<Args>(args)...)));
+        SpinlockLocker lock(m_requests_lock);
         bool was_empty = m_requests.is_empty();
         m_requests.append(request);
         if (was_empty)
@@ -61,20 +63,21 @@ public:
     }
 
 protected:
-    Device(unsigned major, unsigned minor);
-    void set_uid(uid_t uid) { m_uid = uid; }
-    void set_gid(gid_t gid) { m_gid = gid; }
-
-    static HashMap<u32, Device*>& all_devices();
+    Device(MajorNumber major, MinorNumber minor);
+    void set_uid(UserID uid) { m_uid = uid; }
+    void set_gid(GroupID gid) { m_gid = gid; }
 
 private:
-    unsigned m_major { 0 };
-    unsigned m_minor { 0 };
-    uid_t m_uid { 0 };
-    gid_t m_gid { 0 };
+    MajorNumber m_major { 0 };
+    MinorNumber m_minor { 0 };
+    UserID m_uid { 0 };
+    GroupID m_gid { 0 };
 
-    SpinLock<u8> m_requests_lock;
+    State m_state { State::Normal };
+
+    Spinlock m_requests_lock;
     DoublyLinkedList<RefPtr<AsyncDeviceRequest>> m_requests;
+    RefPtr<SysFSDeviceComponent> m_sysfs_component;
 };
 
 }

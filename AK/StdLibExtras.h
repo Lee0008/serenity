@@ -16,9 +16,33 @@ constexpr auto round_up_to_power_of_two(T value, U power_of_two) requires(IsInte
     return ((value - 1) & ~(power_of_two - 1)) + power_of_two;
 }
 
-namespace std {
+template<typename T>
+constexpr bool is_power_of_two(T value) requires(IsIntegral<T>)
+{
+    return value && !((value) & (value - 1));
+}
 
-// NOTE: This is in the "std" namespace since some compiler features rely on it.
+// HACK: clang-format does not format this correctly because of the requires clause above.
+// Disabling formatting for that doesn't help either.
+//
+// clang-format off
+#ifndef AK_DONT_REPLACE_STD
+namespace std { // NOLINT(cert-dcl58-cpp) Names in std to aid tools
+
+// NOTE: These are in the "std" namespace since some compilers and static analyzers rely on it.
+
+template<typename T>
+constexpr T&& forward(AK::Detail::RemoveReference<T>& param)
+{
+    return static_cast<T&&>(param);
+}
+
+template<typename T>
+constexpr T&& forward(AK::Detail::RemoveReference<T>&& param) noexcept
+{
+    static_assert(!IsLvalueReference<T>, "Can't forward an rvalue as an lvalue.");
+    return static_cast<T&&>(param);
+}
 
 template<typename T>
 constexpr T&& move(T& arg)
@@ -27,7 +51,12 @@ constexpr T&& move(T& arg)
 }
 
 }
+#else
+#include <utility>
+#endif
+// clang-format on
 
+using std::forward;
 using std::move;
 
 namespace AK::Detail {
@@ -39,19 +68,6 @@ struct _RawPtr {
 
 namespace AK {
 
-template<class T>
-constexpr T&& forward(RemoveReference<T>& param)
-{
-    return static_cast<T&&>(param);
-}
-
-template<class T>
-constexpr T&& forward(RemoveReference<T>&& param) noexcept
-{
-    static_assert(!IsLvalueReference<T>, "Can't forward an rvalue as an lvalue.");
-    return static_cast<T&&>(param);
-}
-
 template<typename T, typename SizeType = decltype(sizeof(T)), SizeType N>
 constexpr SizeType array_size(T (&)[N])
 {
@@ -59,19 +75,19 @@ constexpr SizeType array_size(T (&)[N])
 }
 
 template<typename T>
-constexpr T min(const T& a, const T& b)
+constexpr T min(const T& a, const IdentityType<T>& b)
 {
     return b < a ? b : a;
 }
 
 template<typename T>
-constexpr T max(const T& a, const T& b)
+constexpr T max(const T& a, const IdentityType<T>& b)
 {
     return a < b ? b : a;
 }
 
 template<typename T>
-constexpr T clamp(const T& value, const T& min, const T& max)
+constexpr T clamp(const T& value, const IdentityType<T>& min, const IdentityType<T>& max)
 {
     VERIFY(max >= min);
     if (value > max)
@@ -79,6 +95,12 @@ constexpr T clamp(const T& value, const T& min, const T& max)
     if (value < min)
         return min;
     return value;
+}
+
+template<typename T, typename U>
+constexpr T mix(T const& v1, T const& v2, U const& interpolation)
+{
+    return v1 + (v2 - v1) * interpolation;
 }
 
 template<typename T, typename U>
@@ -94,6 +116,8 @@ constexpr T ceil_div(T a, U b)
 template<typename T, typename U>
 inline void swap(T& a, U& b)
 {
+    if (&a == &b)
+        return;
     U tmp = move((U&)a);
     a = (T &&) move(b);
     b = move(tmp);
@@ -110,14 +134,52 @@ constexpr T exchange(T& slot, U&& value)
 template<typename T>
 using RawPtr = typename Detail::_RawPtr<T>::Type;
 
+template<typename V>
+constexpr decltype(auto) to_underlying(V value) requires(IsEnum<V>)
+{
+    return static_cast<UnderlyingType<V>>(value);
+}
+
+constexpr bool is_constant_evaluated()
+{
+#if __has_builtin(__builtin_is_constant_evaluated)
+    return __builtin_is_constant_evaluated();
+#else
+    return false;
+#endif
+}
+
+// These can't be exported into the global namespace as they would clash with the C standard library.
+
+#define __DEFINE_GENERIC_ABS(type, zero, intrinsic) \
+    constexpr type abs(type num)                    \
+    {                                               \
+        if (is_constant_evaluated())                \
+            return num < (zero) ? -num : num;       \
+        return __builtin_##intrinsic(num);          \
+    }
+
+__DEFINE_GENERIC_ABS(int, 0, abs);
+__DEFINE_GENERIC_ABS(long, 0L, labs);
+__DEFINE_GENERIC_ABS(long long, 0LL, llabs);
+#ifndef KERNEL
+__DEFINE_GENERIC_ABS(float, 0.0F, fabsf);
+__DEFINE_GENERIC_ABS(double, 0.0, fabs);
+__DEFINE_GENERIC_ABS(long double, 0.0L, fabsl);
+#endif
+
+#undef __DEFINE_GENERIC_ABS
+
 }
 
 using AK::array_size;
 using AK::ceil_div;
 using AK::clamp;
 using AK::exchange;
-using AK::forward;
+using AK::is_constant_evaluated;
 using AK::max;
 using AK::min;
+using AK::mix;
 using AK::RawPtr;
 using AK::swap;
+using AK::to_underlying;

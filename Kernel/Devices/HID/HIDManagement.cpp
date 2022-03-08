@@ -5,15 +5,16 @@
  */
 
 #include <AK/Singleton.h>
-#include <Kernel/ACPI/Parser.h>
 #include <Kernel/CommandLine.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/Devices/HID/I8042Controller.h>
+#include <Kernel/Firmware/ACPI/Parser.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
 Atomic<bool> g_caps_lock_remapped_to_ctrl;
-static AK::Singleton<HIDManagement> s_the;
+static Singleton<HIDManagement> s_the;
 
 // clang-format off
 static constexpr Keyboard::CharacterMapData DEFAULT_CHARACTER_MAP =
@@ -85,46 +86,107 @@ size_t HIDManagement::generate_minor_device_number_for_keyboard()
     return m_keyboard_minor_number++;
 }
 
+UNMAP_AFTER_INIT HIDManagement::KeymapData::KeymapData()
+    : character_map_name(KString::must_create("en-us"sv))
+    , character_map(DEFAULT_CHARACTER_MAP)
+{
+}
+
 UNMAP_AFTER_INIT HIDManagement::HIDManagement()
-    : m_character_map("en-us", DEFAULT_CHARACTER_MAP)
 {
 }
 
-void HIDManagement::set_maps(const Keyboard::CharacterMapData& character_map_data, const String& character_map_name)
+void HIDManagement::set_maps(NonnullOwnPtr<KString> character_map_name, Keyboard::CharacterMapData const& character_map_data)
 {
-    m_character_map.set_character_map_data(character_map_data);
-    m_character_map.set_character_map_name(character_map_name);
-    dbgln("New Character map '{}' passed in by client.", character_map_name);
+    m_keymap_data.with([&](auto& keymap_data) {
+        keymap_data.character_map_name = move(character_map_name);
+        keymap_data.character_map = character_map_data;
+        dbgln("New Character map '{}' passed in by client.", keymap_data.character_map_name);
+    });
 }
 
-UNMAP_AFTER_INIT void HIDManagement::enumerate()
+UNMAP_AFTER_INIT ErrorOr<void> HIDManagement::enumerate()
 {
     // FIXME: When we have USB HID support, we should ensure that we disable
     // emulation of the PS/2 controller if it was set by the BIOS.
     // If ACPI indicates we have an i8042 controller and the USB controller was
     // set to emulate PS/2, we should not initialize the PS/2 controller.
     if (kernel_command_line().disable_ps2_controller())
-        return;
-    if (ACPI::Parser::the() && !ACPI::Parser::the()->have_8042())
-        return;
+        return {};
     m_i8042_controller = I8042Controller::initialize();
-    m_i8042_controller->detect_devices();
+
+    // Note: If ACPI is disabled or doesn't indicate that we have an i8042, we
+    // still perform a manual existence check via probing, which is relevant on
+    // QEMU, for example. This probing check is known to not work on bare metal
+    // in all cases, so if we can get a 'yes' from ACPI, we skip it.
+    auto has_i8042_controller = false;
+    if (ACPI::Parser::the() && ACPI::Parser::the()->have_8042())
+        has_i8042_controller = true;
+    else if (m_i8042_controller->check_existence_via_probing({}))
+        has_i8042_controller = true;
+
+    // Note: If we happen to not have i8042 just return "gracefully" for now.
+    if (!has_i8042_controller)
+        return {};
+    TRY(m_i8042_controller->detect_devices());
     if (m_i8042_controller->mouse())
         m_hid_devices.append(m_i8042_controller->mouse().release_nonnull());
+
     if (m_i8042_controller->keyboard())
         m_hid_devices.append(m_i8042_controller->keyboard().release_nonnull());
+    return {};
 }
 
 UNMAP_AFTER_INIT void HIDManagement::initialize()
 {
     VERIFY(!s_the.is_initialized());
     s_the.ensure_instance();
-    s_the->enumerate();
+    // FIXME: Propagate errors back to init to deal with them.
+    MUST(s_the->enumerate());
 }
 
 HIDManagement& HIDManagement::the()
 {
     return *s_the;
+}
+
+u32 HIDManagement::get_char_from_character_map(KeyEvent event) const
+{
+    auto modifiers = event.modifiers();
+    auto index = event.scancode & 0xFF; // Index is last byte of scan code.
+    auto caps_lock_on = event.caps_lock_on;
+
+    u32 code_point = 0;
+    m_keymap_data.with([&](auto& keymap_data) {
+        if (modifiers & Mod_Alt)
+            code_point = keymap_data.character_map.alt_map[index];
+        else if ((modifiers & Mod_Shift) && (modifiers & Mod_AltGr))
+            code_point = keymap_data.character_map.shift_altgr_map[index];
+        else if (modifiers & Mod_Shift)
+            code_point = keymap_data.character_map.shift_map[index];
+        else if (modifiers & Mod_AltGr)
+            code_point = keymap_data.character_map.altgr_map[index];
+        else
+            code_point = keymap_data.character_map.map[index];
+    });
+
+    if (caps_lock_on && (modifiers == 0 || modifiers == Mod_Shift)) {
+        if (code_point >= 'a' && code_point <= 'z')
+            code_point &= ~0x20;
+        else if (code_point >= 'A' && code_point <= 'Z')
+            code_point |= 0x20;
+    }
+
+    if (event.e0_prefix && event.key == Key_Slash) {
+        // If Key_Slash (scancode = 0x35) mapped to other form "/", we fix num pad key of "/" with this case.
+        code_point = '/';
+    } else if (event.e0_prefix && event.key != Key_Return) {
+        // Except for `keypad-/` and 'keypad-return', all e0 scan codes are not actually characters. i.e., `keypad-0` and
+        // `Insert` have the same scancode except for the prefix, but insert should not have a code_point.
+        code_point = 0;
+    }
+
+    return code_point;
 }
 
 }

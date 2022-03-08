@@ -1,18 +1,19 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <LibGUI/TextEditor.h>
+#include <LibGUI/TableView.h>
 #include <LibGUI/Widget.h>
 
 class ThreadStackWidget final : public GUI::Widget {
     C_OBJECT(ThreadStackWidget)
 public:
-    virtual ~ThreadStackWidget() override;
+    virtual ~ThreadStackWidget() override = default;
 
     void set_ids(pid_t pid, pid_t tid);
     void refresh();
@@ -26,6 +27,6 @@ private:
 
     pid_t m_pid { -1 };
     pid_t m_tid { -1 };
-    RefPtr<GUI::TextEditor> m_stack_editor;
+    RefPtr<GUI::TableView> m_stack_table;
     RefPtr<Core::Timer> m_timer;
 };

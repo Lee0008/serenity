@@ -61,18 +61,22 @@ constexpr u64 TiB = KiB * KiB * KiB * KiB;
 constexpr u64 PiB = KiB * KiB * KiB * KiB * KiB;
 constexpr u64 EiB = KiB * KiB * KiB * KiB * KiB * KiB;
 
-namespace std {
+namespace std { //NOLINT(cert-dcl58-cpp) nullptr_t must be in ::std:: for some analysis tools
 using nullptr_t = decltype(nullptr);
 }
 
-static constexpr u32 explode_byte(u8 b)
+static constexpr FlatPtr explode_byte(u8 b)
 {
-    return b << 24 | b << 16 | b << 8 | b;
+    FlatPtr value = b;
+    if constexpr (sizeof(FlatPtr) == 4)
+        return value << 24 | value << 16 | value << 8 | value;
+    else if (sizeof(FlatPtr) == 8)
+        return value << 56 | value << 48 | value << 40 | value << 32 | value << 24 | value << 16 | value << 8 | value;
 }
 
-static_assert(explode_byte(0xff) == 0xffffffff);
-static_assert(explode_byte(0x80) == 0x80808080);
-static_assert(explode_byte(0x7f) == 0x7f7f7f7f);
+static_assert(explode_byte(0xff) == (FlatPtr)0xffffffffffffffffull);
+static_assert(explode_byte(0x80) == (FlatPtr)0x8080808080808080ull);
+static_assert(explode_byte(0x7f) == (FlatPtr)0x7f7f7f7f7f7f7f7full);
 static_assert(explode_byte(0) == 0);
 
 constexpr size_t align_up_to(const size_t value, const size_t alignment)

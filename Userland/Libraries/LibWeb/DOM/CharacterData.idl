@@ -1,9 +1,18 @@
+#import <DOM/Element.idl>
+#import <DOM/Node.idl>
+
 interface CharacterData : Node {
 
-    attribute DOMString data;
+    [LegacyNullToEmptyString] attribute DOMString data;
     readonly attribute unsigned long length;
 
     readonly attribute Element? nextElementSibling;
     readonly attribute Element? previousElementSibling;
+
+    // FIXME: These should come from a ChildNode mixin
+    [CEReactions, Unscopable] undefined before((Node or DOMString)... nodes);
+    [CEReactions, Unscopable] undefined after((Node or DOMString)... nodes);
+    [CEReactions, Unscopable] undefined replaceWith((Node or DOMString)... nodes);
+    [CEReactions, Unscopable, ImplementedAs=remove_binding] undefined remove();
 
 };

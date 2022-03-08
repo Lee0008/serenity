@@ -6,13 +6,14 @@
 
 #pragma once
 
+#include <AK/Result.h>
 #include <AK/StringView.h>
 
 namespace AK {
 
 class GenericLexer {
 public:
-    constexpr explicit GenericLexer(const StringView& input)
+    constexpr explicit GenericLexer(StringView input)
         : m_input(input)
     {
     }
@@ -56,6 +57,12 @@ public:
         --m_index;
     }
 
+    constexpr void retreat(size_t count)
+    {
+        VERIFY(m_index >= count);
+        m_index -= count;
+    }
+
     constexpr char consume()
     {
         VERIFY(!is_eof());
@@ -76,17 +83,19 @@ public:
         return true;
     }
 
+#ifndef KERNEL
     bool consume_specific(const String& next)
     {
         return consume_specific(StringView { next });
     }
+#endif
 
     constexpr bool consume_specific(const char* next)
     {
         return consume_specific(StringView { next });
     }
 
-    constexpr char consume_escaped_character(char escape_char = '\\', const StringView& escape_map = "n\nr\rt\tb\bf\f")
+    constexpr char consume_escaped_character(char escape_char = '\\', StringView escape_map = "n\nr\rt\tb\bf\f")
     {
         if (!consume_specific(escape_char))
             return consume();
@@ -106,8 +115,20 @@ public:
     StringView consume_line();
     StringView consume_until(char);
     StringView consume_until(const char*);
+    StringView consume_until(StringView);
     StringView consume_quoted_string(char escape_char = 0);
+#ifndef KERNEL
     String consume_and_unescape_string(char escape_char = '\\');
+#endif
+
+    enum class UnicodeEscapeError {
+        MalformedUnicodeEscape,
+        UnicodeEscapeOverflow,
+    };
+
+#ifndef KERNEL
+    Result<u32, UnicodeEscapeError> consume_escaped_code_point(bool combine_surrogate_pairs = true);
+#endif
 
     constexpr void ignore(size_t count = 1)
     {
@@ -195,9 +216,15 @@ public:
 protected:
     StringView m_input;
     size_t m_index { 0 };
+
+private:
+#ifndef KERNEL
+    Result<u32, UnicodeEscapeError> decode_code_point();
+    Result<u32, UnicodeEscapeError> decode_single_or_paired_surrogate(bool combine_surrogate_pairs);
+#endif
 };
 
-constexpr auto is_any_of(const StringView& values)
+constexpr auto is_any_of(StringView values)
 {
     return [values](auto c) { return values.contains(c); };
 }

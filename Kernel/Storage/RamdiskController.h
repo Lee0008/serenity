@@ -18,7 +18,6 @@ namespace Kernel {
 class AsyncBlockDeviceRequest;
 
 class RamdiskController final : public StorageController {
-    AK_MAKE_ETERNAL
 public:
 public:
     static NonnullRefPtr<RamdiskController> initialize();
@@ -28,7 +27,6 @@ public:
     virtual bool reset() override;
     virtual bool shutdown() override;
     virtual size_t devices_count() const override;
-    virtual void start_request(const StorageDevice&, AsyncBlockDeviceRequest&) override;
     virtual void complete_current_request(AsyncDeviceRequest::RequestResult) override;
 
 private:

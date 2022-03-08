@@ -12,53 +12,55 @@
 
 namespace Kernel {
 
-class FileDescription;
+class OpenFileDescription;
 
 struct SocketPair {
-    NonnullRefPtr<FileDescription> description1;
-    NonnullRefPtr<FileDescription> description2;
+    NonnullRefPtr<OpenFileDescription> description0;
+    NonnullRefPtr<OpenFileDescription> description1;
 };
 
 class LocalSocket final : public Socket {
 
 public:
-    static KResultOr<NonnullRefPtr<Socket>> create(int type);
-    static KResultOr<SocketPair> create_connected_pair(int type);
+    static ErrorOr<NonnullRefPtr<LocalSocket>> try_create(int type);
+    static ErrorOr<SocketPair> try_create_connected_pair(int type);
     virtual ~LocalSocket() override;
 
-    KResult sendfd(const FileDescription& socket_description, FileDescription& passing_description);
-    KResultOr<NonnullRefPtr<FileDescription>> recvfd(const FileDescription& socket_description);
+    ErrorOr<void> sendfd(OpenFileDescription const& socket_description, NonnullRefPtr<OpenFileDescription> passing_description);
+    ErrorOr<NonnullRefPtr<OpenFileDescription>> recvfd(const OpenFileDescription& socket_description);
 
     static void for_each(Function<void(const LocalSocket&)>);
+    static ErrorOr<void> try_for_each(Function<ErrorOr<void>(const LocalSocket&)>);
 
     StringView socket_path() const;
-    String absolute_path(const FileDescription& description) const override;
+    ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription& description) const override;
 
     // ^Socket
-    virtual KResult bind(Userspace<const sockaddr*>, socklen_t) override;
-    virtual KResult connect(FileDescription&, Userspace<const sockaddr*>, socklen_t, ShouldBlock = ShouldBlock::Yes) override;
-    virtual KResult listen(size_t) override;
+    virtual ErrorOr<void> bind(Userspace<const sockaddr*>, socklen_t) override;
+    virtual ErrorOr<void> connect(OpenFileDescription&, Userspace<const sockaddr*>, socklen_t, ShouldBlock = ShouldBlock::Yes) override;
+    virtual ErrorOr<void> listen(size_t) override;
     virtual void get_local_address(sockaddr*, socklen_t*) override;
     virtual void get_peer_address(sockaddr*, socklen_t*) override;
-    virtual KResult attach(FileDescription&) override;
-    virtual void detach(FileDescription&) override;
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> sendto(FileDescription&, const UserOrKernelBuffer&, size_t, int, Userspace<const sockaddr*>, socklen_t) override;
-    virtual KResultOr<size_t> recvfrom(FileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, Time&) override;
-    virtual KResult getsockopt(FileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>) override;
-    virtual KResult chown(FileDescription&, uid_t, gid_t) override;
-    virtual KResult chmod(FileDescription&, mode_t) override;
+    virtual ErrorOr<void> attach(OpenFileDescription&) override;
+    virtual void detach(OpenFileDescription&) override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<size_t> sendto(OpenFileDescription&, const UserOrKernelBuffer&, size_t, int, Userspace<const sockaddr*>, socklen_t) override;
+    virtual ErrorOr<size_t> recvfrom(OpenFileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, Time&) override;
+    virtual ErrorOr<void> getsockopt(OpenFileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>) override;
+    virtual ErrorOr<void> ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg) override;
+    virtual ErrorOr<void> chown(OpenFileDescription&, UserID, GroupID) override;
+    virtual ErrorOr<void> chmod(OpenFileDescription&, mode_t) override;
 
 private:
-    explicit LocalSocket(int type);
-    virtual const char* class_name() const override { return "LocalSocket"; }
+    explicit LocalSocket(int type, NonnullOwnPtr<DoubleBuffer> client_buffer, NonnullOwnPtr<DoubleBuffer> server_buffer);
+    virtual StringView class_name() const override { return "LocalSocket"sv; }
     virtual bool is_local() const override { return true; }
-    bool has_attached_peer(const FileDescription&) const;
-    DoubleBuffer* receive_buffer_for(FileDescription&);
-    DoubleBuffer* send_buffer_for(FileDescription&);
-    NonnullRefPtrVector<FileDescription>& sendfd_queue_for(const FileDescription&);
-    NonnullRefPtrVector<FileDescription>& recvfd_queue_for(const FileDescription&);
+    bool has_attached_peer(const OpenFileDescription&) const;
+    DoubleBuffer* receive_buffer_for(OpenFileDescription&);
+    DoubleBuffer* send_buffer_for(OpenFileDescription&);
+    NonnullRefPtrVector<OpenFileDescription>& sendfd_queue_for(const OpenFileDescription&);
+    NonnullRefPtrVector<OpenFileDescription>& recvfd_queue_for(const OpenFileDescription&);
 
     void set_connect_side_role(Role connect_side_role, bool force_evaluate_block_conditions = false)
     {
@@ -68,11 +70,13 @@ private:
             evaluate_block_conditions();
     }
 
-    // An open socket file on the filesystem.
-    RefPtr<FileDescription> m_file;
+    ErrorOr<void> try_set_path(StringView);
 
-    uid_t m_prebind_uid { 0 };
-    gid_t m_prebind_gid { 0 };
+    // The inode this socket is bound to.
+    WeakPtr<Inode> m_inode;
+
+    UserID m_prebind_uid { 0 };
+    GroupID m_prebind_gid { 0 };
     mode_t m_prebind_mode { 0 };
 
     // A single LocalSocket is shared between two file descriptions
@@ -80,9 +84,9 @@ private:
     // an additional role for the connect side and differentiate
     // between them.
     Role m_connect_side_role { Role::None };
-    FileDescription* m_connect_side_fd { nullptr };
+    OpenFileDescription* m_connect_side_fd { nullptr };
 
-    virtual Role role(const FileDescription& description) const override
+    virtual Role role(const OpenFileDescription& description) const override
     {
         if (m_connect_side_fd == &description)
             return m_connect_side_role;
@@ -91,18 +95,18 @@ private:
 
     bool m_bound { false };
     bool m_accept_side_fd_open { false };
-    sockaddr_un m_address { 0, { 0 } };
+    OwnPtr<KString> m_path;
 
-    DoubleBuffer m_for_client;
-    DoubleBuffer m_for_server;
+    NonnullOwnPtr<DoubleBuffer> m_for_client;
+    NonnullOwnPtr<DoubleBuffer> m_for_server;
 
-    NonnullRefPtrVector<FileDescription> m_fds_for_client;
-    NonnullRefPtrVector<FileDescription> m_fds_for_server;
+    NonnullRefPtrVector<OpenFileDescription> m_fds_for_client;
+    NonnullRefPtrVector<OpenFileDescription> m_fds_for_server;
 
     IntrusiveListNode<LocalSocket> m_list_node;
 
 public:
-    using List = IntrusiveList<LocalSocket, RawPtr<LocalSocket>, &LocalSocket::m_list_node>;
+    using List = IntrusiveList<&LocalSocket::m_list_node>;
 };
 
 }

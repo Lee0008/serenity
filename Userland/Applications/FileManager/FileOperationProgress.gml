@@ -1,15 +1,12 @@
 @GUI::Widget {
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
-        margins: [4, 4, 4, 4]
+        margins: [4]
     }
 
     @GUI::Widget {
         fixed_height: 32
-
-        layout: @GUI::HorizontalBoxLayout {
-        }
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::ImageWidget {
             name: "source_folder_icon"
@@ -38,15 +35,14 @@
 
     @GUI::Widget {
         fixed_height: 22
-
-        layout: @GUI::HorizontalBoxLayout {
-        }
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::Label {
             text: "Copying: "
             font_weight: "Bold"
             text_alignment: "CenterLeft"
             fixed_width: 80
+            name: "current_file_action_label"
         }
 
         @GUI::Label {
@@ -58,9 +54,7 @@
 
     @GUI::Widget {
         fixed_height: 22
-
-        layout: @GUI::HorizontalBoxLayout {
-        }
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::Label {
             text: "Time left: "
@@ -88,11 +82,9 @@
 
     @GUI::Widget {
         shrink_to_fit: true
-        layout: @GUI::HorizontalBoxLayout {
-        }
+        layout: @GUI::HorizontalBoxLayout {}
 
-        @GUI::Widget {
-        }
+        @GUI::Widget {}
 
         @GUI::Button {
             text: "Cancel"

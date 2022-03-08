@@ -4,8 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/StringBuilder.h>
-#include <AK/Vector.h>
 #include <LibGUI/AbstractTableView.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Button.h>
@@ -13,7 +11,6 @@
 #include <LibGUI/Menu.h>
 #include <LibGUI/Model.h>
 #include <LibGUI/Painter.h>
-#include <LibGUI/Scrollbar.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
 
@@ -108,7 +105,8 @@ void AbstractTableView::update_column_sizes()
             auto cell_data = model.index(row, column).data();
             int cell_width = 0;
             if (cell_data.is_icon()) {
-                cell_width = cell_data.as_icon().bitmap_for_size(16)->width();
+                if (auto bitmap = cell_data.as_icon().bitmap_for_size(16))
+                    cell_width = bitmap->width();
             } else if (cell_data.is_bitmap()) {
                 cell_width = cell_data.as_bitmap().width();
             } else if (cell_data.is_valid()) {
@@ -150,7 +148,9 @@ void AbstractTableView::update_content_size()
     int content_height = item_count() * row_height();
 
     set_content_size({ content_width, content_height });
-    set_size_occupied_by_fixed_elements({ row_header().width(), column_header().height() });
+    int row_width = row_header().is_visible() ? row_header().width() : 0;
+    int column_height = column_header().is_visible() ? column_header().height() : 0;
+    set_size_occupied_by_fixed_elements({ row_width, column_height });
     layout_headers();
 }
 
@@ -180,6 +180,16 @@ void AbstractTableView::set_column_width(int column, int width)
     column_header().set_section_size(column, width);
 }
 
+int AbstractTableView::minimum_column_width(int)
+{
+    return 2;
+}
+
+int AbstractTableView::minimum_row_height(int)
+{
+    return 2;
+}
+
 Gfx::TextAlignment AbstractTableView::column_header_alignment(int column_index) const
 {
     if (!model())
@@ -198,7 +208,7 @@ void AbstractTableView::mousedown_event(MouseEvent& event)
     if (!model())
         return AbstractView::mousedown_event(event);
 
-    if (event.button() != MouseButton::Left)
+    if (event.button() != MouseButton::Primary)
         return AbstractView::mousedown_event(event);
 
     bool is_toggle;
@@ -268,11 +278,15 @@ void AbstractTableView::scroll_into_view(const ModelIndex& index, bool scroll_ho
     switch (selection_behavior()) {
     case SelectionBehavior::SelectItems:
         rect = content_rect(index);
+        if (row_header().is_visible())
+            rect.set_left(rect.left() - row_header().width());
         break;
     case SelectionBehavior::SelectRows:
         rect = row_rect(index.row());
         break;
     }
+    if (column_header().is_visible())
+        rect.set_top(rect.top() - column_header().height());
     AbstractScrollableWidget::scroll_into_view(rect, scroll_horizontally, scroll_vertically);
 }
 
@@ -291,6 +305,13 @@ void AbstractTableView::context_menu_event(ContextMenuEvent& event)
     }
     if (on_context_menu_request)
         on_context_menu_request(index, event);
+}
+
+Gfx::IntRect AbstractTableView::paint_invalidation_rect(ModelIndex const& index) const
+{
+    if (!index.is_valid())
+        return {};
+    return row_rect(index.row());
 }
 
 Gfx::IntRect AbstractTableView::content_rect(int row, int column) const
@@ -444,4 +465,14 @@ bool AbstractTableView::is_navigation(GUI::KeyEvent& event)
         return false;
     }
 }
+
+Gfx::IntPoint AbstractTableView::automatic_scroll_delta_from_position(const Gfx::IntPoint& pos) const
+{
+    if (pos.y() > column_header().height() + autoscroll_threshold())
+        return AbstractScrollableWidget::automatic_scroll_delta_from_position(pos);
+
+    Gfx::IntPoint position_excluding_header = { pos.x(), pos.y() - column_header().height() };
+    return AbstractScrollableWidget::automatic_scroll_delta_from_position(position_excluding_header);
+}
+
 }

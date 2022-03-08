@@ -6,10 +6,8 @@
 
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
-#include <AK/LexicalPath.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
-#include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
 #include <LibGUI/CommonLocationsProvider.h>
@@ -47,7 +45,7 @@ void CommonLocationsProvider::load_from_json(const String& json_path)
     }
 
     auto json = JsonValue::from_string(file->read_all());
-    if (!json.has_value()) {
+    if (json.is_error()) {
         dbgln("Common locations file {} is not a valid JSON file.", file->filename());
         return;
     }
@@ -57,8 +55,8 @@ void CommonLocationsProvider::load_from_json(const String& json_path)
     }
 
     s_common_locations.clear();
-    auto contents = json.value().as_array();
-    for (auto i = 0; i < contents.size(); ++i) {
+    auto const& contents = json.value().as_array();
+    for (size_t i = 0; i < contents.size(); ++i) {
         auto entry_value = contents.at(i);
         if (!entry_value.is_object())
             continue;

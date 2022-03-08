@@ -1,3 +1,9 @@
+serenity_component(
+    Inspector
+    RECOMMENDED
+    TARGETS Inspector
+)
+
 set(SOURCES
     main.cpp
     RemoteObject.cpp
@@ -7,4 +13,4 @@ set(SOURCES
 )
 
 serenity_app(Inspector ICON app-inspector)
-target_link_libraries(Inspector LibDesktop LibGUI)
+target_link_libraries(Inspector LibDesktop LibGUI LibMain)

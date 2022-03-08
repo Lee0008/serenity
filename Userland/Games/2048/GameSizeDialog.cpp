@@ -6,17 +6,17 @@
 
 #include "GameSizeDialog.h"
 #include "Game.h"
+#include <AK/IntegralMath.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/CheckBox.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/SpinBox.h>
-#include <math.h>
 
 GameSizeDialog::GameSizeDialog(GUI::Window* parent, size_t board_size, size_t target, bool evil_ai)
     : GUI::Dialog(parent)
     , m_board_size(board_size)
-    , m_target_tile_power(log2(target))
+    , m_target_tile_power(AK::log2(target) - 1)
     , m_evil_ai(evil_ai)
 {
     set_rect({ 0, 0, 250, 150 });
@@ -28,7 +28,7 @@ GameSizeDialog::GameSizeDialog(GUI::Window* parent, size_t board_size, size_t ta
     main_widget.set_fill_with_background_color(true);
 
     auto& layout = main_widget.set_layout<GUI::VerticalBoxLayout>();
-    layout.set_margins({ 4, 4, 4, 4 });
+    layout.set_margins(4);
 
     auto& board_size_box = main_widget.add<GUI::Widget>();
     auto& input_layout = board_size_box.set_layout<GUI::HorizontalBoxLayout>();

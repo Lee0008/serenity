@@ -2,9 +2,11 @@
 
 Graphical Unix-like operating system for x86 computers.
 
-[![Build status](https://github.com/SerenityOS/serenity/workflows/Build,%20lint,%20and%20test/badge.svg)](https://github.com/SerenityOS/serenity/actions?query=workflow%3A"Build%2C%20lint%2C%20and%20test")
+[![GitHub Actions Status](https://github.com/SerenityOS/serenity/workflows/Build,%20lint,%20and%20test/badge.svg)](https://github.com/SerenityOS/serenity/actions?query=workflow%3A"Build%2C%20lint%2C%20and%20test")
+[![Azure DevOps Status](https://dev.azure.com/SerenityOS/SerenityOS/_apis/build/status/CI?branchName=master)](https://dev.azure.com/SerenityOS/SerenityOS/_build/latest?definitionId=1&branchName=master)
 [![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/serenity.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:serenity)
-[![Discord](https://img.shields.io/discord/830522505605283862.svg?logo=discord&logoColor=white&logoWidth=20&labelColor=7289DA&label=Discord&color=17cf48)](https://discord.gg/29gCcKsXkF)  
+[![Sonar Cube Static Analysis](https://sonarcloud.io/api/project_badges/measure?project=SerenityOS_serenity&metric=ncloc)](https://sonarcloud.io/dashboard?id=SerenityOS_serenity)
+[![Discord](https://img.shields.io/discord/830522505605283862.svg?logo=discord&logoColor=white&logoWidth=20&labelColor=7289DA&label=Discord&color=17cf48)](https://discord.gg/serenityos)
 
 ## About
 
@@ -12,19 +14,18 @@ SerenityOS is a love letter to '90s user interfaces with a custom Unix-like core
 
 Roughly speaking, the goal is a marriage between the aesthetic of late-1990s productivity software and the power-user accessibility of late-2000s \*nix. This is a system by us, for us, based on the things we like.
 
-I (Andreas) regularly post raw hacking sessions and demos on [my YouTube channel](https://www.youtube.com/c/AndreasKling/).
+You can watch videos of the system being developed on YouTube:
 
-Sometimes I write about the system on [my github.io blog](https://awesomekling.github.io/).
-
-I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](https://github.com/sponsors/awesomekling) if you would like to show some support that way.
+* [Andreas Kling's channel](https://youtube.com/andreaskling)
+* [Linus Groh's channel](https://youtube.com/linusgroh)
 
 ## Screenshot
 
-![Screenshot as of 0f85753.png](https://raw.githubusercontent.com/SerenityOS/serenity/master/Meta/screenshot-0f85753.png)
+![Screenshot as of b36968c.png](https://raw.githubusercontent.com/SerenityOS/serenity/master/Meta/screenshot-b36968c.png)
 
 ## Kernel features
 
-* x86 (32-bit) kernel with pre-emptive multi-threading
+* x86 (32-bit) and x86_64 (64-bit) kernel with pre-emptive multi-threading
 * Hardware protections (SMEP, SMAP, UMIP, NX, WP, TSD, ...)
 * IPv4 stack with ARP, TCP, UDP and ICMP protocols
 * ext2 filesystem
@@ -34,7 +35,6 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 * Pseudoterminals (with /dev/pts filesystem)
 * Filesystem notifications
 * CPU and memory profiling
-* SoundBlaster 16 driver
 * VMWare/QEMU mouse integration
 
 ## System services
@@ -62,6 +62,7 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 * JavaScript engine (LibJS)
 * Markdown (LibMarkdown)
 * Audio (LibAudio)
+* Digital Signal Processing/Synthesizer Chains (LibDSP)
 * PCI database (LibPCIDB)
 * Terminal emulation (LibVT)
 * Out-of-process network protocol I/O (LibProtocol)
@@ -71,6 +72,7 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 * Higher-level threading (LibThreading)
 * Transport Layer Security (LibTLS)
 * HTTP and HTTPS (LibHTTP)
+* IMAP (LibIMAP)
 
 ## Userland features
 
@@ -79,8 +81,8 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 * On-line help system (both terminal and GUI variants)
 * Web browser (Browser)
 * C++ IDE (HackStudio)
-* IRC client
 * Desktop synthesizer (Piano)
+* E-mail client (Mail)
 * Various desktop apps & games
 * Color themes
 
@@ -102,7 +104,7 @@ FAQ: [Frequently Asked Questions](https://github.com/SerenityOS/serenity/blob/ma
 
 ## Get in touch
 
-Join our Discord server: [SerenityOS Discord](https://discord.com/invite/29gCcKsXkF)
+Join our Discord server: [SerenityOS Discord](https://discord.gg/serenityos)
 
 ## Author
 
@@ -135,6 +137,23 @@ Join our Discord server: [SerenityOS Discord](https://discord.com/invite/29gCcKs
 * **Jean-Baptiste Boric** - [boricj](https://github.com/boricj)
 * **Stephan Unverwerth** - [sunverwerth](https://github.com/sunverwerth)
 * **Max Wipfli** - [MaxWipfli](https://github.com/MaxWipfli)
+* **Daniel Bertalan** - [BertalanD](https://github.com/BertalanD)
+* **Jelle Raaijmakers** - [GMTA](https://github.com/GMTA)
+* **Sam Atkins** - [AtkinsSJ](https://github.com/AtkinsSJ)
+* **Tobias Christiansen** - [TobyAsE](https://github.com/TobyAsE)
+* **Lenny Maiorani** - [ldm5180](https://github.com/ldm5180)
+* **sin-ack** - [sin-ack](https://github.com/sin-ack)
+* **Jesse Buhagiar** - [Quaker762](https://github.com/Quaker762)
+* **Peter Elliott** - [Petelliott](https://github.com/Petelliott)
+* **Karol Kosek** - [krkk](https://github.com/krkk)
+* **Mustafa Quraish** - [mustafaquraish](https://github.com/mustafaquraish)
+* **David Tuin** - [davidot](https://github.com/davidot)
+* **Leon Albrecht** - [Hendiadyoin1](https://github.com/Hendiadyoin1)
+* **Tim Schumacher** - [timschumi](https://github.com/timschumi)
+* **Marcus Nilsson** - [metmo](https://github.com/metmo)
+* **Gegga Thor** - [Xexxa](https://github.com/Xexxa)
+* **kleines Filmröllchen** - [kleinesfilmroellchen](https://github.com/kleinesfilmroellchen)
+* **Kenneth Myhra** - [kennethmyhra](https://github.com/kennethmyhra)
 
 (And many more!) The people listed above have landed more than 100 commits in the project. :^)
 

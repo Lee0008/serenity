@@ -8,8 +8,10 @@
 #include <LibCore/Timer.h>
 #include <LibGUI/IconView.h>
 #include <LibGUI/Model.h>
+#include <LibGUI/ModelEditingDelegate.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Scrollbar.h>
+
 #include <LibGfx/Palette.h>
 
 REGISTER_WIDGET(GUI, IconView);
@@ -212,7 +214,7 @@ void IconView::mousedown_event(MouseEvent& event)
     if (!model())
         return AbstractView::mousedown_event(event);
 
-    if (event.button() != MouseButton::Left)
+    if (event.button() != MouseButton::Primary)
         return AbstractView::mousedown_event(event);
 
     auto index = index_at_event_position(event.position());
@@ -237,18 +239,17 @@ void IconView::mousedown_event(MouseEvent& event)
 
 void IconView::mouseup_event(MouseEvent& event)
 {
-    if (m_rubber_banding && event.button() == MouseButton::Left) {
+    if (m_rubber_banding && event.button() == MouseButton::Primary) {
         m_rubber_banding = false;
-        if (m_out_of_view_timer)
-            m_out_of_view_timer->stop();
+        set_automatic_scrolling_timer(false);
         update(to_widget_rect(Gfx::IntRect::from_two_points(m_rubber_band_origin, m_rubber_band_current)));
     }
     AbstractView::mouseup_event(event);
 }
 
-bool IconView::update_rubber_banding(const Gfx::IntPoint& position)
+bool IconView::update_rubber_banding(const Gfx::IntPoint& input_position)
 {
-    auto adjusted_position = to_content_position(position);
+    auto adjusted_position = to_content_position(input_position.constrained(widget_inner_rect()));
     if (m_rubber_band_current != adjusted_position) {
         auto prev_rect = Gfx::IntRect::from_two_points(m_rubber_band_origin, m_rubber_band_current);
         auto prev_rubber_band_fill_rect = prev_rect.shrunken(1, 1);
@@ -322,32 +323,17 @@ bool IconView::update_rubber_banding(const Gfx::IntPoint& position)
     return false;
 }
 
-#define SCROLL_OUT_OF_VIEW_HOT_MARGIN 20
-
 void IconView::mousemove_event(MouseEvent& event)
 {
     if (!model())
         return AbstractView::mousemove_event(event);
 
-    if (m_rubber_banding) {
-        auto in_view_rect = widget_inner_rect();
-        in_view_rect.shrink(SCROLL_OUT_OF_VIEW_HOT_MARGIN, SCROLL_OUT_OF_VIEW_HOT_MARGIN);
-        if (!in_view_rect.contains(event.position())) {
-            if (!m_out_of_view_timer) {
-                m_out_of_view_timer = add<Core::Timer>();
-                m_out_of_view_timer->set_interval(100);
-                m_out_of_view_timer->on_timeout = [this] {
-                    scroll_out_of_view_timer_fired();
-                };
-            }
+    m_rubber_band_scroll_delta = automatic_scroll_delta_from_position(event.position());
 
-            m_out_of_view_position = event.position();
-            if (!m_out_of_view_timer->is_active())
-                m_out_of_view_timer->start();
-        } else {
-            if (m_out_of_view_timer)
-                m_out_of_view_timer->stop();
-        }
+    if (m_rubber_banding) {
+        m_out_of_view_position = event.position();
+        set_automatic_scrolling_timer(!m_rubber_band_scroll_delta.is_null());
+
         if (update_rubber_banding(event.position()))
             return;
     }
@@ -355,27 +341,15 @@ void IconView::mousemove_event(MouseEvent& event)
     AbstractView::mousemove_event(event);
 }
 
-void IconView::scroll_out_of_view_timer_fired()
+void IconView::on_automatic_scrolling_timer_fired()
 {
-    auto scroll_to = to_content_position(m_out_of_view_position);
-    // Adjust the scroll-to position by SCROLL_OUT_OF_VIEW_HOT_MARGIN / 2
-    // depending on which direction we're scrolling. This allows us to
-    // start scrolling before we actually leave the visible area, which
-    // is important when there is no space to further move the mouse. The
-    // speed of scrolling is determined by the distance between the mouse
-    // pointer and the widget's inner rect shrunken by the hot margin
-    auto in_view_rect = widget_inner_rect().shrunken(SCROLL_OUT_OF_VIEW_HOT_MARGIN, SCROLL_OUT_OF_VIEW_HOT_MARGIN);
-    int adjust_x = 0, adjust_y = 0;
-    if (m_out_of_view_position.y() > in_view_rect.bottom())
-        adjust_y = (SCROLL_OUT_OF_VIEW_HOT_MARGIN / 2) + min(SCROLL_OUT_OF_VIEW_HOT_MARGIN, m_out_of_view_position.y() - in_view_rect.bottom());
-    else if (m_out_of_view_position.y() < in_view_rect.top())
-        adjust_y = -(SCROLL_OUT_OF_VIEW_HOT_MARGIN / 2) + max(-SCROLL_OUT_OF_VIEW_HOT_MARGIN, m_out_of_view_position.y() - in_view_rect.top());
-    if (m_out_of_view_position.x() > in_view_rect.right())
-        adjust_x = (SCROLL_OUT_OF_VIEW_HOT_MARGIN / 2) + min(SCROLL_OUT_OF_VIEW_HOT_MARGIN, m_out_of_view_position.x() - in_view_rect.right());
-    else if (m_out_of_view_position.x() < in_view_rect.left())
-        adjust_x = -(SCROLL_OUT_OF_VIEW_HOT_MARGIN / 2) + max(-SCROLL_OUT_OF_VIEW_HOT_MARGIN, m_out_of_view_position.x() - in_view_rect.left());
+    AbstractView::on_automatic_scrolling_timer_fired();
 
-    AbstractScrollableWidget::scroll_into_view({ scroll_to.translated(adjust_x, adjust_y), { 1, 1 } }, true, true);
+    if (m_rubber_band_scroll_delta.is_null())
+        return;
+
+    vertical_scrollbar().increase_slider_by(m_rubber_band_scroll_delta.y());
+    horizontal_scrollbar().increase_slider_by(m_rubber_band_scroll_delta.x());
     update_rubber_banding(m_out_of_view_position);
 }
 
@@ -388,12 +362,42 @@ void IconView::update_item_rects(int item_index, ItemData& item_data) const
     item_data.text_rect.set_top(item_rect.y() + item_data.text_offset_y);
 }
 
-Gfx::IntRect IconView::content_rect(const ModelIndex& index) const
+Gfx::IntRect IconView::content_rect(ModelIndex const& index) const
 {
     if (!index.is_valid())
         return {};
     auto& item_data = get_item_data(index.row());
-    return item_data.text_rect.inflated(4, 4);
+    return item_data.rect();
+}
+
+Gfx::IntRect IconView::editing_rect(ModelIndex const& index) const
+{
+    if (!index.is_valid())
+        return {};
+    auto& item_data = get_item_data(index.row());
+    auto editing_rect = item_data.text_rect;
+    editing_rect.set_height(font_for_index(index)->glyph_height() + 8);
+    editing_rect.set_y(item_data.text_rect.y() - 2);
+    return editing_rect;
+}
+
+void IconView::editing_widget_did_change(const ModelIndex& index)
+{
+    if (m_editing_delegate->value().is_string()) {
+        auto text_width = font_for_index(index)->width(m_editing_delegate->value().as_string());
+        m_edit_widget_content_rect.set_width(min(text_width + 8, effective_item_size().width()));
+        m_edit_widget_content_rect.center_horizontally_within(editing_rect(index).translated(frame_thickness(), frame_thickness()));
+        update_edit_widget_position();
+    }
+}
+
+Gfx::IntRect
+IconView::paint_invalidation_rect(const ModelIndex& index) const
+{
+    if (!index.is_valid())
+        return {};
+    auto& item_data = get_item_data(index.row());
+    return item_data.rect(true);
 }
 
 void IconView::did_change_hovered_index(const ModelIndex& old_index, const ModelIndex& new_index)
@@ -417,8 +421,7 @@ void IconView::did_change_cursor_index(const ModelIndex& old_index, const ModelI
 void IconView::get_item_rects(int item_index, ItemData& item_data, const Gfx::Font& font) const
 {
     auto item_rect = this->item_rect(item_index);
-    item_data.icon_rect = { 0, 0, 32, 32 };
-    item_data.icon_rect.center_within(item_rect);
+    item_data.icon_rect = Gfx::IntRect(0, 0, 32, 32).centered_within(item_rect);
     item_data.icon_offset_y = -font.glyph_height() - 6;
     item_data.icon_rect.translate_by(0, item_data.icon_offset_y);
 
@@ -453,10 +456,11 @@ void IconView::get_item_rects(int item_index, ItemData& item_data, const Gfx::Fo
         item_data.text_rect.center_horizontally_within(item_rect);
         item_data.text_rect.intersect(item_rect);
         item_data.text_rect.set_height(font.glyph_height() * item_data.wrapped_text_lines.size());
-        item_data.text_rect.inflate(6, 4);
+        item_data.text_rect.inflate(6, 6);
+        item_data.text_rect_wrapped = item_data.text_rect;
     } else {
         item_data.text_rect.set_width(unwrapped_text_width);
-        item_data.text_rect.inflate(6, 4);
+        item_data.text_rect.inflate(6, 6);
         if (item_data.text_rect.width() > available_width)
             item_data.text_rect.set_width(available_width);
         item_data.text_rect.center_horizontally_within(item_rect);
@@ -522,7 +526,8 @@ void IconView::paint_event(PaintEvent& event)
                 } else if (m_hovered_index.is_valid() && m_hovered_index == item_data.index) {
                     painter.blit_brightened(destination.location(), *bitmap, bitmap->rect());
                 } else {
-                    painter.blit(destination.location(), *bitmap, bitmap->rect());
+                    auto opacity = item_data.index.data(ModelRole::IconOpacity).as_float_or(1.0f);
+                    painter.blit(destination.location(), *bitmap, bitmap->rect(), opacity);
                 }
             }
         }
@@ -531,7 +536,8 @@ void IconView::paint_event(PaintEvent& event)
 
         const auto& text_rect = item_data.text_rect;
 
-        painter.fill_rect(text_rect, background_color);
+        if (m_edit_index != item_data.index)
+            painter.fill_rect(text_rect, background_color);
 
         if (is_focused() && item_data.index == cursor_index()) {
             painter.draw_rect(text_rect, widget_background_color);
@@ -549,7 +555,7 @@ void IconView::paint_event(PaintEvent& event)
                 line_rect.set_width(text_rect.width());
                 line_rect.set_height(font->glyph_height());
                 line_rect.center_horizontally_within(item_data.text_rect);
-                line_rect.set_y(2 + item_data.text_rect.y() + line_index * font->glyph_height());
+                line_rect.set_y(3 + item_data.text_rect.y() + line_index * font->glyph_height());
                 line_rect.inflate(6, 0);
 
                 // Shrink the line_rect on the last line to apply elision if there are more lines.
@@ -648,7 +654,7 @@ void IconView::toggle_selection(ItemData& item_data)
     if (!item_data.selected)
         add_selection(item_data);
     else
-        remove_selection(item_data);
+        remove_item_selection(item_data);
 }
 
 void IconView::toggle_selection(const ModelIndex& new_index)
@@ -658,7 +664,7 @@ void IconView::toggle_selection(const ModelIndex& new_index)
     toggle_selection(get_item_data(item_index));
 }
 
-void IconView::remove_selection(ItemData& item_data)
+void IconView::remove_item_selection(ItemData& item_data)
 {
     if (!item_data.selected)
         return;

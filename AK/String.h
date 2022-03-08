@@ -43,9 +43,9 @@ public:
 
     String() = default;
 
-    String(const StringView& view)
+    String(StringView view)
+        : m_impl(StringImpl::create(view.characters_without_null_termination(), view.length()))
     {
-        m_impl = StringImpl::create(view.characters_without_null_termination(), view.length());
     }
 
     String(const String& other)
@@ -96,58 +96,72 @@ public:
     String(const FlyString&);
 
     [[nodiscard]] static String repeated(char, size_t count);
-    [[nodiscard]] static String repeated(const StringView&, size_t count);
+    [[nodiscard]] static String repeated(StringView, size_t count);
 
     [[nodiscard]] static String bijective_base_from(size_t value, unsigned base = 26, StringView map = {});
+    [[nodiscard]] static String roman_number_from(size_t value);
 
     template<class SeparatorType, class CollectionType>
-    [[nodiscard]] static String join(const SeparatorType& separator, const CollectionType& collection)
+    [[nodiscard]] static String join(const SeparatorType& separator, const CollectionType& collection, StringView fmtstr = "{}"sv)
     {
         StringBuilder builder;
-        builder.join(separator, collection);
+        builder.join(separator, collection, fmtstr);
         return builder.build();
     }
 
-    [[nodiscard]] bool matches(const StringView& mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
-    [[nodiscard]] bool matches(const StringView& mask, Vector<MaskSpan>&, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+    [[nodiscard]] bool matches(StringView mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+    [[nodiscard]] bool matches(StringView mask, Vector<MaskSpan>&, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
 
     template<typename T = int>
-    [[nodiscard]] Optional<T> to_int() const;
+    [[nodiscard]] Optional<T> to_int(TrimWhitespace = TrimWhitespace::Yes) const;
     template<typename T = unsigned>
-    [[nodiscard]] Optional<T> to_uint() const;
+    [[nodiscard]] Optional<T> to_uint(TrimWhitespace = TrimWhitespace::Yes) const;
 
     [[nodiscard]] String to_lowercase() const;
     [[nodiscard]] String to_uppercase() const;
     [[nodiscard]] String to_snakecase() const;
+    [[nodiscard]] String to_titlecase() const;
 
     [[nodiscard]] bool is_whitespace() const { return StringUtils::is_whitespace(*this); }
 
 #ifndef KERNEL
-    [[nodiscard]] String trim(const StringView& characters, TrimMode mode = TrimMode::Both) const
+    [[nodiscard]] String trim(StringView characters, TrimMode mode = TrimMode::Both) const
     {
-        return StringUtils::trim(view(), characters, mode);
+        auto trimmed_view = StringUtils::trim(view(), characters, mode);
+        if (view() == trimmed_view)
+            return *this;
+        return trimmed_view;
     }
 
     [[nodiscard]] String trim_whitespace(TrimMode mode = TrimMode::Both) const
     {
-        return StringUtils::trim_whitespace(view(), mode);
+        auto trimmed_view = StringUtils::trim_whitespace(view(), mode);
+        if (view() == trimmed_view)
+            return *this;
+        return trimmed_view;
     }
 #endif
 
-    [[nodiscard]] bool equals_ignoring_case(const StringView&) const;
+    [[nodiscard]] bool equals_ignoring_case(StringView) const;
 
-    [[nodiscard]] bool contains(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool contains(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool contains(char, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
 
     [[nodiscard]] Vector<String> split_limit(char separator, size_t limit, bool keep_empty = false) const;
     [[nodiscard]] Vector<String> split(char separator, bool keep_empty = false) const;
-
-    [[nodiscard]] Optional<size_t> find(char, size_t start = 0) const;
-    [[nodiscard]] Optional<size_t> find(StringView const&, size_t start = 0) const;
-
-    [[nodiscard]] String substring(size_t start) const;
-    [[nodiscard]] String substring(size_t start, size_t length) const;
-
     [[nodiscard]] Vector<StringView> split_view(char separator, bool keep_empty = false) const;
+    [[nodiscard]] Vector<StringView> split_view(Function<bool(char)> separator, bool keep_empty = false) const;
+
+    [[nodiscard]] Optional<size_t> find(char needle, size_t start = 0) const { return StringUtils::find(*this, needle, start); }
+    [[nodiscard]] Optional<size_t> find(StringView needle, size_t start = 0) const { return StringUtils::find(*this, needle, start); }
+    [[nodiscard]] Optional<size_t> find_last(char needle) const { return StringUtils::find_last(*this, needle); }
+    // FIXME: Implement find_last(StringView) for API symmetry.
+    Vector<size_t> find_all(StringView needle) const;
+    using SearchDirection = StringUtils::SearchDirection;
+    [[nodiscard]] Optional<size_t> find_any_of(StringView needles, SearchDirection direction) const { return StringUtils::find_any_of(*this, needles, direction); }
+
+    [[nodiscard]] String substring(size_t start, size_t length) const;
+    [[nodiscard]] String substring(size_t start) const;
     [[nodiscard]] StringView substring_view(size_t start, size_t length) const;
     [[nodiscard]] StringView substring_view(size_t start) const;
 
@@ -178,16 +192,16 @@ public:
     [[nodiscard]] constexpr ConstIterator begin() const { return ConstIterator::begin(*this); }
     [[nodiscard]] constexpr ConstIterator end() const { return ConstIterator::end(*this); }
 
-    [[nodiscard]] bool starts_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
-    [[nodiscard]] bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool starts_with(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool ends_with(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     [[nodiscard]] bool starts_with(char) const;
     [[nodiscard]] bool ends_with(char) const;
 
     bool operator==(const String&) const;
     bool operator!=(const String& other) const { return !(*this == other); }
 
-    bool operator==(const StringView&) const;
-    bool operator!=(const StringView& other) const { return !(*this == other); }
+    bool operator==(StringView) const;
+    bool operator!=(StringView other) const { return !(*this == other); }
 
     bool operator==(const FlyString&) const;
     bool operator!=(const FlyString& other) const { return !(*this == other); }
@@ -258,12 +272,13 @@ public:
         return String((const char*)buffer.data(), buffer.size(), should_chomp);
     }
 
-    [[nodiscard]] static String vformatted(StringView fmtstr, TypeErasedFormatParams);
+    [[nodiscard]] static String vformatted(StringView fmtstr, TypeErasedFormatParams&);
 
     template<typename... Parameters>
     [[nodiscard]] static String formatted(CheckedFormatString<Parameters...>&& fmtstr, const Parameters&... parameters)
     {
-        return vformatted(fmtstr.view(), VariadicFormatParams { parameters... });
+        VariadicFormatParams variadic_format_parameters { parameters... };
+        return vformatted(fmtstr.view(), variadic_format_parameters);
     }
 
     template<typename T>
@@ -277,13 +292,12 @@ public:
         return { characters(), length() };
     }
 
-    int replace(const String& needle, const String& replacement, bool all_occurrences = false);
-    size_t count(const String& needle) const;
-    Vector<size_t> find_all(const String& needle) const;
+    [[nodiscard]] String replace(StringView needle, StringView replacement, bool all_occurrences = false) const { return StringUtils::replace(*this, needle, replacement, all_occurrences); }
+    [[nodiscard]] size_t count(StringView needle) const { return StringUtils::count(*this, needle); }
     [[nodiscard]] String reverse() const;
 
     template<typename... Ts>
-    [[nodiscard]] ALWAYS_INLINE constexpr bool is_one_of(Ts... strings) const
+    [[nodiscard]] ALWAYS_INLINE constexpr bool is_one_of(Ts&&... strings) const
     {
         return (... || this->operator==(forward<Ts>(strings)));
     }
@@ -298,8 +312,8 @@ struct Traits<String> : public GenericTraits<String> {
 };
 
 struct CaseInsensitiveStringTraits : public Traits<String> {
-    static unsigned hash(const String& s) { return s.impl() ? s.to_lowercase().impl()->hash() : 0; }
-    static bool equals(const String& a, const String& b) { return a.to_lowercase() == b.to_lowercase(); }
+    static unsigned hash(String const& s) { return s.impl() ? s.impl()->case_insensitive_hash() : 0; }
+    static bool equals(String const& a, String const& b) { return a.equals_ignoring_case(b); }
 };
 
 bool operator<(const char*, const String&);
@@ -307,7 +321,7 @@ bool operator>=(const char*, const String&);
 bool operator>(const char*, const String&);
 bool operator<=(const char*, const String&);
 
-String escape_html_entities(const StringView& html);
+String escape_html_entities(StringView html);
 
 InputStream& operator>>(InputStream& stream, String& string);
 

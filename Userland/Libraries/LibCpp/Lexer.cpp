@@ -6,14 +6,17 @@
 
 #include "Lexer.h"
 #include <AK/CharacterTypes.h>
+#include <AK/Function.h>
 #include <AK/HashTable.h>
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
 
 namespace Cpp {
 
-Lexer::Lexer(StringView const& input)
+Lexer::Lexer(StringView input, size_t start_line)
     : m_input(input)
+    , m_previous_position { start_line, 0 }
+    , m_position { start_line, 0 }
 {
 }
 
@@ -48,7 +51,7 @@ constexpr bool is_valid_nonfirst_character_of_identifier(char ch)
     return is_valid_first_character_of_identifier(ch) || is_ascii_digit(ch);
 }
 
-constexpr char const* s_known_keywords[] = {
+constexpr StringView s_known_keywords[] = {
     "alignas",
     "alignof",
     "and",
@@ -124,40 +127,54 @@ constexpr char const* s_known_keywords[] = {
     "xor_eq"
 };
 
-constexpr char const* s_known_types[] = {
+constexpr StringView s_known_types[] = {
+    "Array",
+    "Array",
+    "Badge",
+    "Bitmap",
     "ByteBuffer",
+    "Bytes",
+    "Checked",
     "CircularDeque",
     "CircularQueue",
     "Deque",
     "DoublyLinkedList",
-    "FileSystemPath",
-    "Array",
+    "Error",
+    "ErrorOr",
+    "FlyString",
     "Function",
     "HashMap",
     "HashTable",
     "IPv4Address",
-    "InlineLinkedList",
+    "IntrusiveList",
     "IntrusiveList",
     "JsonArray",
     "JsonObject",
     "JsonValue",
+    "LexicalPath",
     "MappedFile",
     "NetworkOrdered",
+    "NeverDestroyed",
     "NonnullOwnPtr",
     "NonnullOwnPtrVector",
     "NonnullRefPtr",
     "NonnullRefPtrVector",
     "Optional",
     "OwnPtr",
+    "ReadonlyBytes",
+    "RedBlackTree",
     "RefPtr",
     "Result",
     "ScopeGuard",
+    "Singleton",
     "SinglyLinkedList",
+    "Span",
     "String",
     "StringBuilder",
     "StringImpl",
     "StringView",
     "Utf8View",
+    "Variant",
     "Vector",
     "WeakPtr",
     "auto",
@@ -183,10 +200,10 @@ constexpr char const* s_known_types[] = {
     "u8",
     "unsigned",
     "void",
-    "wchar_t"
+    "wchar_t",
 };
 
-static bool is_keyword(StringView const& string)
+static bool is_keyword(StringView string)
 {
     static HashTable<String> keywords(array_size(s_known_keywords));
     if (keywords.is_empty()) {
@@ -195,7 +212,7 @@ static bool is_keyword(StringView const& string)
     return keywords.contains(string);
 }
 
-static bool is_known_type(StringView const& string)
+static bool is_known_type(StringView string)
 {
     static HashTable<String> types(array_size(s_known_types));
     if (types.is_empty()) {
@@ -204,15 +221,13 @@ static bool is_known_type(StringView const& string)
     return types.contains(string);
 }
 
-Vector<Token> Lexer::lex()
+void Lexer::lex_impl(Function<void(Token)> callback)
 {
-    Vector<Token> tokens;
-
     size_t token_start_index = 0;
     Position token_start_position;
 
     auto emit_single_char_token = [&](auto type) {
-        tokens.empend(type, m_position, m_position, m_input.substring_view(m_index, 1));
+        callback(Token(type, m_position, m_position, m_input.substring_view(m_index, 1)));
         consume();
     };
 
@@ -221,7 +236,9 @@ Vector<Token> Lexer::lex()
         token_start_position = m_position;
     };
     auto commit_token = [&](auto type) {
-        tokens.empend(type, token_start_position, m_previous_position, m_input.substring_view(token_start_index, m_index - token_start_index));
+        if (m_options.ignore_whitespace && type == Token::Type::Whitespace)
+            return;
+        callback(Token(type, token_start_position, m_previous_position, m_input.substring_view(token_start_index, m_index - token_start_index)));
     };
 
     auto emit_token_equals = [&](auto type, auto equals_type) {
@@ -525,13 +542,16 @@ Vector<Token> Lexer::lex()
         if (ch == '#') {
             begin_token();
             consume();
+            while (AK::is_ascii_space(peek()))
+                consume();
 
+            size_t directive_start = m_index;
             if (is_valid_first_character_of_identifier(peek()))
                 while (peek() && is_valid_nonfirst_character_of_identifier(peek()))
                     consume();
 
-            auto directive = StringView(m_input.characters_without_null_termination() + token_start_index, m_index - token_start_index);
-            if (directive == "#include") {
+            auto directive = StringView(m_input.characters_without_null_termination() + directive_start, m_index - directive_start);
+            if (directive == "include"sv) {
                 commit_token(Token::Type::IncludeStatement);
 
                 if (is_ascii_space(peek())) {
@@ -557,8 +577,16 @@ Vector<Token> Lexer::lex()
                     begin_token();
                 }
             } else {
-                while (peek() && peek() != '\n')
-                    consume();
+                while (peek()) {
+                    if (peek() == '\\' && peek(1) == '\n') {
+                        consume();
+                        consume();
+                    } else if (peek() == '\n') {
+                        break;
+                    } else {
+                        consume();
+                    }
+                }
 
                 commit_token(Token::Type::PreprocessorStatement);
             }
@@ -770,6 +798,14 @@ Vector<Token> Lexer::lex()
         dbgln("Unimplemented token character: {}", ch);
         emit_single_char_token(Token::Type::Unknown);
     }
+}
+
+Vector<Token> Lexer::lex()
+{
+    Vector<Token> tokens;
+    lex_impl([&](auto token) {
+        tokens.append(move(token));
+    });
     return tokens;
 }
 

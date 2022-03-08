@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,7 +8,6 @@
 #include "EditorWrapper.h"
 #include "Editor.h"
 #include "HackStudio.h"
-#include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Label.h>
@@ -25,42 +25,28 @@ EditorWrapper::EditorWrapper()
     label_wrapper.set_fixed_height(14);
     label_wrapper.set_fill_with_background_color(true);
     label_wrapper.set_layout<GUI::HorizontalBoxLayout>();
-    label_wrapper.layout()->set_margins({ 2, 0, 2, 0 });
+    label_wrapper.layout()->set_margins({ 0, 2 });
 
-    m_filename_label = label_wrapper.add<GUI::Label>("(Untitled)");
+    m_filename_label = label_wrapper.add<GUI::Label>(untitled_label);
     m_filename_label->set_text_alignment(Gfx::TextAlignment::CenterLeft);
     m_filename_label->set_fixed_height(14);
 
-    m_cursor_label = label_wrapper.add<GUI::Label>("(Cursor)");
-    m_cursor_label->set_text_alignment(Gfx::TextAlignment::CenterRight);
-    m_cursor_label->set_fixed_height(14);
-
-    m_editor = add<Editor>();
+    // FIXME: Propagate errors instead of giving up
+    m_editor = MUST(try_add<Editor>());
     m_editor->set_ruler_visible(true);
     m_editor->set_automatic_indentation_enabled(true);
-
-    m_editor->on_cursor_change = [this] {
-        m_cursor_label->set_text(String::formatted("Line: {}, Column: {}", m_editor->cursor().line() + 1, m_editor->cursor().column()));
-    };
 
     m_editor->on_focus = [this] {
         set_current_editor_wrapper(this);
     };
 
-    m_editor->on_open = [](String path) {
+    m_editor->on_open = [](String const& path) {
         open_file(path);
     };
 
-    m_editor->on_change = [this] {
-        bool was_dirty = m_document_dirty;
-        m_document_dirty = true;
-        if (!was_dirty)
-            update_title();
+    m_editor->on_modified_change = [this](bool) {
+        update_title();
     };
-}
-
-EditorWrapper::~EditorWrapper()
-{
 }
 
 void EditorWrapper::set_editor_has_focus(Badge<Editor>, bool focus)
@@ -98,8 +84,6 @@ void EditorWrapper::set_filename(const String& filename)
 void EditorWrapper::save()
 {
     editor().write_to_file(filename());
-    m_document_dirty = false;
-    update_title();
     update_diff();
     editor().update();
 }
@@ -107,14 +91,13 @@ void EditorWrapper::save()
 void EditorWrapper::update_diff()
 {
     if (m_git_repo)
-        m_hunks = Diff::parse_hunks(m_git_repo->unstaged_diff(LexicalPath(filename())).value());
+        m_hunks = Diff::parse_hunks(m_git_repo->unstaged_diff(filename()).value());
 }
 
-void EditorWrapper::set_project_root(LexicalPath const& project_root)
+void EditorWrapper::set_project_root(String const& project_root)
 {
     m_project_root = project_root;
-
-    auto result = GitRepo::try_to_create(m_project_root);
+    auto result = GitRepo::try_to_create(*m_project_root);
     switch (result.type) {
     case GitRepo::CreateResult::Type::Success:
         m_git_repo = result.repo;
@@ -131,11 +114,19 @@ void EditorWrapper::set_project_root(LexicalPath const& project_root)
 void EditorWrapper::update_title()
 {
     StringBuilder title;
-    title.append(m_filename);
+    if (m_filename.is_null())
+        title.append(untitled_label);
+    else
+        title.append(m_filename);
 
-    if (m_document_dirty)
+    if (editor().document().is_modified())
         title.append(" (*)");
     m_filename_label->set_text(title.to_string());
+}
+
+void EditorWrapper::set_debug_mode(bool enabled)
+{
+    m_editor->set_debug_mode(enabled);
 }
 
 }

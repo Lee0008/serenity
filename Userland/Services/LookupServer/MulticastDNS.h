@@ -24,7 +24,7 @@ private:
     explicit MulticastDNS(Object* parent = nullptr);
 
     void announce();
-    ssize_t emit_packet(const DNSPacket&, const sockaddr_in* destination = nullptr);
+    ErrorOr<size_t> emit_packet(const DNSPacket&, const sockaddr_in* destination = nullptr);
 
     void handle_packet();
     void handle_query(const DNSPacket&);
@@ -39,7 +39,7 @@ private:
         0xe914,
         // 224.0.0.251
         { 0xfb0000e0 },
-        0
+        { 0 }
     };
 };
 

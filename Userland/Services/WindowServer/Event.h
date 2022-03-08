@@ -50,10 +50,10 @@ public:
 
 enum class MouseButton : u8 {
     None = 0,
-    Left = 1,
-    Right = 2,
+    Primary = 1,
+    Secondary = 2,
     Middle = 4,
-    Back = 8,
+    Backward = 8,
     Forward = 16,
 };
 
@@ -88,13 +88,14 @@ private:
 
 class MouseEvent final : public Event {
 public:
-    MouseEvent(Type type, const Gfx::IntPoint& position, unsigned buttons, MouseButton button, unsigned modifiers, int wheel_delta = 0)
+    MouseEvent(Type type, const Gfx::IntPoint& position, unsigned buttons, MouseButton button, unsigned modifiers, int wheel_delta_x = 0, int wheel_delta_y = 0)
         : Event(type)
         , m_position(position)
         , m_buttons(buttons)
         , m_button(button)
         , m_modifiers(modifiers)
-        , m_wheel_delta(wheel_delta)
+        , m_wheel_delta_x(wheel_delta_x)
+        , m_wheel_delta_y(wheel_delta_y)
     {
     }
 
@@ -104,7 +105,8 @@ public:
     MouseButton button() const { return m_button; }
     unsigned buttons() const { return m_buttons; }
     unsigned modifiers() const { return m_modifiers; }
-    int wheel_delta() const { return m_wheel_delta; }
+    int wheel_delta_x() const { return m_wheel_delta_x; }
+    int wheel_delta_y() const { return m_wheel_delta_y; }
     bool is_drag() const { return m_drag; }
 
     Vector<String> mime_types() const
@@ -117,14 +119,20 @@ public:
     void set_drag(bool b) { m_drag = b; }
     void set_mime_data(const Core::MimeData& mime_data) { m_mime_data = mime_data; }
 
-    MouseEvent translated(const Gfx::IntPoint& delta) const { return MouseEvent((Type)type(), m_position.translated(delta), m_buttons, m_button, m_modifiers, m_wheel_delta); }
+    MouseEvent translated(Gfx::IntPoint const& delta) const
+    {
+        MouseEvent event = *this;
+        event.m_position = m_position.translated(delta);
+        return event;
+    }
 
 private:
     Gfx::IntPoint m_position;
     unsigned m_buttons { 0 };
     MouseButton m_button { MouseButton::None };
     unsigned m_modifiers { 0 };
-    int m_wheel_delta { 0 };
+    int m_wheel_delta_x { 0 };
+    int m_wheel_delta_y { 0 };
     bool m_drag { false };
     RefPtr<const Core::MimeData> m_mime_data;
 };

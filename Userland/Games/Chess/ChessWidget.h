@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,7 +18,7 @@ class ChessWidget final : public GUI::Frame {
     C_OBJECT(ChessWidget);
 
 public:
-    virtual ~ChessWidget() override;
+    virtual ~ChessWidget() override = default;
 
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void mousedown_event(GUI::MouseEvent&) override;
@@ -35,7 +35,7 @@ public:
     Chess::Color side() const { return m_side; };
     void set_side(Chess::Color side) { m_side = side; };
 
-    void set_piece_set(const StringView& set);
+    void set_piece_set(StringView set);
     const String& piece_set() const { return m_piece_set; };
 
     Chess::Square mouse_to_square(GUI::MouseEvent& event) const;
@@ -48,8 +48,8 @@ public:
     void set_show_available_moves(bool e) { m_show_available_moves = e; }
 
     String get_fen() const;
-    bool import_pgn(const StringView& import_path);
-    bool export_pgn(const StringView& export_path) const;
+    bool import_pgn(StringView import_path);
+    bool export_pgn(StringView export_path) const;
 
     int resign();
     void flip_board();
@@ -63,7 +63,7 @@ public:
 
     const BoardTheme& board_theme() const { return m_board_theme; }
     void set_board_theme(const BoardTheme& theme) { m_board_theme = theme; }
-    void set_board_theme(const StringView& name);
+    void set_board_theme(StringView name);
 
     enum class PlaybackDirection {
         First,
@@ -114,10 +114,10 @@ private:
     BoardMarking m_current_marking;
     Vector<BoardMarking> m_board_markings;
     BoardTheme m_board_theme { "Beige", Color::from_rgb(0xb58863), Color::from_rgb(0xf0d9b5) };
-    Color m_move_highlight_color { Color::from_rgba(0x66ccee00) };
-    Color m_marking_primary_color { Color::from_rgba(0x66ff0000) };
-    Color m_marking_alternate_color { Color::from_rgba(0x66ffaa00) };
-    Color m_marking_secondary_color { Color::from_rgba(0x6655dd55) };
+    Color m_move_highlight_color { Color::from_argb(0x66ccee00) };
+    Color m_marking_primary_color { Color::from_argb(0x66ff0000) };
+    Color m_marking_alternate_color { Color::from_argb(0x66ffaa00) };
+    Color m_marking_secondary_color { Color::from_argb(0x6655dd55) };
     Chess::Color m_side { Chess::Color::White };
     HashMap<Chess::Piece, RefPtr<Gfx::Bitmap>> m_pieces;
     String m_piece_set;

@@ -4,13 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Function.h>
 #include <AK/String.h>
 #include <AK/Types.h>
 
 #include "Parser.h"
 
-void Parser::write(const StringView& data)
+void Parser::write(StringView data)
 {
     for (size_t i = 0; i < data.length(); i++) {
         u8 ch = data[i];

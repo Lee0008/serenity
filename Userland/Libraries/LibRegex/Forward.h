@@ -9,6 +9,8 @@
 #include <AK/Types.h>
 
 namespace regex {
+struct CompareTypeAndValuePair;
+
 enum class Error : u8;
 class Lexer;
 class PosixExtendedParser;
@@ -32,7 +34,6 @@ class RegexStringView;
 }
 
 using regex::ECMA262Parser;
-using regex::Error;
 using regex::Lexer;
 using regex::PosixExtendedParser;
 using regex::RegexStringView;

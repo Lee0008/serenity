@@ -1,22 +1,23 @@
 /*
  * Copyright (c) 2020-2021, the SerenityOS developers.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/FlyString.h>
 #include <AK/String.h>
-#include <AK/StringBuilder.h>
+#include <math.h>
 
 namespace Web::CSS {
 
 class Token {
-    friend class Parser;
     friend class Tokenizer;
 
 public:
-    enum class TokenType {
+    enum class Type {
         Invalid,
         EndOfFile,
         Ident,
@@ -55,36 +56,133 @@ public:
         Number,
     };
 
-    bool is_eof() const { return m_type == TokenType::EndOfFile; }
-    bool is_whitespace() const { return m_type == TokenType::Whitespace; }
-    bool is_cdo() const { return m_type == TokenType::CDO; }
-    bool is_cdc() const { return m_type == TokenType::CDC; }
-    bool is_at() const { return m_type == TokenType::AtKeyword; }
-    bool is_semicolon() const { return m_type == TokenType::Semicolon; }
-    bool is_open_curly() const { return m_type == TokenType::OpenCurly; }
-    bool is_open_square() const { return m_type == TokenType::OpenSquare; }
-    bool is_open_paren() const { return m_type == TokenType::OpenParen; }
-    bool is_close_paren() const { return m_type == TokenType::CloseParen; }
-    bool is_close_square() const { return m_type == TokenType::CloseSquare; }
-    bool is_close_curly() const { return m_type == TokenType::CloseCurly; }
-    bool is_function() const { return m_type == TokenType::Function; }
-    bool is_colon() const { return m_type == TokenType::Colon; }
-    bool is_ident() const { return m_type == TokenType::Ident; }
-    bool is_delim() const { return m_type == TokenType::Delim; }
-    bool is_comma() const { return m_type == TokenType::Comma; }
+    struct Position {
+        size_t line { 0 };
+        size_t column { 0 };
+    };
 
-    TokenType mirror_variant() const;
+    Type type() const { return m_type; }
+    bool is(Type type) const { return m_type == type; }
+
+    StringView ident() const
+    {
+        VERIFY(m_type == Type::Ident);
+        return m_value.view();
+    }
+
+    StringView function() const
+    {
+        VERIFY(m_type == Type::Function);
+        return m_value.view();
+    }
+
+    StringView delim() const
+    {
+        VERIFY(m_type == Type::Delim);
+        return m_value.view();
+    }
+
+    StringView string() const
+    {
+        VERIFY(m_type == Type::String);
+        return m_value.view();
+    }
+
+    StringView url() const
+    {
+        VERIFY(m_type == Type::Url);
+        return m_value.view();
+    }
+
+    StringView at_keyword() const
+    {
+        VERIFY(m_type == Type::AtKeyword);
+        return m_value.view();
+    }
+
+    HashType hash_type() const
+    {
+        VERIFY(m_type == Type::Hash);
+        return m_hash_type;
+    }
+    StringView hash_value() const
+    {
+        VERIFY(m_type == Type::Hash);
+        return m_value.view();
+    }
+
+    bool is(NumberType number_type) const { return is(Token::Type::Number) && m_number_type == number_type; }
+    StringView number_string_value() const
+    {
+        VERIFY(m_type == Type::Number);
+        return m_value.view();
+    }
+    double number_value() const
+    {
+        VERIFY(m_type == Type::Number);
+        return m_number_value;
+    }
+    i64 to_integer() const
+    {
+        VERIFY(m_type == Type::Number && m_number_type == NumberType::Integer);
+        return to_closest_integer(m_number_value);
+    }
+    bool is_integer_value_signed() const { return number_string_value().starts_with('-') || number_string_value().starts_with('+'); }
+
+    StringView dimension_unit() const
+    {
+        VERIFY(m_type == Type::Dimension);
+        return m_unit.view();
+    }
+    double dimension_value() const
+    {
+        VERIFY(m_type == Type::Dimension);
+        return m_number_value;
+    }
+    i64 dimension_value_int() const { return to_closest_integer(dimension_value()); }
+
+    double percentage() const
+    {
+        VERIFY(m_type == Type::Percentage);
+        return m_number_value;
+    }
+
+    NumberType number_type() const
+    {
+        VERIFY((m_type == Type::Number) || (m_type == Type::Dimension) || (m_type == Type::Percentage));
+        return m_number_type;
+    }
+
+    Type mirror_variant() const;
     String bracket_string() const;
     String bracket_mirror_string() const;
+
     String to_string() const;
+    String to_debug_string() const;
+
+    Position const& start_position() const { return m_start_position; }
+    Position const& end_position() const { return m_end_position; }
 
 private:
-    TokenType m_type { TokenType::Invalid };
+    static i64 to_closest_integer(double value)
+    {
+        // https://www.w3.org/TR/css-values-4/#numeric-types
+        // When a value cannot be explicitly supported due to range/precision limitations, it must be converted
+        // to the closest value supported by the implementation, but how the implementation defines "closest"
+        // is explicitly undefined as well.
+        return static_cast<i64>(clamp(round(value), NumericLimits<i64>::min(), NumericLimits<i64>::max()));
+    }
 
-    StringBuilder m_value;
-    StringBuilder m_unit;
+    Type m_type { Type::Invalid };
+
+    FlyString m_value;
+    FlyString m_unit;
     HashType m_hash_type { HashType::Unrestricted };
     NumberType m_number_type { NumberType::Integer };
+    double m_number_value { 0 };
+
+    Position m_start_position;
+    Position m_end_position;
 };
 
 }

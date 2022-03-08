@@ -1,58 +1,82 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2022, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/OwnPtr.h>
 #include <LibWeb/Forward.h>
+#include <LibWeb/Layout/FormattingState.h>
 
 namespace Web::Layout {
 
 class FormattingContext {
 public:
-    virtual void run(Box&, LayoutMode) = 0;
+    virtual ~FormattingContext();
 
-    Box& context_box() { return *m_context_box; }
-    const Box& context_box() const { return *m_context_box; }
+    enum class Type {
+        Block,
+        Inline,
+        Flex,
+        Table,
+        SVG,
+    };
+
+    virtual void run(Box const&, LayoutMode) = 0;
+
+    Box const& context_box() const { return m_context_box; }
 
     FormattingContext* parent() { return m_parent; }
     const FormattingContext* parent() const { return m_parent; }
 
-    virtual bool is_block_formatting_context() const { return false; }
+    Type type() const { return m_type; }
+    bool is_block_formatting_context() const { return type() == Type::Block; }
+
+    virtual bool inhibits_floating() const { return false; }
 
     static bool creates_block_formatting_context(const Box&);
 
-    static float compute_width_for_replaced_element(const ReplacedBox&);
-    static float compute_height_for_replaced_element(const ReplacedBox&);
+    static float compute_width_for_replaced_element(FormattingState const&, ReplacedBox const&);
+    static float compute_height_for_replaced_element(FormattingState const&, ReplacedBox const&);
+
+    OwnPtr<FormattingContext> create_independent_formatting_context_if_needed(FormattingState&, Box const& child_box);
+
+    virtual void parent_context_did_dimension_child_root_box() { }
 
 protected:
-    FormattingContext(Box&, FormattingContext* parent = nullptr);
-    virtual ~FormattingContext();
+    FormattingContext(Type, FormattingState&, Box const&, FormattingContext* parent = nullptr);
 
-    void layout_inside(Box&, LayoutMode);
+    OwnPtr<FormattingContext> layout_inside(Box const&, LayoutMode);
+    void compute_position(Box const&);
 
     struct ShrinkToFitResult {
         float preferred_width { 0 };
         float preferred_minimum_width { 0 };
     };
 
-    static float tentative_width_for_replaced_element(const ReplacedBox&, const CSS::Length& width);
-    static float tentative_height_for_replaced_element(const ReplacedBox&, const CSS::Length& width);
+    static float tentative_width_for_replaced_element(FormattingState const&, ReplacedBox const&, CSS::Length const& width);
+    static float tentative_height_for_replaced_element(FormattingState const&, ReplacedBox const&, CSS::Length const& height);
+    static float compute_auto_height_for_block_formatting_context_root(FormattingState const&, BlockContainer const&);
+    static float compute_auto_height_for_block_level_element(FormattingState const&, Box const&);
 
-    ShrinkToFitResult calculate_shrink_to_fit_widths(Box&);
+    ShrinkToFitResult calculate_shrink_to_fit_widths(Box const&);
 
-    void layout_absolutely_positioned_element(Box&);
-    void compute_width_for_absolutely_positioned_element(Box&);
-    void compute_width_for_absolutely_positioned_non_replaced_element(Box&);
-    void compute_width_for_absolutely_positioned_replaced_element(ReplacedBox&);
-    void compute_height_for_absolutely_positioned_element(Box&);
-    void compute_height_for_absolutely_positioned_non_replaced_element(Box&);
-    void compute_height_for_absolutely_positioned_replaced_element(ReplacedBox&);
+    void layout_absolutely_positioned_element(Box const&);
+    void compute_width_for_absolutely_positioned_element(Box const&);
+    void compute_width_for_absolutely_positioned_non_replaced_element(Box const&);
+    void compute_width_for_absolutely_positioned_replaced_element(ReplacedBox const&);
+    void compute_height_for_absolutely_positioned_element(Box const&);
+    void compute_height_for_absolutely_positioned_non_replaced_element(Box const&);
+    void compute_height_for_absolutely_positioned_replaced_element(ReplacedBox const&);
+
+    Type m_type {};
 
     FormattingContext* m_parent { nullptr };
-    Box* m_context_box { nullptr };
+    Box const& m_context_box;
+
+    FormattingState& m_state;
 };
 
 }

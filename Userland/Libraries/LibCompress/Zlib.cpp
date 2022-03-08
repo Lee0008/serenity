@@ -6,7 +6,6 @@
 
 #include <AK/Span.h>
 #include <AK/Types.h>
-#include <AK/Vector.h>
 #include <LibCompress/Deflate.h>
 #include <LibCompress/Zlib.h>
 
@@ -41,7 +40,7 @@ Optional<Zlib> Zlib::try_create(ReadonlyBytes data)
     return zlib;
 }
 
-Zlib::Zlib(const ReadonlyBytes& data)
+Zlib::Zlib(ReadonlyBytes data)
     : m_input_data(data)
 {
 }

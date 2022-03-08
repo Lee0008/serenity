@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, Alex Major
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,6 +10,8 @@
 #include <AK/Iterator.h>
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
+#include <LibMain/Main.h>
+#include <errno_codes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,17 +30,17 @@ static FlatPtr parse_from(ArgIter&);
 
 template<>
 struct AK::Formatter<Syscall::Function> : Formatter<StringView> {
-    void format(FormatBuilder& builder, Syscall::Function function)
+    ErrorOr<void> format(FormatBuilder& builder, Syscall::Function function)
     {
         return Formatter<StringView>::format(builder, to_string(function));
     }
 };
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     bool output_buffer = false;
     bool list_syscalls = false;
-    Vector<const char*> arguments;
+    Vector<const char*> syscall_arguments;
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help(
@@ -53,8 +56,8 @@ int main(int argc, char** argv)
         "Full example: syscall -o realpath [ /usr/share/man/man2/getgid.md 1024 buf 1024 ]");
     args_parser.add_option(list_syscalls, "List all existing syscalls, and exit", "list-syscalls", 'l');
     args_parser.add_option(output_buffer, "Output the contents of the buffer (beware of stray zero bytes!)", "output-buffer", 'o');
-    args_parser.add_positional_argument(arguments, "Syscall arguments; see general help.", "syscall-arguments", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.add_positional_argument(syscall_arguments, "Syscall arguments; see general help.", "syscall-arguments", Core::ArgsParser::Required::No);
+    args_parser.parse(arguments);
 
     if (list_syscalls) {
         outln("syscall list:");
@@ -64,12 +67,12 @@ int main(int argc, char** argv)
         exit(0);
     }
 
-    if (arguments.is_empty()) {
-        args_parser.print_usage(stderr, argv[0]);
+    if (syscall_arguments.is_empty()) {
+        args_parser.print_usage(stderr, arguments.argv[0]);
         exit(1);
     }
 
-    ArgIter iter = arguments.begin();
+    ArgIter iter = syscall_arguments.begin();
     for (size_t i = 0; i < SC_NARG && !iter.is_end(); i++) {
         arg[i] = parse_from(iter);
     }
@@ -80,7 +83,7 @@ int main(int argc, char** argv)
 
     if (arg[0] > Syscall::Function::__Count) {
         for (int sc = 0; sc < Syscall::Function::__Count; ++sc) {
-            if (strcmp(Syscall::to_string((Syscall::Function)sc), (char*)arg[0]) == 0) {
+            if (Syscall::to_string((Syscall::Function)sc) == (char const*)arg[0]) {
                 arg[0] = sc;
                 break;
             }
@@ -93,12 +96,14 @@ int main(int argc, char** argv)
 
     dbgln_if(SYSCALL_1_DEBUG, "Calling {} {:p} {:p} {:p}\n", arg[0], arg[1], arg[2], arg[3]);
     int rc = syscall(arg[0], arg[1], arg[2], arg[3]);
-    if (rc == -1)
-        perror("syscall");
     if (output_buffer)
         fwrite(outbuf, 1, sizeof(outbuf), stdout);
 
-    warnln("Syscall return: {}", rc);
+    if (-rc >= 0 && -rc < EMAXERRNO) {
+        warnln("Syscall return: {} ({})", rc, strerror(-rc));
+    } else {
+        warnln("Syscall return: {} (?)", rc);
+    }
     return 0;
 }
 

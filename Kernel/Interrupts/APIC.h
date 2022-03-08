@@ -7,8 +7,8 @@
 #pragma once
 
 #include <AK/Types.h>
+#include <Kernel/Memory/MemoryManager.h>
 #include <Kernel/Time/HardwareTimer.h>
-#include <Kernel/VM/MemoryManager.h>
 
 namespace Kernel {
 
@@ -26,6 +26,7 @@ public:
 
     bool init_bsp();
     void eoi();
+    void setup_ap_boot_environment();
     void boot_aps();
     void enable(u32 cpu);
     void init_finished(u32 cpu);
@@ -47,11 +48,7 @@ public:
     u32 get_timer_divisor();
 
 private:
-    class ICRReg {
-        u32 m_low { 0 };
-        u32 m_high { 0 };
-
-    public:
+    struct ICRReg {
         enum DeliveryMode {
             Fixed = 0x0,
             LowPriority = 0x1,
@@ -79,27 +76,33 @@ private:
             AllExcludingSelf = 0x3,
         };
 
-        ICRReg(u8 vector, DeliveryMode delivery_mode, DestinationMode destination_mode, Level level, TriggerMode trigger_mode, DestinationShorthand destinationShort, u8 destination = 0)
-            : m_low(vector | (delivery_mode << 8) | (destination_mode << 11) | (level << 14) | (static_cast<u32>(trigger_mode) << 15) | (destinationShort << 18))
-            , m_high((u32)destination << 24)
-        {
-        }
+        u8 vector { 0 };
+        u32 destination { 0 };
+        DeliveryMode delivery_mode { DeliveryMode::Fixed };
+        DestinationMode destination_mode { DestinationMode::Physical };
+        Level level { Level::DeAssert };
+        TriggerMode trigger_mode { TriggerMode::Edge };
+        DestinationShorthand destination_short { DestinationShorthand::NoShorthand };
 
-        u32 low() const { return m_low; }
-        u32 high() const { return m_high; }
+        u32 x_low() const { return (u32)vector | (delivery_mode << 8) | (destination_mode << 11) | (level << 14) | (static_cast<u32>(trigger_mode) << 15) | (destination_short << 18); }
+        u32 x_high() const { return destination << 24; }
+        u64 x2_value() const { return ((u64)destination << 32) | x_low(); }
     };
 
-    OwnPtr<Region> m_apic_base;
+    OwnPtr<Memory::Region> m_apic_base;
     Vector<OwnPtr<Processor>> m_ap_processor_info;
+    Vector<OwnPtr<Memory::Region>> m_ap_temporary_boot_stacks;
     Vector<Thread*> m_ap_idle_threads;
+    OwnPtr<Memory::Region> m_ap_boot_environment;
     Atomic<u8> m_apic_ap_count { 0 };
     Atomic<u8> m_apic_ap_continue { 0 };
     u32 m_processor_cnt { 0 };
     u32 m_processor_enabled_cnt { 0 };
     APICTimer* m_apic_timer { nullptr };
+    bool m_is_x2 { false };
 
     static PhysicalAddress get_base();
-    static void set_base(const PhysicalAddress& base);
+    void set_base(const PhysicalAddress& base);
     void write_register(u32 offset, u32 value);
     u32 read_register(u32 offset);
     void set_lvt(u32 offset, u8 interrupt);

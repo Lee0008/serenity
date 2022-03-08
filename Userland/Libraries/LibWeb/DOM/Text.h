@@ -19,14 +19,19 @@ public:
     explicit Text(Document&, const String&);
     virtual ~Text() override;
 
+    static NonnullRefPtr<Text> create_with_global_object(Bindings::WindowObject& window, String const& data);
+
     // ^Node
     virtual FlyString node_name() const override { return "#text"; }
     virtual bool is_editable() const override { return m_always_editable || CharacterData::is_editable(); }
 
     void set_always_editable(bool b) { m_always_editable = b; }
 
+    void set_owner_input_element(Badge<HTML::HTMLInputElement>, HTML::HTMLInputElement&);
+    HTML::HTMLInputElement* owner_input_element() { return m_owner_input_element; }
+
 private:
-    virtual RefPtr<Layout::Node> create_layout_node() override;
+    WeakPtr<HTML::HTMLInputElement> m_owner_input_element;
 
     bool m_always_editable { false };
 };

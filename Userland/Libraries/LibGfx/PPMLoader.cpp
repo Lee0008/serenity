@@ -9,7 +9,6 @@
 #include "Streamer.h"
 #include <AK/Endian.h>
 #include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
 #include <string.h>
@@ -102,19 +101,6 @@ static bool read_image_data(PPMLoadingContext& context, Streamer& streamer)
     return true;
 }
 
-RefPtr<Gfx::Bitmap> load_ppm(const StringView& path)
-{
-    return load<PPMLoadingContext>(path);
-}
-
-RefPtr<Gfx::Bitmap> load_ppm_from_memory(const u8* data, size_t length)
-{
-    auto bitmap = load_impl<PPMLoadingContext>(data, length);
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded PPM: <memory>", bitmap->size()));
-    return bitmap;
-}
-
 PPMImageDecoderPlugin::PPMImageDecoderPlugin(const u8* data, size_t size)
 {
     m_context = make<PPMLoadingContext>();
@@ -140,33 +126,18 @@ IntSize PPMImageDecoderPlugin::size()
     return { m_context->width, m_context->height };
 }
 
-RefPtr<Gfx::Bitmap> PPMImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == PPMLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < PPMLoadingContext::State::Decoded) {
-        bool success = decode(*m_context);
-        if (!success)
-            return nullptr;
-    }
-
-    VERIFY(m_context->bitmap);
-    return m_context->bitmap;
-}
-
 void PPMImageDecoderPlugin::set_volatile()
 {
     if (m_context->bitmap)
         m_context->bitmap->set_volatile();
 }
 
-bool PPMImageDecoderPlugin::set_nonvolatile()
+bool PPMImageDecoderPlugin::set_nonvolatile(bool& was_purged)
 {
     if (!m_context->bitmap)
         return false;
 
-    return m_context->bitmap->set_nonvolatile();
+    return m_context->bitmap->set_nonvolatile(was_purged);
 }
 
 bool PPMImageDecoderPlugin::sniff()
@@ -198,13 +169,22 @@ size_t PPMImageDecoderPlugin::frame_count()
     return 1;
 }
 
-ImageFrameDescriptor PPMImageDecoderPlugin::frame(size_t i)
+ErrorOr<ImageFrameDescriptor> PPMImageDecoderPlugin::frame(size_t index)
 {
-    if (i > 0) {
-        return { bitmap(), 0 };
+    if (index > 0)
+        return Error::from_string_literal("PPMImageDecoderPlugin: Invalid frame index"sv);
+
+    if (m_context->state == PPMLoadingContext::State::Error)
+        return Error::from_string_literal("PGMImageDecoderPlugin: Decoding failed"sv);
+
+    if (m_context->state < PPMLoadingContext::State::Decoded) {
+        bool success = decode(*m_context);
+        if (!success)
+            return Error::from_string_literal("PGMImageDecoderPlugin: Decoding failed"sv);
     }
 
-    return {};
+    VERIFY(m_context->bitmap);
+    return ImageFrameDescriptor { m_context->bitmap, 0 };
 }
 
 }

@@ -7,6 +7,7 @@
 #include <AK/Debug.h>
 #include <AK/StringBuilder.h>
 #include <LibMarkdown/Table.h>
+#include <LibMarkdown/Visitor.h>
 
 namespace Markdown {
 
@@ -16,9 +17,7 @@ String Table::render_for_terminal(size_t view_width) const
     StringBuilder builder;
 
     auto write_aligned = [&](const auto& text, auto width, auto alignment) {
-        size_t original_length = 0;
-        for (auto& span : text.spans())
-            original_length += span.text.length();
+        size_t original_length = text.terminal_length();
         auto string = text.render_for_terminal();
         if (alignment == Alignment::Center) {
             auto padding_length = (width - original_length) / 2;
@@ -64,18 +63,32 @@ String Table::render_for_terminal(size_t view_width) const
         builder.append("\n");
     }
 
+    builder.append("\n");
+
     return builder.to_string();
 }
 
-String Table::render_to_html() const
+String Table::render_to_html(bool) const
 {
+    auto alignment_string = [](Alignment alignment) {
+        switch (alignment) {
+        case Alignment::Center:
+            return "center"sv;
+        case Alignment::Left:
+            return "left"sv;
+        case Alignment::Right:
+            return "right"sv;
+        }
+        VERIFY_NOT_REACHED();
+    };
+
     StringBuilder builder;
 
     builder.append("<table>");
     builder.append("<thead>");
     builder.append("<tr>");
     for (auto& column : m_columns) {
-        builder.append("<th>");
+        builder.appendff("<th style='text-align: {}'>", alignment_string(column.alignment));
         builder.append(column.header.render_to_html());
         builder.append("</th>");
     }
@@ -86,7 +99,7 @@ String Table::render_to_html() const
         builder.append("<tr>");
         for (auto& column : m_columns) {
             VERIFY(i < column.rows.size());
-            builder.append("<td>");
+            builder.appendff("<td style='text-align: {}'>", alignment_string(column.alignment));
             builder.append(column.rows[i].render_to_html());
             builder.append("</td>");
         }
@@ -98,7 +111,22 @@ String Table::render_to_html() const
     return builder.to_string();
 }
 
-OwnPtr<Table> Table::parse(Vector<StringView>::ConstIterator& lines)
+RecursionDecision Table::walk(Visitor& visitor) const
+{
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    for (auto const& column : m_columns) {
+        rd = column.walk(visitor);
+        if (rd == RecursionDecision::Break)
+            return rd;
+    }
+
+    return RecursionDecision::Continue;
+}
+
+OwnPtr<Table> Table::parse(LineIterator& lines)
 {
     auto peek_it = lines;
     auto first_line = *peek_it;
@@ -137,11 +165,8 @@ OwnPtr<Table> Table::parse(Vector<StringView>::ConstIterator& lines)
     table->m_columns.resize(header_delimiters.size());
 
     for (size_t i = 0; i < header_segments.size(); ++i) {
-        auto text_option = Text::parse(header_segments[i]);
-        if (!text_option.has_value())
-            return {}; // An invalid 'text' in the header should just fail the table parse.
+        auto text = Text::parse(header_segments[i]);
 
-        auto text = text_option.release_value();
         auto& column = table->m_columns[i];
 
         column.header = move(text);
@@ -183,7 +208,7 @@ OwnPtr<Table> Table::parse(Vector<StringView>::ConstIterator& lines)
     size_t row_count = 0;
     ++lines;
     while (!lines.is_end()) {
-        auto& line = *lines;
+        auto line = *lines;
         if (!line.starts_with('|'))
             break;
 
@@ -199,16 +224,10 @@ OwnPtr<Table> Table::parse(Vector<StringView>::ConstIterator& lines)
             if (i >= segments.size()) {
                 // Ran out of segments, but still have headers.
                 // Just make an empty cell.
-                table->m_columns[i].rows.append(Text { "" });
+                table->m_columns[i].rows.append(Text::parse(""));
             } else {
-                auto text_option = Text::parse(segments[i]);
-                // We treat an invalid 'text' as a literal.
-                if (text_option.has_value()) {
-                    auto text = text_option.release_value();
-                    table->m_columns[i].rows.append(move(text));
-                } else {
-                    table->m_columns[i].rows.append(Text { segments[i] });
-                }
+                auto text = Text::parse(segments[i]);
+                table->m_columns[i].rows.append(move(text));
             }
         }
     }
@@ -216,6 +235,25 @@ OwnPtr<Table> Table::parse(Vector<StringView>::ConstIterator& lines)
     table->m_row_count = row_count;
 
     return table;
+}
+
+RecursionDecision Table::Column::walk(Visitor& visitor) const
+{
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    rd = header.walk(visitor);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    for (auto const& row : rows) {
+        rd = row.walk(visitor);
+        if (rd == RecursionDecision::Break)
+            return rd;
+    }
+
+    return RecursionDecision::Continue;
 }
 
 }

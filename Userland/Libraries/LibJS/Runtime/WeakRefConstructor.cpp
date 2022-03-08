@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/WeakRef.h>
@@ -12,7 +13,7 @@
 namespace JS {
 
 WeakRefConstructor::WeakRefConstructor(GlobalObject& global_object)
-    : NativeFunction(vm().names.WeakRef, *global_object.function_prototype())
+    : NativeFunction(vm().names.WeakRef.as_string(), *global_object.function_prototype())
 {
 }
 
@@ -22,9 +23,9 @@ void WeakRefConstructor::initialize(GlobalObject& global_object)
     NativeFunction::initialize(global_object);
 
     // 26.1.2.1 WeakRef.prototype, https://tc39.es/ecma262/#sec-weak-ref.prototype
-    define_property(vm.names.prototype, global_object.weak_ref_prototype(), 0);
+    define_direct_property(vm.names.prototype, global_object.weak_ref_prototype(), 0);
 
-    define_property(vm.names.length, Value(1), Attribute::Configurable);
+    define_direct_property(vm.names.length, Value(1), Attribute::Configurable);
 }
 
 WeakRefConstructor::~WeakRefConstructor()
@@ -32,25 +33,22 @@ WeakRefConstructor::~WeakRefConstructor()
 }
 
 // 26.1.1.1 WeakRef ( target ), https://tc39.es/ecma262/#sec-weak-ref-target
-Value WeakRefConstructor::call()
+ThrowCompletionOr<Value> WeakRefConstructor::call()
 {
     auto& vm = this->vm();
-    vm.throw_exception<TypeError>(global_object(), ErrorType::ConstructorWithoutNew, vm.names.WeakRef);
-    return {};
+    return vm.throw_completion<TypeError>(global_object(), ErrorType::ConstructorWithoutNew, vm.names.WeakRef);
 }
 
 // 26.1.1.1 WeakRef ( target ), https://tc39.es/ecma262/#sec-weak-ref-target
-Value WeakRefConstructor::construct(Function&)
+ThrowCompletionOr<Object*> WeakRefConstructor::construct(FunctionObject& new_target)
 {
     auto& vm = this->vm();
-    auto target = vm.argument(0);
-    if (!target.is_object()) {
-        vm.throw_exception<TypeError>(global_object(), ErrorType::NotAnObject, target.to_string_without_side_effects());
-        return {};
-    }
+    auto& global_object = this->global_object();
 
-    // FIXME: Use OrdinaryCreateFromConstructor(newTarget, "%WeakRef.prototype%")
-    return WeakRef::create(global_object(), &target.as_object());
+    auto target = vm.argument(0);
+    if (!target.is_object())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObject, target.to_string_without_side_effects());
+    return TRY(ordinary_create_from_constructor<WeakRef>(global_object, new_target, &GlobalObject::weak_ref_prototype, &target.as_object()));
 }
 
 }

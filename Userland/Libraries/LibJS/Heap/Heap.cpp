@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2022, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -19,17 +19,31 @@
 #include <LibJS/Runtime/WeakContainer.h>
 #include <setjmp.h>
 
+#ifdef __serenity__
+#    include <serenity.h>
+#endif
+
 namespace JS {
+
+#ifdef __serenity__
+static int gc_perf_string_id;
+#endif
 
 Heap::Heap(VM& vm)
     : m_vm(vm)
 {
+#ifdef __serenity__
+    auto gc_signpost_string = "Garbage collection"sv;
+    gc_perf_string_id = perf_register_string(gc_signpost_string.characters_without_null_termination(), gc_signpost_string.length());
+#endif
+
     if constexpr (HeapBlock::min_possible_cell_size <= 16) {
         m_allocators.append(make<CellAllocator>(16));
     }
     static_assert(HeapBlock::min_possible_cell_size <= 24, "Heap Cell tracking uses too much data!");
     m_allocators.append(make<CellAllocator>(32));
     m_allocators.append(make<CellAllocator>(64));
+    m_allocators.append(make<CellAllocator>(96));
     m_allocators.append(make<CellAllocator>(128));
     m_allocators.append(make<CellAllocator>(256));
     m_allocators.append(make<CellAllocator>(512));
@@ -39,6 +53,7 @@ Heap::Heap(VM& vm)
 
 Heap::~Heap()
 {
+    vm().string_cache().clear();
     collect_garbage(CollectionType::CollectEverything);
 }
 
@@ -72,8 +87,12 @@ void Heap::collect_garbage(CollectionType collection_type, bool print_report)
     VERIFY(!m_collecting_garbage);
     TemporaryChange change(m_collecting_garbage, true);
 
-    Core::ElapsedTimer collection_measurement_timer;
-    collection_measurement_timer.start();
+#ifdef __serenity__
+    static size_t global_gc_counter = 0;
+    perf_event(PERF_EVENT_SIGNPOST, gc_perf_string_id, global_gc_counter++);
+#endif
+
+    auto collection_measurement_timer = Core::ElapsedTimer::start_new();
     if (collection_type == CollectionType::CollectGarbage) {
         if (m_gc_deferrals) {
             m_should_gc_when_deferral_ends = true;
@@ -91,15 +110,11 @@ void Heap::gather_roots(HashTable<Cell*>& roots)
     vm().gather_roots(roots);
     gather_conservative_roots(roots);
 
-    for (auto* handle : m_handles)
-        roots.set(handle->cell());
+    for (auto& handle : m_handles)
+        roots.set(handle.cell());
 
-    for (auto* list : m_marked_value_lists) {
-        for (auto& value : list->values()) {
-            if (value.is_cell())
-                roots.set(&value.as_cell());
-        }
-    }
+    for (auto& vector : m_marked_vectors)
+        vector.gather_roots(roots);
 
     if constexpr (HEAP_DEBUG) {
         dbgln("gather_roots:");
@@ -160,11 +175,12 @@ class MarkingVisitor final : public Cell::Visitor {
 public:
     MarkingVisitor() { }
 
-    virtual void visit_impl(Cell& cell)
+    virtual void visit_impl(Cell& cell) override
     {
         if (cell.is_marked())
             return;
         dbgln_if(HEAP_DEBUG, "  ! {}", &cell);
+
         cell.set_marked(true);
         cell.visit_edges(*this);
     }
@@ -173,9 +189,15 @@ public:
 void Heap::mark_live_cells(const HashTable<Cell*>& roots)
 {
     dbgln_if(HEAP_DEBUG, "mark_live_cells:");
+
     MarkingVisitor visitor;
     for (auto* root : roots)
         visitor.visit(root);
+
+    for (auto& inverse_root : m_uprooted_cells)
+        inverse_root->set_marked(false);
+
+    m_uprooted_cells.clear();
 }
 
 void Heap::sweep_dead_cells(bool print_report, const Core::ElapsedTimer& measurement_timer)
@@ -183,22 +205,18 @@ void Heap::sweep_dead_cells(bool print_report, const Core::ElapsedTimer& measure
     dbgln_if(HEAP_DEBUG, "sweep_dead_cells:");
     Vector<HeapBlock*, 32> empty_blocks;
     Vector<HeapBlock*, 32> full_blocks_that_became_usable;
-    Vector<Cell*> sweeped_cells;
 
     size_t collected_cells = 0;
     size_t live_cells = 0;
     size_t collected_cell_bytes = 0;
     size_t live_cell_bytes = 0;
 
-    auto should_store_sweeped_cells = !m_weak_containers.is_empty();
     for_each_block([&](auto& block) {
         bool block_has_live_cells = false;
         bool block_was_full = block.is_full();
         block.template for_each_cell_in_state<Cell::State::Live>([&](Cell* cell) {
             if (!cell->is_marked()) {
                 dbgln_if(HEAP_DEBUG, "  ~ {}", cell);
-                if (should_store_sweeped_cells)
-                    sweeped_cells.append(cell);
                 block.deallocate(cell);
                 ++collected_cells;
                 collected_cell_bytes += block.cell_size();
@@ -216,6 +234,9 @@ void Heap::sweep_dead_cells(bool print_report, const Core::ElapsedTimer& measure
         return IterationDecision::Continue;
     });
 
+    for (auto& weak_container : m_weak_containers)
+        weak_container.remove_dead_cells({});
+
     for (auto* block : empty_blocks) {
         dbgln_if(HEAP_DEBUG, " - HeapBlock empty @ {}: cell_size={}", block, block->cell_size());
         allocator_for_size(block->cell_size()).block_did_become_empty({}, *block);
@@ -225,9 +246,6 @@ void Heap::sweep_dead_cells(bool print_report, const Core::ElapsedTimer& measure
         dbgln_if(HEAP_DEBUG, " - HeapBlock usable again @ {}: cell_size={}", block, block->cell_size());
         allocator_for_size(block->cell_size()).block_did_become_usable({}, *block);
     }
-
-    for (auto* weak_container : m_weak_containers)
-        weak_container->remove_sweeped_cells({}, sweeped_cells);
 
     if constexpr (HEAP_DEBUG) {
         for_each_block([&](auto& block) {
@@ -258,38 +276,38 @@ void Heap::sweep_dead_cells(bool print_report, const Core::ElapsedTimer& measure
 
 void Heap::did_create_handle(Badge<HandleImpl>, HandleImpl& impl)
 {
-    VERIFY(!m_handles.contains(&impl));
-    m_handles.set(&impl);
+    VERIFY(!m_handles.contains(impl));
+    m_handles.append(impl);
 }
 
 void Heap::did_destroy_handle(Badge<HandleImpl>, HandleImpl& impl)
 {
-    VERIFY(m_handles.contains(&impl));
-    m_handles.remove(&impl);
+    VERIFY(m_handles.contains(impl));
+    m_handles.remove(impl);
 }
 
-void Heap::did_create_marked_value_list(Badge<MarkedValueList>, MarkedValueList& list)
+void Heap::did_create_marked_vector(Badge<MarkedVectorBase>, MarkedVectorBase& vector)
 {
-    VERIFY(!m_marked_value_lists.contains(&list));
-    m_marked_value_lists.set(&list);
+    VERIFY(!m_marked_vectors.contains(vector));
+    m_marked_vectors.append(vector);
 }
 
-void Heap::did_destroy_marked_value_list(Badge<MarkedValueList>, MarkedValueList& list)
+void Heap::did_destroy_marked_vector(Badge<MarkedVectorBase>, MarkedVectorBase& vector)
 {
-    VERIFY(m_marked_value_lists.contains(&list));
-    m_marked_value_lists.remove(&list);
+    VERIFY(m_marked_vectors.contains(vector));
+    m_marked_vectors.remove(vector);
 }
 
 void Heap::did_create_weak_container(Badge<WeakContainer>, WeakContainer& set)
 {
-    VERIFY(!m_weak_containers.contains(&set));
-    m_weak_containers.set(&set);
+    VERIFY(!m_weak_containers.contains(set));
+    m_weak_containers.append(set);
 }
 
 void Heap::did_destroy_weak_container(Badge<WeakContainer>, WeakContainer& set)
 {
-    VERIFY(m_weak_containers.contains(&set));
-    m_weak_containers.remove(&set);
+    VERIFY(m_weak_containers.contains(set));
+    m_weak_containers.remove(set);
 }
 
 void Heap::defer_gc(Badge<DeferGC>)
@@ -307,6 +325,11 @@ void Heap::undefer_gc(Badge<DeferGC>)
             collect_garbage();
         m_should_gc_when_deferral_ends = false;
     }
+}
+
+void Heap::uproot_cell(Cell* cell)
+{
+    m_uprooted_cells.append(cell);
 }
 
 }

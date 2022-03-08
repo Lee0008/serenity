@@ -18,7 +18,7 @@ class MapIterator final : public Object {
 public:
     static MapIterator* create(GlobalObject&, Map& map, Object::PropertyKind iteration_kind);
 
-    explicit MapIterator(Object& prototype, Map& map, Object::PropertyKind iteration_kind);
+    explicit MapIterator(Map& map, Object::PropertyKind iteration_kind, Object& prototype);
     virtual ~MapIterator() override;
 
     Map& map() const { return m_map; }
@@ -33,7 +33,7 @@ private:
     Map& m_map;
     bool m_done { false };
     Object::PropertyKind m_iteration_kind;
-    HashMap<Value, Value, ValueTraits>::IteratorType m_iterator;
+    Map::ConstIterator m_iterator;
 };
 
 }

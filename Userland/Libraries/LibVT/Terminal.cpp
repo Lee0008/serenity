@@ -5,10 +5,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "Terminal.h"
 #include <AK/Debug.h>
+#include <AK/Queue.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
+#include <AK/TemporaryChange.h>
 #include <LibVT/Color.h>
 #include <LibVT/Terminal.h>
 #ifdef KERNEL
@@ -46,7 +47,19 @@ void Terminal::clear_history()
 }
 #endif
 
-void Terminal::alter_mode(bool should_set, Parameters params, Intermediates intermediates)
+void Terminal::alter_ansi_mode(bool should_set, Parameters params)
+{
+    for (auto mode : params) {
+        switch (mode) {
+            // FIXME: implement *something* for this
+        default:
+            dbgln("Terminal::alter_ansi_mode: Unimplemented mode {} (should_set={})", mode, should_set);
+            break;
+        }
+    }
+}
+
+void Terminal::alter_private_mode(bool should_set, Parameters params)
 {
     auto steady_cursor_to_blinking = [](CursorStyle style) {
         switch (style) {
@@ -74,107 +87,115 @@ void Terminal::alter_mode(bool should_set, Parameters params, Intermediates inte
         }
     };
 
-    if (intermediates.size() > 0 && intermediates[0] == '?') {
-        for (auto mode : params) {
-            switch (mode) {
-            case 3: {
-                // 80/132-column mode (DECCOLM)
-                unsigned new_columns = should_set ? 132 : 80;
-                dbgln_if(TERMINAL_DEBUG, "Setting {}-column mode", new_columns);
-                set_size(new_columns, rows());
-                clear();
-                break;
-            }
-            case 12:
-                if (should_set) {
-                    // Start blinking cursor
-                    m_cursor_style = steady_cursor_to_blinking(m_cursor_style);
-                } else {
-                    // Stop blinking cursor
-                    m_cursor_style = blinking_cursor_to_steady(m_cursor_style);
-                }
-                m_client.set_cursor_style(m_cursor_style);
-                break;
-            case 25:
-                if (should_set) {
-                    // Show cursor
-                    m_cursor_style = m_saved_cursor_style;
-                    m_client.set_cursor_style(m_cursor_style);
-                } else {
-                    // Hide cursor
-                    m_saved_cursor_style = m_cursor_style;
-                    m_cursor_style = None;
-                    m_client.set_cursor_style(None);
-                }
-                break;
-            case 1047:
-#ifndef KERNEL
-                if (should_set) {
-                    dbgln_if(TERMINAL_DEBUG, "Switching to Alternate Screen Buffer");
-                    m_use_alternate_screen_buffer = true;
-                    clear();
-                } else {
-                    dbgln_if(TERMINAL_DEBUG, "Switching to Normal Screen Buffer");
-                    m_use_alternate_screen_buffer = false;
-                }
-                m_need_full_flush = true;
-#else
-                dbgln("Alternate Screen Buffer is not supported");
-#endif
-                break;
-            case 1048:
-                if (should_set)
-                    SCOSC();
-                else
-                    SCORC();
-                break;
-            case 1049:
-#ifndef KERNEL
-                if (should_set) {
-                    dbgln_if(TERMINAL_DEBUG, "Switching to Alternate Screen Buffer and saving state");
-                    m_normal_saved_state = m_current_state;
-                    m_use_alternate_screen_buffer = true;
-                    clear();
-                } else {
-                    dbgln_if(TERMINAL_DEBUG, "Switching to Normal Screen Buffer and restoring state");
-                    m_current_state = m_normal_saved_state;
-                    m_use_alternate_screen_buffer = false;
-                    set_cursor(cursor_row(), cursor_column());
-                }
-                m_need_full_flush = true;
-#else
-                dbgln("Alternate Screen Buffer is not supported");
-#endif
-                break;
-            case 2004:
-                dbgln_if(TERMINAL_DEBUG, "Setting bracketed mode enabled={}", should_set);
-                m_needs_bracketed_paste = should_set;
-                break;
-            default:
-                dbgln("Terminal::alter_mode: Unimplemented private mode {} (should_set={})", mode, should_set);
-                break;
-            }
+    for (auto mode : params) {
+        switch (mode) {
+        case 1:
+            // Cursor Keys Mode (DECCKM)
+            dbgln_if(TERMINAL_DEBUG, "Setting cursor keys mode (should_set={})", should_set);
+            m_cursor_keys_mode = should_set ? CursorKeysMode::Application : CursorKeysMode::Cursor;
+            break;
+        case 3: {
+            // 80/132-column mode (DECCOLM)
+            unsigned new_columns = should_set ? 132 : 80;
+            dbgln_if(TERMINAL_DEBUG, "Setting {}-column mode", new_columns);
+            set_size(new_columns, rows());
+            clear();
+            break;
         }
-    } else {
-        for (auto mode : params) {
-            switch (mode) {
-            // FIXME: implement *something* for this
-            default:
-                dbgln("Terminal::alter_mode: Unimplemented mode {} (should_set={})", mode, should_set);
-                break;
+        case 12:
+            if (should_set) {
+                // Start blinking cursor
+                m_cursor_style = steady_cursor_to_blinking(m_cursor_style);
+            } else {
+                // Stop blinking cursor
+                m_cursor_style = blinking_cursor_to_steady(m_cursor_style);
             }
+            m_client.set_cursor_style(m_cursor_style);
+            break;
+        case 25:
+            if (should_set) {
+                // Show cursor
+                m_cursor_style = m_saved_cursor_style;
+                m_client.set_cursor_style(m_cursor_style);
+            } else {
+                // Hide cursor
+                m_saved_cursor_style = m_cursor_style;
+                m_cursor_style = None;
+                m_client.set_cursor_style(None);
+            }
+            break;
+        case 1047:
+#ifndef KERNEL
+            if (should_set) {
+                dbgln_if(TERMINAL_DEBUG, "Switching to Alternate Screen Buffer");
+                m_use_alternate_screen_buffer = true;
+                clear();
+                m_client.terminal_history_changed(-m_history.size());
+            } else {
+                dbgln_if(TERMINAL_DEBUG, "Switching to Normal Screen Buffer");
+                m_use_alternate_screen_buffer = false;
+                m_client.terminal_history_changed(m_history.size());
+            }
+            m_need_full_flush = true;
+#else
+            dbgln("Alternate Screen Buffer is not supported");
+#endif
+            break;
+        case 1048:
+            if (should_set)
+                SCOSC();
+            else
+                SCORC();
+            break;
+        case 1049:
+#ifndef KERNEL
+            if (should_set) {
+                dbgln_if(TERMINAL_DEBUG, "Switching to Alternate Screen Buffer and saving state");
+                m_normal_saved_state = m_current_state;
+                m_use_alternate_screen_buffer = true;
+                clear();
+                m_client.terminal_history_changed(-m_history.size());
+            } else {
+                dbgln_if(TERMINAL_DEBUG, "Switching to Normal Screen Buffer and restoring state");
+                m_current_state = m_normal_saved_state;
+                m_use_alternate_screen_buffer = false;
+                set_cursor(cursor_row(), cursor_column());
+                m_client.terminal_history_changed(m_history.size());
+            }
+            m_need_full_flush = true;
+#else
+            dbgln("Alternate Screen Buffer is not supported");
+#endif
+            break;
+        case 2004:
+            dbgln_if(TERMINAL_DEBUG, "Setting bracketed mode enabled={}", should_set);
+            m_needs_bracketed_paste = should_set;
+            break;
+        default:
+            dbgln("Terminal::alter_private_mode: Unimplemented private mode {} (should_set={})", mode, should_set);
+            break;
         }
     }
 }
 
-void Terminal::RM(Parameters params, Intermediates intermediates)
+void Terminal::RM(Parameters params)
 {
-    alter_mode(false, params, intermediates);
+    alter_ansi_mode(false, params);
 }
 
-void Terminal::SM(Parameters params, Intermediates intermediates)
+void Terminal::DECRST(Parameters params)
 {
-    alter_mode(true, params, intermediates);
+    alter_private_mode(false, params);
+}
+
+void Terminal::SM(Parameters params)
+{
+    alter_ansi_mode(true, params);
+}
+
+void Terminal::DECSET(Parameters params)
+{
+    alter_private_mode(true, params);
 }
 
 void Terminal::SGR(Parameters params)
@@ -362,7 +383,11 @@ void Terminal::XTERM_WM(Parameters params)
             return;
         }
         dbgln_if(TERMINAL_DEBUG, "Title stack push: {}", m_current_window_title);
-        [[maybe_unused]] auto rc = m_title_stack.try_append(move(m_current_window_title));
+#ifdef KERNEL
+        (void)m_title_stack.try_append(m_current_window_title.release_nonnull()); // FIXME: Propagate Error
+#else
+        (void)m_title_stack.try_append(move(m_current_window_title));
+#endif
         break;
     }
     case 23: {
@@ -374,7 +399,11 @@ void Terminal::XTERM_WM(Parameters params)
         }
         m_current_window_title = m_title_stack.take_last();
         dbgln_if(TERMINAL_DEBUG, "Title stack pop: {}", m_current_window_title);
+#ifdef KERNEL
+        m_client.set_window_title(m_current_window_title->view());
+#else
         m_client.set_window_title(m_current_window_title);
+#endif
         break;
     }
     default:
@@ -392,6 +421,9 @@ void Terminal::DECSTBM(Parameters params)
         bottom = params[1];
     if ((bottom - top) < 2 || bottom > m_rows) {
         dbgln("Error: DECSTBM: scrolling region invalid: {}-{}", top, bottom);
+        return;
+    }
+    if (top >= bottom) {
         return;
     }
     m_scroll_region_top = top - 1;
@@ -706,6 +738,10 @@ void Terminal::DCH(Parameters params)
 void Terminal::linefeed()
 {
     u16 new_row = cursor_row();
+#ifndef KERNEL
+    if (!m_controls_are_logically_generated)
+        active_buffer()[new_row].set_terminated(m_column_before_carriage_return.value_or(cursor_column()));
+#endif
     if (cursor_row() == m_scroll_region_bottom) {
         scroll_up();
     } else {
@@ -719,6 +755,7 @@ void Terminal::linefeed()
 void Terminal::carriage_return()
 {
     dbgln_if(TERMINAL_DEBUG, "Carriage return");
+    m_column_before_carriage_return = cursor_column();
     set_cursor(cursor_row(), 0);
 }
 
@@ -852,6 +889,7 @@ void Terminal::set_cursor(unsigned a_row, unsigned a_column, bool skip_debug)
 {
     unsigned row = min(a_row, m_rows - 1u);
     unsigned column = min(a_column, m_columns - 1u);
+    m_stomp = false;
     if (row == cursor_row() && column == cursor_column())
         return;
     VERIFY(row < rows());
@@ -859,7 +897,6 @@ void Terminal::set_cursor(unsigned a_row, unsigned a_column, bool skip_debug)
     invalidate_cursor();
     m_current_state.cursor.row = row;
     m_current_state.cursor.column = column;
-    m_stomp = false;
     invalidate_cursor();
     if (!skip_debug)
         dbgln_if(TERMINAL_DEBUG, "Set cursor position: {},{}", cursor_row(), cursor_column());
@@ -929,6 +966,16 @@ void Terminal::DECDC(Parameters params)
         scroll_left(row, cursor_column(), num);
 }
 
+void Terminal::DECPNM()
+{
+    dbgln("FIXME: implement setting the keypad to numeric mode");
+}
+
+void Terminal::DECPAM()
+{
+    dbgln("FIXME: implement setting the keypad to application mode");
+}
+
 void Terminal::DSR(Parameters params)
 {
     if (params.size() == 1 && params[0] == 5) {
@@ -936,7 +983,9 @@ void Terminal::DSR(Parameters params)
         emit_string("\033[0n"); // Terminal status OK!
     } else if (params.size() == 1 && params[0] == 6) {
         // Cursor position query
-        emit_string(String::formatted("\e[{};{}R", cursor_row() + 1, cursor_column() + 1));
+        StringBuilder builder;
+        MUST(builder.try_appendff("\e[{};{}R", cursor_row() + 1, cursor_column() + 1)); // StringBuilder's inline capacity of 256 is enough to guarantee no allocations
+        emit_string(builder.string_view());
     } else {
         dbgln("Unknown DSR");
     }
@@ -959,6 +1008,9 @@ void Terminal::on_input(u8 byte)
 
 void Terminal::emit_code_point(u32 code_point)
 {
+    auto working_set = m_working_sets[m_active_working_set_index];
+    code_point = m_character_set_translator.translate_code_point(working_set, code_point);
+
     auto new_column = cursor_column() + 1;
     if (new_column < columns()) {
         put_character_at(cursor_row(), cursor_column(), code_point);
@@ -967,6 +1019,7 @@ void Terminal::emit_code_point(u32 code_point)
     }
     if (m_stomp) {
         m_stomp = false;
+        TemporaryChange change { m_controls_are_logically_generated, true };
         carriage_return();
         linefeed();
         put_character_at(cursor_row(), cursor_column(), code_point);
@@ -980,6 +1033,11 @@ void Terminal::emit_code_point(u32 code_point)
 
 void Terminal::execute_control_code(u8 code)
 {
+    ArmedScopeGuard clear_position_before_cr {
+        [&] {
+            m_column_before_carriage_return.clear();
+        }
+    };
     switch (code) {
     case '\a':
         m_client.beep();
@@ -1002,10 +1060,13 @@ void Terminal::execute_control_code(u8 code)
     case '\n':
     case '\v':
     case '\f':
+        if (m_column_before_carriage_return == m_columns - 1)
+            m_column_before_carriage_return = m_columns;
         linefeed();
         return;
     case '\r':
         carriage_return();
+        clear_position_before_cr.disarm();
         return;
     default:
         unimplemented_control_code(code);
@@ -1044,8 +1105,20 @@ void Terminal::execute_escape_sequence(Intermediates intermediates, bool ignore,
         case '9':
             DECFI();
             return;
+        case '=':
+            DECPAM();
+            return;
+        case '>':
+            DECPNM();
+            return;
         }
-    } else if (intermediates[0] == '#') {
+        unimplemented_escape_sequence(intermediates, last_byte);
+        return;
+    }
+
+    char intermediate = intermediates[0];
+    switch (intermediate) {
+    case '#':
         switch (last_byte) {
         case '8':
             // Confidence Test - Fill screen with E's
@@ -1056,7 +1129,39 @@ void Terminal::execute_escape_sequence(Intermediates intermediates, bool ignore,
             }
             return;
         }
+        break;
+    case '(':
+    case ')':
+    case '*':
+    case '+':
+        // Determine G0..G3 index
+        size_t working_set_index = intermediate - '(';
+
+        CharacterSet new_set;
+        switch (last_byte) {
+        case 'B':
+            new_set = CharacterSet::Iso_8859_1;
+            break;
+        case '0':
+            new_set = CharacterSet::VT100;
+            break;
+        case 'U':
+            new_set = CharacterSet::Null;
+            break;
+        case 'K':
+            new_set = CharacterSet::UserDefined;
+            break;
+        default:
+            unimplemented_escape_sequence(intermediates, last_byte);
+            return;
+        }
+
+        dbgln_if(TERMINAL_DEBUG, "Setting G{} working set to character set {}", working_set_index, to_underlying(new_set));
+        VERIFY(working_set_index <= 3);
+        m_working_sets[working_set_index] = new_set;
+        return;
     }
+
     unimplemented_escape_sequence(intermediates, last_byte);
 }
 
@@ -1066,124 +1171,95 @@ void Terminal::execute_csi_sequence(Parameters parameters, Intermediates interme
     if (ignore)
         dbgln("CSI sequence has its ignore flag set.");
 
-    switch (last_byte) {
-    case '@':
-        ICH(parameters);
-        break;
-    case 'A':
-        CUU(parameters);
-        break;
-    case 'B':
-        CUD(parameters);
-        break;
-    case 'C':
-        CUF(parameters);
-        break;
-    case 'D':
-        CUB(parameters);
-        break;
-    case 'E':
-        CNL(parameters);
-        break;
-    case 'F':
-        CPL(parameters);
-        break;
-    case 'G':
-        CHA(parameters);
-        break;
-    case 'H':
-        CUP(parameters);
-        break;
-    case 'J':
-        ED(parameters);
-        break;
-    case 'K':
-        EL(parameters);
-        break;
-    case 'L':
-        IL(parameters);
-        break;
-    case 'M':
-        DL(parameters);
-        break;
-    case 'P':
-        DCH(parameters);
-        break;
-    case 'S':
-        SU(parameters);
-        break;
-    case 'T':
-        SD(parameters);
-        break;
-    case 'X':
-        ECH(parameters);
-        break;
-    case '`':
-        HPA(parameters);
-        break;
-    case 'a':
-        HPR(parameters);
-        break;
-    case 'b':
-        REP(parameters);
-        break;
-    case 'c':
-        DA(parameters);
-        break;
-    case 'd':
-        VPA(parameters);
-        break;
-    case 'e':
-        VPR(parameters);
-        break;
-    case 'f':
-        HVP(parameters);
-        break;
-    case 'h':
-        SM(parameters, intermediates);
-        break;
-    case 'l':
-        RM(parameters, intermediates);
-        break;
-    case 'm':
-        SGR(parameters);
-        break;
-    case 'n':
-        DSR(parameters);
-        break;
-    case 'q':
-        if (intermediates.size() >= 1 && intermediates[0] == ' ')
-            DECSCUSR(parameters);
-        else
-            unimplemented_csi_sequence(parameters, intermediates, last_byte);
-        break;
-    case 'r':
-        DECSTBM(parameters);
-        break;
-    case 's':
-        SCOSC();
-        break;
-    case 't':
-        XTERM_WM(parameters);
-        break;
-    case 'u':
-        SCORC();
-        break;
-    case '}':
-        if (intermediates.size() >= 1 && intermediates[0] == '\'')
-            DECIC(parameters);
-        else
-            unimplemented_csi_sequence(parameters, intermediates, last_byte);
-        break;
-    case '~':
-        if (intermediates.size() >= 1 && intermediates[0] == '\'')
-            DECDC(parameters);
-        else
-            unimplemented_csi_sequence(parameters, intermediates, last_byte);
-        break;
-    default:
-        unimplemented_csi_sequence(parameters, intermediates, last_byte);
+    if (intermediates.is_empty()) {
+        switch (last_byte) {
+        case '@':
+            return ICH(parameters);
+        case 'A':
+            return CUU(parameters);
+        case 'B':
+            return CUD(parameters);
+        case 'C':
+            return CUF(parameters);
+        case 'D':
+            return CUB(parameters);
+        case 'E':
+            return CNL(parameters);
+        case 'F':
+            return CPL(parameters);
+        case 'G':
+            return CHA(parameters);
+        case 'H':
+            return CUP(parameters);
+        case 'J':
+            return ED(parameters);
+        case 'K':
+            return EL(parameters);
+        case 'L':
+            return IL(parameters);
+        case 'M':
+            return DL(parameters);
+        case 'P':
+            return DCH(parameters);
+        case 'S':
+            return SU(parameters);
+        case 'T':
+            return SD(parameters);
+        case 'X':
+            return ECH(parameters);
+        case '`':
+            return HPA(parameters);
+        case 'a':
+            return HPR(parameters);
+        case 'b':
+            return REP(parameters);
+        case 'c':
+            return DA(parameters);
+        case 'd':
+            return VPA(parameters);
+        case 'e':
+            return VPR(parameters);
+        case 'f':
+            return HVP(parameters);
+        case 'h':
+            return SM(parameters);
+        case 'l':
+            return RM(parameters);
+        case 'm':
+            return SGR(parameters);
+        case 'n':
+            return DSR(parameters);
+        case 'r':
+            return DECSTBM(parameters);
+        case 's':
+            return SCOSC();
+        case 't':
+            return XTERM_WM(parameters);
+        case 'u':
+            return SCORC();
+        }
+    } else if (intermediates.size() == 1 && intermediates[0] == '?') {
+        switch (last_byte) {
+        case 'h':
+            return DECSET(parameters);
+        case 'l':
+            return DECRST(parameters);
+        }
+    } else if (intermediates.size() == 1 && intermediates[0] == '\'') {
+        switch (last_byte) {
+        case '}':
+            return DECIC(parameters);
+        case '~':
+            return DECDC(parameters);
+        }
+    } else if (intermediates.size() == 1 && intermediates[0] == ' ') {
+        switch (last_byte) {
+        case 'q':
+            return DECSCUSR(parameters);
+        }
     }
+
+    unimplemented_csi_sequence(parameters, intermediates, last_byte);
 }
 
 void Terminal::execute_osc_sequence(OscParameters parameters, u8 last_byte)
@@ -1212,8 +1288,13 @@ void Terminal::execute_osc_sequence(OscParameters parameters, u8 last_byte)
         } else {
             // FIXME: the split breaks titles containing semicolons.
             // Should we expose the raw OSC string from the parser? Or join by semicolon?
+#ifdef KERNEL
+            m_current_window_title = Kernel::KString::try_create(stringview_ify(1)).release_value_but_fixme_should_propagate_errors();
+            m_client.set_window_title(m_current_window_title->view());
+#else
             m_current_window_title = stringview_ify(1).to_string();
             m_client.set_window_title(m_current_window_title);
+#endif
         }
         break;
     case 8:
@@ -1258,13 +1339,13 @@ void Terminal::execute_dcs_sequence()
 {
 }
 
-void Terminal::inject_string(const StringView& str)
+void Terminal::inject_string(StringView str)
 {
     for (size_t i = 0; i < str.length(); ++i)
         on_input(str[i]);
 }
 
-void Terminal::emit_string(const StringView& string)
+void Terminal::emit_string(StringView string)
 {
     m_client.emit((const u8*)string.characters_without_null_termination(), string.length());
 }
@@ -1277,16 +1358,21 @@ void Terminal::handle_key_press(KeyCode key, u32 code_point, u8 flags)
     unsigned modifier_mask = int(shift) + (int(alt) << 1) + (int(ctrl) << 2);
 
     auto emit_final_with_modifier = [this, modifier_mask](char final) {
+        char escape_character = m_cursor_keys_mode == CursorKeysMode::Application ? 'O' : '[';
+        StringBuilder builder;
         if (modifier_mask)
-            emit_string(String::formatted("\e[1;{}{:c}", modifier_mask + 1, final));
+            MUST(builder.try_appendff("\e{}1;{}{:c}", escape_character, modifier_mask + 1, final)); // StringBuilder's inline capacity of 256 is enough to guarantee no allocations
         else
-            emit_string(String::formatted("\e[{:c}", final));
+            MUST(builder.try_appendff("\e{}{:c}", escape_character, final)); // StringBuilder's inline capacity of 256 is enough to guarantee no allocations
+        emit_string(builder.string_view());
     };
     auto emit_tilde_with_modifier = [this, modifier_mask](unsigned num) {
+        StringBuilder builder;
         if (modifier_mask)
-            emit_string(String::formatted("\e[{};{}~", num, modifier_mask + 1));
+            MUST(builder.try_appendff("\e[{};{}~", num, modifier_mask + 1)); // StringBuilder's inline capacity of 256 is enough to guarantee no allocations
         else
-            emit_string(String::formatted("\e[{}~", num));
+            MUST(builder.try_appendff("\e[{}~", num)); // StringBuilder's inline capacity of 256 is enough to guarantee no allocations
+        emit_string(builder.string_view());
     };
 
     switch (key) {
@@ -1355,13 +1441,12 @@ void Terminal::handle_key_press(KeyCode key, u32 code_point, u8 flags)
 
     StringBuilder sb;
     sb.append_code_point(code_point);
-
-    emit_string(sb.to_string());
+    emit_string(sb.string_view());
 }
 
 void Terminal::unimplemented_control_code(u8 code)
 {
-    dbgln("Unimplemented control code {:02x}", code);
+    dbgln_if(TERMINAL_DEBUG, "Unimplemented control code {:02x}", code);
 }
 
 void Terminal::unimplemented_escape_sequence(Intermediates intermediates, u8 last_byte)
@@ -1424,6 +1509,112 @@ void Terminal::set_size(u16 columns, u16 rows)
     if (columns == m_columns && rows == m_rows)
         return;
 
+    // If we're making the terminal larger (column-wise), start at the end and go up, taking cells from the line below.
+    // otherwise start at the beginning and go down, pushing cells into the line below.
+    auto resize_and_rewrap = [&](auto& buffer, auto& old_cursor) {
+        auto cursor_on_line = [&](auto index) {
+            return index == old_cursor.row ? &old_cursor : nullptr;
+        };
+        // Two passes, one from top to bottom, another from bottom to top
+        for (size_t pass = 0; pass < 2; ++pass) {
+            auto forwards = (pass == 0) ^ (columns < m_columns);
+            if (forwards) {
+                for (size_t i = 1; i <= buffer.size(); ++i) {
+                    auto is_at_seam = i == 1;
+                    auto next_line = is_at_seam ? nullptr : &buffer[buffer.size() - i + 1];
+                    auto& line = buffer[buffer.size() - i];
+                    auto next_cursor = cursor_on_line(buffer.size() - i + 1);
+                    line.rewrap(columns, next_line, next_cursor ?: cursor_on_line(buffer.size() - i), !!next_cursor);
+                }
+            } else {
+                for (size_t i = 0; i < buffer.size(); ++i) {
+                    auto is_at_seam = i + 1 == buffer.size();
+                    auto next_line = is_at_seam ? nullptr : &buffer[i + 1];
+                    auto next_cursor = cursor_on_line(i + 1);
+                    buffer[i].rewrap(columns, next_line, next_cursor ?: cursor_on_line(i), !!next_cursor);
+                }
+            }
+
+            Queue<size_t> lines_to_reevaluate;
+            for (size_t i = 0; i < buffer.size(); ++i) {
+                if (buffer[i].length() != columns)
+                    lines_to_reevaluate.enqueue(i);
+            }
+            size_t rows_inserted = 0;
+            while (!lines_to_reevaluate.is_empty()) {
+                auto index = lines_to_reevaluate.dequeue();
+                auto is_at_seam = index + 1 == buffer.size();
+                auto next_line = is_at_seam ? nullptr : &buffer[index + 1];
+                auto& line = buffer[index];
+                auto next_cursor = cursor_on_line(index + 1);
+                line.rewrap(columns, next_line, next_cursor ?: cursor_on_line(index), !!next_cursor);
+                if (line.length() > columns) {
+                    auto current_cursor = cursor_on_line(index);
+                    // Split the line into two (or more)
+                    ++index;
+                    ++rows_inserted;
+                    buffer.insert(index, make<Line>(0));
+                    VERIFY(buffer[index].length() == 0);
+                    line.rewrap(columns, &buffer[index], current_cursor, false);
+                    // If we inserted a line and the old cursor was after that line, increment its row
+                    if (!current_cursor && old_cursor.row >= index)
+                        ++old_cursor.row;
+
+                    if (buffer[index].length() != columns)
+                        lines_to_reevaluate.enqueue(index);
+                }
+                if (next_line && next_line->length() != columns)
+                    lines_to_reevaluate.enqueue(index + 1);
+            }
+        }
+
+        for (auto& line : buffer)
+            line.set_length(columns);
+
+        return old_cursor;
+    };
+
+    auto old_history_size = m_history.size();
+    m_history.extend(move(m_normal_screen_buffer));
+    CursorPosition cursor_tracker { cursor_row() + old_history_size, cursor_column() };
+    resize_and_rewrap(m_history, cursor_tracker);
+    if (auto extra_lines = m_history.size() - rows) {
+        while (extra_lines > 0) {
+            if (m_history.size() <= cursor_tracker.row)
+                break;
+            if (m_history.last().is_empty()) {
+                if (m_history.size() >= 2 && m_history[m_history.size() - 2].termination_column().has_value())
+                    break;
+                --extra_lines;
+                (void)m_history.take_last();
+                continue;
+            }
+            break;
+        }
+    }
+
+    // FIXME: This can use a more performant way to move the last N entries
+    //        from the history into the normal buffer
+    m_normal_screen_buffer.ensure_capacity(rows);
+    while (m_normal_screen_buffer.size() < rows) {
+        if (!m_history.is_empty())
+            m_normal_screen_buffer.prepend(m_history.take_last());
+        else
+            m_normal_screen_buffer.unchecked_append(make<Line>(columns));
+    }
+
+    cursor_tracker.row -= m_history.size();
+
+    if (m_history.size() != old_history_size) {
+        m_client.terminal_history_changed(-old_history_size);
+        m_client.terminal_history_changed(m_history.size());
+    }
+
+    CursorPosition dummy_cursor_tracker {};
+    resize_and_rewrap(m_alternate_screen_buffer, dummy_cursor_tracker);
+    if (m_alternate_screen_buffer.size() > rows)
+        m_alternate_screen_buffer.remove(0, m_alternate_screen_buffer.size() - rows);
+
     if (rows > m_rows) {
         while (m_normal_screen_buffer.size() < rows)
             m_normal_screen_buffer.append(make<Line>(columns));
@@ -1432,11 +1623,6 @@ void Terminal::set_size(u16 columns, u16 rows)
     } else {
         m_normal_screen_buffer.shrink(rows);
         m_alternate_screen_buffer.shrink(rows);
-    }
-
-    for (int i = 0; i < rows; ++i) {
-        m_normal_screen_buffer[i].set_length(columns);
-        m_alternate_screen_buffer[i].set_length(columns);
     }
 
     m_columns = columns;
@@ -1456,6 +1642,8 @@ void Terminal::set_size(u16 columns, u16 rows)
     // Rightmost column is always last tab on line.
     m_horizontal_tabs[columns - 1] = 1;
 
+    set_cursor(cursor_tracker.row, cursor_tracker.column);
+
     m_client.terminal_did_resize(m_columns, m_rows);
 
     dbgln_if(TERMINAL_DEBUG, "Set terminal size: {}x{}", m_rows, m_columns);
@@ -1465,7 +1653,8 @@ void Terminal::set_size(u16 columns, u16 rows)
 #ifndef KERNEL
 void Terminal::invalidate_cursor()
 {
-    active_buffer()[cursor_row()].set_dirty(true);
+    if (cursor_row() < active_buffer().size())
+        active_buffer()[cursor_row()].set_dirty(true);
 }
 
 Attribute Terminal::attribute_at(const Position& position) const
@@ -1480,5 +1669,4 @@ Attribute Terminal::attribute_at(const Position& position) const
     return line.attribute_at(position.column());
 }
 #endif
-
 }

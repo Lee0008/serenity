@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021-2022, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,7 +10,8 @@
 #include <LibGfx/FontDatabase.h>
 #include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/FontCache.h>
-#include <ctype.h>
+#include <LibWeb/Layout/BlockContainer.h>
+#include <LibWeb/Layout/Node.h>
 
 namespace Web::CSS {
 
@@ -34,165 +36,76 @@ NonnullRefPtr<StyleProperties> StyleProperties::clone() const
 
 void StyleProperties::set_property(CSS::PropertyID id, NonnullRefPtr<StyleValue> value)
 {
-    m_property_values.set((unsigned)id, move(value));
+    m_property_values[to_underlying(id)] = move(value);
 }
 
-void StyleProperties::set_property(CSS::PropertyID id, const StringView& value)
+Optional<NonnullRefPtr<StyleValue>> StyleProperties::property(CSS::PropertyID property_id) const
 {
-    m_property_values.set((unsigned)id, StringStyleValue::create(value));
-}
-
-Optional<NonnullRefPtr<StyleValue>> StyleProperties::property(CSS::PropertyID id) const
-{
-    auto it = m_property_values.find((unsigned)id);
-    if (it == m_property_values.end())
+    auto value = m_property_values[to_underlying(property_id)];
+    if (!value)
         return {};
-    return it->value;
+    return value.release_nonnull();
 }
 
-Length StyleProperties::length_or_fallback(CSS::PropertyID id, const Length& fallback) const
+Length StyleProperties::length_or_fallback(CSS::PropertyID id, Length const& fallback) const
 {
-    auto value = property(id);
-    if (!value.has_value())
+    auto maybe_value = property(id);
+    if (!maybe_value.has_value())
         return fallback;
-    return value.value()->to_length();
+    auto& value = maybe_value.value();
+
+    if (value->is_calculated())
+        return Length::make_calculated(value->as_calculated());
+
+    if (value->has_length())
+        return value->to_length();
+
+    return fallback;
+}
+
+LengthPercentage StyleProperties::length_percentage_or_fallback(CSS::PropertyID id, LengthPercentage const& fallback) const
+{
+    return length_percentage(id).value_or(fallback);
+}
+
+Optional<LengthPercentage> StyleProperties::length_percentage(CSS::PropertyID id) const
+{
+    auto maybe_value = property(id);
+    if (!maybe_value.has_value())
+        return {};
+    auto& value = maybe_value.value();
+
+    if (value->is_calculated())
+        return LengthPercentage { value->as_calculated() };
+
+    if (value->is_percentage())
+        return value->as_percentage().percentage();
+
+    if (value->has_length())
+        return value->to_length();
+
+    return {};
 }
 
 LengthBox StyleProperties::length_box(CSS::PropertyID left_id, CSS::PropertyID top_id, CSS::PropertyID right_id, CSS::PropertyID bottom_id, const CSS::Length& default_value) const
 {
     LengthBox box;
-    box.left = length_or_fallback(left_id, default_value);
-    box.top = length_or_fallback(top_id, default_value);
-    box.right = length_or_fallback(right_id, default_value);
-    box.bottom = length_or_fallback(bottom_id, default_value);
+    box.left = length_percentage_or_fallback(left_id, default_value);
+    box.top = length_percentage_or_fallback(top_id, default_value);
+    box.right = length_percentage_or_fallback(right_id, default_value);
+    box.bottom = length_percentage_or_fallback(bottom_id, default_value);
     return box;
 }
 
-String StyleProperties::string_or_fallback(CSS::PropertyID id, const StringView& fallback) const
+Color StyleProperties::color_or_fallback(CSS::PropertyID id, Layout::NodeWithStyle const& node, Color fallback) const
 {
     auto value = property(id);
-    if (!value.has_value())
+    if (!value.has_value() || !value.value()->has_color())
         return fallback;
-    return value.value()->to_string();
+    return value.value()->to_color(node);
 }
 
-Color StyleProperties::color_or_fallback(CSS::PropertyID id, const DOM::Document& document, Color fallback) const
-{
-    auto value = property(id);
-    if (!value.has_value())
-        return fallback;
-    return value.value()->to_color(document);
-}
-
-void StyleProperties::load_font() const
-{
-    auto family_value = string_or_fallback(CSS::PropertyID::FontFamily, "Katica");
-    auto font_size = property(CSS::PropertyID::FontSize).value_or(IdentifierStyleValue::create(CSS::ValueID::Medium));
-    auto font_weight = property(CSS::PropertyID::FontWeight).value_or(IdentifierStyleValue::create(CSS::ValueID::Normal));
-
-    auto family_parts = family_value.split(',');
-    auto family = family_parts[0];
-
-    auto monospace = false;
-    auto bold = false;
-
-    if (family.is_one_of("monospace", "ui-monospace")) {
-        monospace = true;
-        family = "Csilla";
-    } else if (family.is_one_of("serif", "sans-serif", "cursive", "fantasy", "ui-serif", "ui-sans-serif", "ui-rounded")) {
-        family = "Katica";
-    }
-
-    int weight = 400;
-    if (font_weight->is_identifier()) {
-        switch (static_cast<const IdentifierStyleValue&>(*font_weight).id()) {
-        case CSS::ValueID::Normal:
-            weight = 400;
-            break;
-        case CSS::ValueID::Bold:
-            weight = 700;
-            break;
-        case CSS::ValueID::Lighter:
-            // FIXME: This should be relative to the parent.
-            weight = 400;
-            break;
-        case CSS::ValueID::Bolder:
-            // FIXME: This should be relative to the parent.
-            weight = 700;
-            break;
-        default:
-            break;
-        }
-    } else if (font_weight->is_length()) {
-        // FIXME: This isn't really a length, it's a numeric value..
-        int font_weight_integer = font_weight->to_length().raw_value();
-        if (font_weight_integer <= 400)
-            weight = 400;
-        if (font_weight_integer <= 700)
-            weight = 700;
-        weight = 900;
-    }
-
-    bold = weight > 400;
-
-    int size = 10;
-    if (font_size->is_identifier()) {
-        switch (static_cast<const IdentifierStyleValue&>(*font_size).id()) {
-        case CSS::ValueID::XxSmall:
-        case CSS::ValueID::XSmall:
-        case CSS::ValueID::Small:
-        case CSS::ValueID::Medium:
-            // FIXME: Should be based on "user's default font size"
-            size = 10;
-            break;
-        case CSS::ValueID::Large:
-        case CSS::ValueID::XLarge:
-        case CSS::ValueID::XxLarge:
-        case CSS::ValueID::XxxLarge:
-            // FIXME: Should be based on "user's default font size"
-            size = 12;
-            break;
-        case CSS::ValueID::Smaller:
-            // FIXME: This should be relative to the parent.
-            size = 10;
-            break;
-        case CSS::ValueID::Larger:
-            // FIXME: This should be relative to the parent.
-            size = 12;
-            break;
-
-        default:
-            break;
-        }
-    } else if (font_size->is_length()) {
-        // FIXME: This isn't really a length, it's a numeric value..
-        int font_size_integer = font_size->to_length().raw_value();
-        size = font_size_integer;
-    }
-
-    FontSelector font_selector { family, size, weight };
-
-    auto found_font = FontCache::the().get(font_selector);
-    if (found_font) {
-        m_font = found_font;
-        return;
-    }
-
-    Gfx::FontDatabase::the().for_each_font([&](auto& font) {
-        if (font.family() == family && font.weight() == weight && font.presentation_size() == size)
-            found_font = font;
-    });
-
-    if (!found_font) {
-        dbgln("Font not found: '{}' {} {}", family, size, weight);
-        found_font = font_fallback(monospace, bold);
-    }
-
-    m_font = found_font;
-    FontCache::the().set(font_selector, *m_font);
-}
-
-RefPtr<Gfx::Font> StyleProperties::font_fallback(bool monospace, bool bold) const
+NonnullRefPtr<Gfx::Font> StyleProperties::font_fallback(bool monospace, bool bold)
 {
     if (monospace && bold)
         return Gfx::FontDatabase::default_fixed_width_font().bold_variant();
@@ -206,20 +119,80 @@ RefPtr<Gfx::Font> StyleProperties::font_fallback(bool monospace, bool bold) cons
     return Gfx::FontDatabase::default_font();
 }
 
-float StyleProperties::line_height(const Layout::Node& layout_node) const
+float StyleProperties::line_height(Layout::Node const& layout_node) const
 {
-    auto line_height_length = length_or_fallback(CSS::PropertyID::LineHeight, Length::make_auto());
-    if (line_height_length.is_absolute())
-        return (float)line_height_length.to_px(layout_node);
-    return (float)font().glyph_height() * 1.4f;
+    constexpr float font_height_to_line_height_multiplier = 1.4f;
+
+    if (auto maybe_line_height = property(CSS::PropertyID::LineHeight); maybe_line_height.has_value()) {
+        auto line_height = maybe_line_height.release_value();
+
+        if (line_height->is_identifier() && line_height->to_identifier() == ValueID::Normal)
+            return Length(1, Length::Type::Em).to_px(layout_node) * font_height_to_line_height_multiplier;
+
+        if (line_height->is_length()) {
+            auto line_height_length = line_height->to_length();
+            if (!line_height_length.is_auto())
+                return line_height_length.to_px(layout_node);
+        }
+
+        if (line_height->is_numeric())
+            return Length(line_height->to_number(), Length::Type::Em).to_px(layout_node);
+
+        if (line_height->is_percentage()) {
+            // Percentages are relative to 1em. https://www.w3.org/TR/css-inline-3/#valdef-line-height-percentage
+            auto& percentage = line_height->as_percentage().percentage();
+            return Length(percentage.as_fraction(), Length::Type::Em).to_px(layout_node);
+        }
+    }
+
+    return Length(font_height_to_line_height_multiplier, Length::Type::Em).to_px(layout_node);
 }
 
 Optional<int> StyleProperties::z_index() const
 {
-    auto value = property(CSS::PropertyID::ZIndex);
-    if (!value.has_value())
+    auto maybe_value = property(CSS::PropertyID::ZIndex);
+    if (!maybe_value.has_value())
         return {};
-    return static_cast<int>(value.value()->to_length().raw_value());
+    auto& value = maybe_value.value();
+
+    if (value->has_auto())
+        return {};
+    if (value->has_integer())
+        return value->to_integer();
+    return {};
+}
+
+float StyleProperties::opacity() const
+{
+    auto maybe_value = property(CSS::PropertyID::Opacity);
+    if (!maybe_value.has_value())
+        return 1.0f;
+    auto& value = maybe_value.value();
+
+    float unclamped_opacity = 1.0f;
+
+    if (value->has_number()) {
+        unclamped_opacity = value->to_number();
+    } else if (value->is_calculated()) {
+        auto& calculated = value->as_calculated();
+        if (calculated.resolved_type() == CalculatedStyleValue::ResolvedType::Percentage) {
+            auto maybe_percentage = value->as_calculated().resolve_percentage();
+            if (maybe_percentage.has_value())
+                unclamped_opacity = maybe_percentage->as_fraction();
+            else
+                dbgln("Unable to resolve calc() as opacity (percentage): {}", value->to_string());
+        } else {
+            auto maybe_number = value->as_calculated().resolve_number();
+            if (maybe_number.has_value())
+                unclamped_opacity = maybe_number.value();
+            else
+                dbgln("Unable to resolve calc() as opacity (number): {}", value->to_string());
+        }
+    } else if (value->is_percentage()) {
+        unclamped_opacity = value->as_percentage().percentage().as_fraction();
+    }
+
+    return clamp(unclamped_opacity, 0.0f, 1.0f);
 }
 
 Optional<CSS::FlexDirection> StyleProperties::flex_direction() const
@@ -260,51 +233,149 @@ Optional<CSS::FlexWrap> StyleProperties::flex_wrap() const
 
 Optional<CSS::FlexBasisData> StyleProperties::flex_basis() const
 {
-    auto value = property(CSS::PropertyID::FlexBasis);
-    if (!value.has_value())
+    auto maybe_value = property(CSS::PropertyID::FlexBasis);
+    if (!maybe_value.has_value())
         return {};
+    auto& value = maybe_value.value();
 
-    if (value.value()->is_identifier() && value.value()->to_identifier() == CSS::ValueID::Content)
+    if (value->is_identifier() && value->to_identifier() == CSS::ValueID::Content)
         return { { CSS::FlexBasis::Content, {} } };
 
-    if (value.value()->is_length())
-        return { { CSS::FlexBasis::Length, value.value()->to_length() } };
+    if (value->has_auto())
+        return { { CSS::FlexBasis::Auto, {} } };
+
+    if (value->is_percentage())
+        return { { CSS::FlexBasis::LengthPercentage, value->as_percentage().percentage() } };
+
+    if (value->has_length())
+        return { { CSS::FlexBasis::LengthPercentage, value->to_length() } };
 
     return {};
 }
 
-Optional<float> StyleProperties::flex_grow_factor() const
+float StyleProperties::flex_grow() const
 {
     auto value = property(CSS::PropertyID::FlexGrow);
-    if (!value.has_value())
-        return {};
-    if (value.value()->is_length() && downcast<CSS::LengthStyleValue>(value.value().ptr())->to_length().raw_value() == 0)
-        return { 0 };
-    if (!value.value()->is_numeric())
-        return {};
-    auto numeric = downcast<CSS::NumericStyleValue>(value.value().ptr());
-    return numeric->value();
+    if (!value.has_value() || !value.value()->has_number())
+        return 0;
+    return value.value()->to_number();
 }
 
-Optional<float> StyleProperties::flex_shrink_factor() const
+float StyleProperties::flex_shrink() const
 {
     auto value = property(CSS::PropertyID::FlexShrink);
+    if (!value.has_value() || !value.value()->has_number())
+        return 1;
+    return value.value()->to_number();
+}
+
+Optional<CSS::ImageRendering> StyleProperties::image_rendering() const
+{
+    auto value = property(CSS::PropertyID::ImageRendering);
     if (!value.has_value())
         return {};
-    if (value.value()->is_length() && downcast<CSS::LengthStyleValue>(value.value().ptr())->to_length().raw_value() == 0)
-        return { 0 };
-    if (!value.value()->is_numeric())
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::Auto:
+        return CSS::ImageRendering::Auto;
+    case CSS::ValueID::CrispEdges:
+        return CSS::ImageRendering::CrispEdges;
+    case CSS::ValueID::HighQuality:
+        return CSS::ImageRendering::HighQuality;
+    case CSS::ValueID::Pixelated:
+        return CSS::ImageRendering::Pixelated;
+    case CSS::ValueID::Smooth:
+        return CSS::ImageRendering::Smooth;
+    default:
         return {};
-    auto numeric = downcast<CSS::NumericStyleValue>(value.value().ptr());
-    return numeric->value();
+    }
+}
+
+Optional<CSS::JustifyContent> StyleProperties::justify_content() const
+{
+    auto value = property(CSS::PropertyID::JustifyContent);
+    if (!value.has_value())
+        return {};
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::FlexStart:
+        return CSS::JustifyContent::FlexStart;
+    case CSS::ValueID::FlexEnd:
+        return CSS::JustifyContent::FlexEnd;
+    case CSS::ValueID::Center:
+        return CSS::JustifyContent::Center;
+    case CSS::ValueID::SpaceBetween:
+        return CSS::JustifyContent::SpaceBetween;
+    case CSS::ValueID::SpaceAround:
+        return CSS::JustifyContent::SpaceAround;
+    default:
+        return {};
+    }
+}
+
+Vector<CSS::Transformation> StyleProperties::transformations() const
+{
+    auto value = property(CSS::PropertyID::Transform);
+    if (!value.has_value())
+        return {};
+
+    if (value.value()->is_identifier() && value.value()->to_identifier() == CSS::ValueID::None)
+        return {};
+
+    if (!value.value()->is_value_list())
+        return {};
+
+    auto& list = value.value()->as_value_list();
+
+    Vector<CSS::Transformation> transformations;
+
+    for (auto& it : list.values()) {
+        if (!it.is_transformation())
+            return {};
+        auto& transformation_style_value = it.as_transformation();
+        CSS::Transformation transformation;
+        transformation.function = transformation_style_value.transform_function();
+        Vector<Variant<CSS::Length, float>> values;
+        for (auto& transformation_value : transformation_style_value.values()) {
+            if (transformation_value.is_length()) {
+                values.append({ transformation_value.to_length() });
+            } else if (transformation_value.is_numeric()) {
+                values.append({ transformation_value.to_number() });
+            } else {
+                dbgln("FIXME: Unsupported value in transform!");
+            }
+        }
+        transformation.values = move(values);
+        transformations.append(move(transformation));
+    }
+    return transformations;
+}
+
+Optional<CSS::AlignItems> StyleProperties::align_items() const
+{
+    auto value = property(CSS::PropertyID::AlignItems);
+    if (!value.has_value())
+        return {};
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::FlexStart:
+        return CSS::AlignItems::FlexStart;
+    case CSS::ValueID::FlexEnd:
+        return CSS::AlignItems::FlexEnd;
+    case CSS::ValueID::Center:
+        return CSS::AlignItems::Center;
+    case CSS::ValueID::Baseline:
+        return CSS::AlignItems::Baseline;
+    case CSS::ValueID::Stretch:
+        return CSS::AlignItems::Stretch;
+    default:
+        return {};
+    }
 }
 
 Optional<CSS::Position> StyleProperties::position() const
 {
     auto value = property(CSS::PropertyID::Position);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Static:
         return CSS::Position::Static;
     case CSS::ValueID::Relative:
@@ -325,12 +396,18 @@ bool StyleProperties::operator==(const StyleProperties& other) const
     if (m_property_values.size() != other.m_property_values.size())
         return false;
 
-    for (auto& it : m_property_values) {
-        auto jt = other.m_property_values.find(it.key);
-        if (jt == other.m_property_values.end())
+    for (size_t i = 0; i < m_property_values.size(); ++i) {
+        auto const& my_ptr = m_property_values[i];
+        auto const& other_ptr = m_property_values[i];
+        if (!my_ptr) {
+            if (other_ptr)
+                return false;
+            continue;
+        }
+        if (!other_ptr)
             return false;
-        auto& my_value = *it.value;
-        auto& other_value = *jt->value;
+        auto const& my_value = *my_ptr;
+        auto const& other_value = *other_ptr;
         if (my_value.type() != other_value.type())
             return false;
         if (my_value != other_value)
@@ -343,10 +420,9 @@ bool StyleProperties::operator==(const StyleProperties& other) const
 Optional<CSS::TextAlign> StyleProperties::text_align() const
 {
     auto value = property(CSS::PropertyID::TextAlign);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Left:
         return CSS::TextAlign::Left;
     case CSS::ValueID::Center:
@@ -362,12 +438,30 @@ Optional<CSS::TextAlign> StyleProperties::text_align() const
     }
 }
 
+Optional<CSS::PointerEvents> StyleProperties::pointer_events() const
+{
+    auto value = property(CSS::PropertyID::PointerEvents);
+    if (!value.has_value())
+        return {};
+
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::Auto:
+        return CSS::PointerEvents::Auto;
+    case CSS::ValueID::All:
+        return CSS::PointerEvents::All;
+    case CSS::ValueID::None:
+        return CSS::PointerEvents::None;
+    default:
+        return {};
+    }
+}
+
 Optional<CSS::WhiteSpace> StyleProperties::white_space() const
 {
     auto value = property(CSS::PropertyID::WhiteSpace);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Normal:
         return CSS::WhiteSpace::Normal;
     case CSS::ValueID::Nowrap:
@@ -386,9 +480,9 @@ Optional<CSS::WhiteSpace> StyleProperties::white_space() const
 Optional<CSS::LineStyle> StyleProperties::line_style(CSS::PropertyID property_id) const
 {
     auto value = property(property_id);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::LineStyle::None;
     case CSS::ValueID::Hidden:
@@ -417,9 +511,9 @@ Optional<CSS::LineStyle> StyleProperties::line_style(CSS::PropertyID property_id
 Optional<CSS::Float> StyleProperties::float_() const
 {
     auto value = property(CSS::PropertyID::Float);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::Float::None;
     case CSS::ValueID::Left:
@@ -434,9 +528,9 @@ Optional<CSS::Float> StyleProperties::float_() const
 Optional<CSS::Clear> StyleProperties::clear() const
 {
     auto value = property(CSS::PropertyID::Clear);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::Clear::None;
     case CSS::ValueID::Left:
@@ -450,12 +544,65 @@ Optional<CSS::Clear> StyleProperties::clear() const
     }
 }
 
+CSS::ContentData StyleProperties::content() const
+{
+    auto maybe_value = property(CSS::PropertyID::Content);
+    if (!maybe_value.has_value())
+        return CSS::ContentData {};
+
+    auto& value = maybe_value.value();
+    if (value->is_content()) {
+        auto& content_style_value = value->as_content();
+
+        CSS::ContentData content_data;
+
+        // FIXME: The content is a list of things: strings, identifiers or functions that return strings, and images.
+        //        So it can't always be represented as a single String, but may have to be multiple boxes.
+        //        For now, we'll just assume strings since that is easiest.
+        StringBuilder builder;
+        for (auto const& item : content_style_value.content().values()) {
+            if (item.is_string()) {
+                builder.append(item.to_string());
+            } else {
+                // TODO: Implement quotes, counters, images, and other things.
+            }
+        }
+        content_data.type = ContentData::Type::String;
+        content_data.data = builder.to_string();
+
+        if (content_style_value.has_alt_text()) {
+            StringBuilder alt_text_builder;
+            for (auto const& item : content_style_value.alt_text()->values()) {
+                if (item.is_string()) {
+                    alt_text_builder.append(item.to_string());
+                } else {
+                    // TODO: Implement counters
+                }
+            }
+            content_data.alt_text = alt_text_builder.to_string();
+        }
+
+        return content_data;
+    }
+
+    switch (value->to_identifier()) {
+    case ValueID::None:
+        return { ContentData::Type::None };
+    case ValueID::Normal:
+        return { ContentData::Type::Normal };
+    default:
+        break;
+    }
+
+    return CSS::ContentData {};
+}
+
 Optional<CSS::Cursor> StyleProperties::cursor() const
 {
     auto value = property(CSS::PropertyID::Cursor);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Auto:
         return CSS::Cursor::Auto;
     case CSS::ValueID::Default:
@@ -537,49 +684,51 @@ CSS::Display StyleProperties::display() const
 {
     auto value = property(CSS::PropertyID::Display);
     if (!value.has_value() || !value.value()->is_identifier())
-        return CSS::Display::Inline;
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+        return CSS::Display::from_short(CSS::Display::Short::Inline);
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
-        return CSS::Display::None;
+        return CSS::Display::from_short(CSS::Display::Short::None);
     case CSS::ValueID::Block:
-        return CSS::Display::Block;
+        return CSS::Display::from_short(CSS::Display::Short::Block);
     case CSS::ValueID::Inline:
-        return CSS::Display::Inline;
+        return CSS::Display::from_short(CSS::Display::Short::Inline);
     case CSS::ValueID::InlineBlock:
-        return CSS::Display::InlineBlock;
+        return CSS::Display::from_short(CSS::Display::Short::InlineBlock);
     case CSS::ValueID::ListItem:
-        return CSS::Display::ListItem;
+        return CSS::Display::from_short(CSS::Display::Short::ListItem);
     case CSS::ValueID::Table:
-        return CSS::Display::Table;
+        return CSS::Display::from_short(CSS::Display::Short::Table);
     case CSS::ValueID::TableRow:
-        return CSS::Display::TableRow;
+        return CSS::Display { CSS::Display::Internal::TableRow };
     case CSS::ValueID::TableCell:
-        return CSS::Display::TableCell;
+        return CSS::Display { CSS::Display::Internal::TableCell };
     case CSS::ValueID::TableColumn:
-        return CSS::Display::TableColumn;
+        return CSS::Display { CSS::Display::Internal::TableColumn };
     case CSS::ValueID::TableColumnGroup:
-        return CSS::Display::TableColumnGroup;
+        return CSS::Display { CSS::Display::Internal::TableColumnGroup };
     case CSS::ValueID::TableCaption:
-        return CSS::Display::TableCaption;
+        return CSS::Display { CSS::Display::Internal::TableCaption };
     case CSS::ValueID::TableRowGroup:
-        return CSS::Display::TableRowGroup;
+        return CSS::Display { CSS::Display::Internal::TableRowGroup };
     case CSS::ValueID::TableHeaderGroup:
-        return CSS::Display::TableHeaderGroup;
+        return CSS::Display { CSS::Display::Internal::TableHeaderGroup };
     case CSS::ValueID::TableFooterGroup:
-        return CSS::Display::TableFooterGroup;
+        return CSS::Display { CSS::Display::Internal::TableFooterGroup };
     case CSS::ValueID::Flex:
-        return CSS::Display::Flex;
+        return CSS::Display::from_short(CSS::Display::Short::Flex);
+    case CSS::ValueID::InlineFlex:
+        return CSS::Display::from_short(CSS::Display::Short::InlineFlex);
     default:
-        return CSS::Display::Block;
+        return CSS::Display::from_short(CSS::Display::Short::Block);
     }
 }
 
 Optional<CSS::TextDecorationLine> StyleProperties::text_decoration_line() const
 {
     auto value = property(CSS::PropertyID::TextDecorationLine);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::TextDecorationLine::None;
     case CSS::ValueID::Underline:
@@ -590,6 +739,27 @@ Optional<CSS::TextDecorationLine> StyleProperties::text_decoration_line() const
         return CSS::TextDecorationLine::LineThrough;
     case CSS::ValueID::Blink:
         return CSS::TextDecorationLine::Blink;
+    default:
+        return {};
+    }
+}
+
+Optional<CSS::TextDecorationStyle> StyleProperties::text_decoration_style() const
+{
+    auto value = property(CSS::PropertyID::TextDecorationStyle);
+    if (!value.has_value())
+        return {};
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::Solid:
+        return CSS::TextDecorationStyle::Solid;
+    case CSS::ValueID::Double:
+        return CSS::TextDecorationStyle::Double;
+    case CSS::ValueID::Dotted:
+        return CSS::TextDecorationStyle::Dotted;
+    case CSS::ValueID::Dashed:
+        return CSS::TextDecorationStyle::Dashed;
+    case CSS::ValueID::Wavy:
+        return CSS::TextDecorationStyle::Wavy;
     default:
         return {};
     }
@@ -623,7 +793,6 @@ Optional<CSS::ListStyleType> StyleProperties::list_style_type() const
     auto value = property(CSS::PropertyID::ListStyleType);
     if (!value.has_value())
         return {};
-
     switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::ListStyleType::None;
@@ -645,6 +814,10 @@ Optional<CSS::ListStyleType> StyleProperties::list_style_type() const
         return CSS::ListStyleType::UpperAlpha;
     case CSS::ValueID::UpperLatin:
         return CSS::ListStyleType::UpperLatin;
+    case CSS::ValueID::UpperRoman:
+        return CSS::ListStyleType::UpperRoman;
+    case CSS::ValueID::LowerRoman:
+        return CSS::ListStyleType::LowerRoman;
     default:
         return {};
     }
@@ -665,7 +838,6 @@ Optional<CSS::Overflow> StyleProperties::overflow(CSS::PropertyID property_id) c
     auto value = property(property_id);
     if (!value.has_value())
         return {};
-
     switch (value.value()->to_identifier()) {
     case CSS::ValueID::Auto:
         return CSS::Overflow::Auto;
@@ -682,43 +854,89 @@ Optional<CSS::Overflow> StyleProperties::overflow(CSS::PropertyID property_id) c
     }
 }
 
-Optional<CSS::Repeat> StyleProperties::background_repeat_x() const
+Vector<BoxShadowData> StyleProperties::box_shadow() const
 {
-    auto value = property(CSS::PropertyID::BackgroundRepeatX);
+    auto value_or_error = property(PropertyID::BoxShadow);
+    if (!value_or_error.has_value())
+        return {};
+
+    auto value = value_or_error.value();
+
+    auto make_box_shadow_data = [](BoxShadowStyleValue const& box) {
+        return BoxShadowData { box.color(), box.offset_x(), box.offset_y(), box.blur_radius(), box.spread_distance(), box.placement() };
+    };
+
+    if (value->is_value_list()) {
+        auto& value_list = value->as_value_list();
+
+        Vector<BoxShadowData> box_shadow_data;
+        box_shadow_data.ensure_capacity(value_list.size());
+        for (auto const& layer_value : value_list.values())
+            box_shadow_data.append(make_box_shadow_data(layer_value.as_box_shadow()));
+
+        return box_shadow_data;
+    }
+
+    if (value->is_box_shadow()) {
+        auto& box = value->as_box_shadow();
+        return { make_box_shadow_data(box) };
+    }
+
+    return {};
+}
+
+CSS::BoxSizing StyleProperties::box_sizing() const
+{
+    auto value = property(CSS::PropertyID::BoxSizing);
     if (!value.has_value())
         return {};
 
     switch (value.value()->to_identifier()) {
-    case CSS::ValueID::NoRepeat:
-        return CSS::Repeat::NoRepeat;
-    case CSS::ValueID::Repeat:
-        return CSS::Repeat::Repeat;
-    case CSS::ValueID::Round:
-        return CSS::Repeat::Round;
-    case CSS::ValueID::Space:
-        return CSS::Repeat::Space;
+    case CSS::ValueID::BorderBox:
+        return CSS::BoxSizing::BorderBox;
+    case CSS::ValueID::ContentBox:
+        return CSS::BoxSizing::ContentBox;
     default:
         return {};
     }
 }
 
-Optional<CSS::Repeat> StyleProperties::background_repeat_y() const
+Variant<CSS::VerticalAlign, CSS::LengthPercentage> StyleProperties::vertical_align() const
 {
-    auto value = property(CSS::PropertyID::BackgroundRepeatY);
+    auto value = property(CSS::PropertyID::VerticalAlign);
     if (!value.has_value())
-        return {};
+        VERIFY_NOT_REACHED();
 
-    switch (value.value()->to_identifier()) {
-    case CSS::ValueID::NoRepeat:
-        return CSS::Repeat::NoRepeat;
-    case CSS::ValueID::Repeat:
-        return CSS::Repeat::Repeat;
-    case CSS::ValueID::Round:
-        return CSS::Repeat::Round;
-    case CSS::ValueID::Space:
-        return CSS::Repeat::Space;
-    default:
-        return {};
+    if (value.value()->is_identifier()) {
+        switch (value.value()->to_identifier()) {
+        case CSS::ValueID::Baseline:
+            return CSS::VerticalAlign::Baseline;
+        case CSS::ValueID::Bottom:
+            return CSS::VerticalAlign::Bottom;
+        case CSS::ValueID::Middle:
+            return CSS::VerticalAlign::Middle;
+        case CSS::ValueID::Sub:
+            return CSS::VerticalAlign::Sub;
+        case CSS::ValueID::Super:
+            return CSS::VerticalAlign::Super;
+        case CSS::ValueID::TextBottom:
+            return CSS::VerticalAlign::TextBottom;
+        case CSS::ValueID::TextTop:
+            return CSS::VerticalAlign::TextTop;
+        case CSS::ValueID::Top:
+            return CSS::VerticalAlign::Top;
+        default:
+            VERIFY_NOT_REACHED();
+        }
     }
+
+    if (value.value()->is_length())
+        return CSS::LengthPercentage(value.value()->to_length());
+
+    if (value.value()->is_percentage())
+        return CSS::LengthPercentage(value.value()->as_percentage().percentage());
+
+    VERIFY_NOT_REACHED();
 }
+
 }

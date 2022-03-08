@@ -22,12 +22,13 @@ set +e
 for cmd in \
         Meta/check-ak-test-files.sh \
         Meta/check-debug-flags.sh \
+        Meta/check-markdown.sh \
         Meta/check-newlines-at-eof.py \
-        Meta/check-style.sh \
+        Meta/check-style.py \
         Meta/lint-executable-resources.sh \
-        Meta/lint-ipc-ids.sh \
         Meta/lint-keymaps.py \
         Meta/lint-shell-scripts.sh \
+        Meta/lint-gml-format.sh \
         Meta/lint-prettier.sh \
         Meta/lint-python.sh; do
     echo "Running ${cmd}... "
@@ -38,6 +39,17 @@ for cmd in \
         ((FAILURES+=1))
     fi
 done
+
+if [ -x ./Build/lagom/Tools/IPCMagicLinter/IPCMagicLinter ]; then
+    if git ls-files '*.ipc' | xargs ./Build/lagom/Tools/IPCMagicLinter/IPCMagicLinter; then
+        echo -e "[${GREEN}OK${NC}]: IPCMagicLinter (in Meta/lint-ci.sh)"
+    else
+        echo -e "[${RED}FAIL${NC}]: IPCMagicLinter (in Meta/lint-ci.sh)"
+        ((FAILURES+=1))
+    fi
+else
+    echo -e "[${GREEN}SKIP${NC}]: IPCMagicLinter (in Meta/lint-ci.sh)"
+fi
 
 echo "Running Meta/lint-clang-format.sh"
 if Meta/lint-clang-format.sh --overwrite-inplace "$@" && git diff --exit-code; then

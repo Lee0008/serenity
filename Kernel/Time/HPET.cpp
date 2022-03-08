@@ -5,14 +5,15 @@
  */
 
 #include <AK/StringView.h>
-#include <Kernel/ACPI/Parser.h>
 #include <Kernel/Debug.h>
+#include <Kernel/Firmware/ACPI/Parser.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
+#include <Kernel/Memory/MemoryManager.h>
+#include <Kernel/Memory/TypedMapping.h>
+#include <Kernel/Sections.h>
 #include <Kernel/Time/HPET.h>
 #include <Kernel/Time/HPETComparator.h>
 #include <Kernel/Time/TimeManagement.h>
-#include <Kernel/VM/MemoryManager.h>
-#include <Kernel/VM/TypedMapping.h>
 
 namespace Kernel {
 
@@ -45,8 +46,13 @@ enum class TimerConfiguration : u32 {
 };
 
 struct [[gnu::packed]] HPETRegister {
-    volatile u32 low;
-    volatile u32 high;
+    union {
+        volatile u64 full;
+        struct {
+            volatile u32 low;
+            volatile u32 high;
+        };
+    };
 };
 
 struct [[gnu::packed]] TimerStructure {
@@ -82,10 +88,13 @@ static_assert(__builtin_offsetof(HPETRegistersBlock, timers[1]) == 0x120);
 // Note: The HPET specification says it reserves the range of byte 0x160 to
 // 0x400 for comparators 3-31, but for implementing all 32 comparators the HPET
 // MMIO space has to be 1280 bytes and not 1024 bytes.
-static_assert(sizeof(HPETRegistersBlock) == 0x500);
+static_assert(AssertSize<HPETRegistersBlock, 0x500>());
 
 static u64 read_register_safe64(const HPETRegister& reg)
 {
+#if ARCH(X86_64)
+    return reg.full;
+#else
     // As per 2.4.7 this reads the 64 bit value in a consistent manner
     // using only 32 bit reads
     u32 low, high = reg.high;
@@ -97,6 +106,7 @@ static u64 read_register_safe64(const HPETRegister& reg)
         high = new_high;
     }
     return ((u64)high << 32) | (u64)low;
+#endif
 }
 
 static HPET* s_hpet;
@@ -118,15 +128,19 @@ UNMAP_AFTER_INIT bool HPET::test_and_initialize()
 {
     VERIFY(!HPET::initialized());
     hpet_initialized = true;
-    auto hpet = ACPI::Parser::the()->find_table("HPET");
-    if (hpet.is_null())
+    auto hpet_table = ACPI::Parser::the()->find_table("HPET");
+    if (!hpet_table.has_value())
         return false;
-    dmesgln("HPET @ {}", hpet);
+    dmesgln("HPET @ {}", hpet_table.value());
 
-    auto sdt = map_typed<ACPI::Structures::HPET>(hpet);
+    auto sdt_or_error = Memory::map_typed<ACPI::Structures::HPET>(hpet_table.value());
+    if (sdt_or_error.is_error()) {
+        dbgln("Failed mapping HPET table");
+        return false;
+    }
 
     // Note: HPET is only usable from System Memory
-    VERIFY(sdt->event_timer_block.address_space == (u8)ACPI::GenericAddressStructure::AddressSpace::SystemMemory);
+    VERIFY(sdt_or_error.value()->event_timer_block.address_space == (u8)ACPI::GenericAddressStructure::AddressSpace::SystemMemory);
 
     if (TimeManagement::is_hpet_periodic_mode_allowed()) {
         if (!check_for_exisiting_periodic_timers()) {
@@ -134,19 +148,25 @@ UNMAP_AFTER_INIT bool HPET::test_and_initialize()
             return false;
         }
     }
-    new HPET(PhysicalAddress(hpet));
+    new HPET(PhysicalAddress(hpet_table.value()));
     return true;
 }
 
 UNMAP_AFTER_INIT bool HPET::check_for_exisiting_periodic_timers()
 {
-    auto hpet = ACPI::Parser::the()->find_table("HPET");
-    if (hpet.is_null())
+    auto hpet_table = ACPI::Parser::the()->find_table("HPET");
+    if (!hpet_table.has_value())
         return false;
 
-    auto sdt = map_typed<ACPI::Structures::HPET>(hpet);
+    auto sdt_or_error = Memory::map_typed<ACPI::Structures::HPET>(hpet_table.value());
+    if (sdt_or_error.is_error())
+        return false;
+    auto sdt = sdt_or_error.release_value();
     VERIFY(sdt->event_timer_block.address_space == 0);
-    auto registers = map_typed<HPETRegistersBlock>(PhysicalAddress(sdt->event_timer_block.address));
+    auto registers_or_error = Memory::map_typed<HPETRegistersBlock>(PhysicalAddress(sdt->event_timer_block.address));
+    if (registers_or_error.is_error())
+        return false;
+    auto registers = registers_or_error.release_value();
 
     size_t timers_count = ((registers->capabilities.attributes >> 8) & 0x1f) + 1;
     for (size_t index = 0; index < timers_count; index++) {
@@ -383,7 +403,7 @@ void HPET::set_comparators_to_optimal_interrupt_state(size_t)
 
 PhysicalAddress HPET::find_acpi_hpet_registers_block()
 {
-    auto sdt = map_typed<const volatile ACPI::Structures::HPET>(m_physical_acpi_hpet_table);
+    auto sdt = Memory::map_typed<const volatile ACPI::Structures::HPET>(m_physical_acpi_hpet_table).release_value_but_fixme_should_propagate_errors();
     VERIFY(sdt->event_timer_block.address_space == (u8)ACPI::GenericAddressStructure::AddressSpace::SystemMemory);
     return PhysicalAddress(sdt->event_timer_block.address);
 }
@@ -412,11 +432,11 @@ u64 HPET::ns_to_raw_counter_ticks(u64 ns) const
 UNMAP_AFTER_INIT HPET::HPET(PhysicalAddress acpi_hpet)
     : m_physical_acpi_hpet_table(acpi_hpet)
     , m_physical_acpi_hpet_registers(find_acpi_hpet_registers_block())
-    , m_hpet_mmio_region(MM.allocate_kernel_region(m_physical_acpi_hpet_registers.page_base(), PAGE_SIZE, "HPET MMIO", Region::Access::Read | Region::Access::Write))
+    , m_hpet_mmio_region(MM.allocate_kernel_region(m_physical_acpi_hpet_registers.page_base(), PAGE_SIZE, "HPET MMIO", Memory::Region::Access::ReadWrite).release_value())
 {
     s_hpet = this; // Make available as soon as possible so that IRQs can use it
 
-    auto sdt = map_typed<const volatile ACPI::Structures::HPET>(m_physical_acpi_hpet_table);
+    auto sdt = Memory::map_typed<const volatile ACPI::Structures::HPET>(m_physical_acpi_hpet_table).release_value_but_fixme_should_propagate_errors();
     m_vendor_id = sdt->pci_vendor_id;
     m_minimum_tick = sdt->mininum_clock_tick;
     dmesgln("HPET: Minimum clock tick - {}", m_minimum_tick);

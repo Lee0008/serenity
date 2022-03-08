@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, Tobias Christiansen <tobi@tobyase.de>
+ * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -63,8 +63,7 @@ void MallocTracer::target_did_malloc(Badge<Emulator>, FlatPtr address, size_t si
         return;
     auto* region = m_emulator.mmu().find_region({ 0x23, address });
     VERIFY(region);
-    VERIFY(is<MmapRegion>(*region));
-    auto& mmap_region = static_cast<MmapRegion&>(*region);
+    auto& mmap_region = verify_cast<MmapRegion>(*region);
 
     auto* shadow_bits = mmap_region.shadow_data() + address - mmap_region.base();
     memset(shadow_bits, 0, size);
@@ -93,8 +92,7 @@ void MallocTracer::target_did_change_chunk_size(Badge<Emulator>, FlatPtr block, 
         return;
     auto* region = m_emulator.mmu().find_region({ 0x23, block });
     VERIFY(region);
-    VERIFY(is<MmapRegion>(*region));
-    auto& mmap_region = static_cast<MmapRegion&>(*region);
+    auto& mmap_region = verify_cast<MmapRegion>(*region);
     update_metadata(mmap_region, chunk_size);
 }
 
@@ -153,8 +151,7 @@ void MallocTracer::target_did_realloc(Badge<Emulator>, FlatPtr address, size_t s
         return;
     auto* region = m_emulator.mmu().find_region({ 0x23, address });
     VERIFY(region);
-    VERIFY(is<MmapRegion>(*region));
-    auto& mmap_region = static_cast<MmapRegion&>(*region);
+    auto& mmap_region = verify_cast<MmapRegion>(*region);
 
     VERIFY(mmap_region.is_malloc_block());
 
@@ -216,7 +213,11 @@ void MallocTracer::audit_read(const Region& region, FlatPtr address, size_t size
     if (!m_auditing_enabled)
         return;
 
-    if (m_emulator.is_in_malloc_or_free() || m_emulator.is_in_libsystem()) {
+    if (m_emulator.is_memory_auditing_suppressed()) {
+        return;
+    }
+
+    if (m_emulator.is_in_libsystem()) {
         return;
     }
 
@@ -263,8 +264,9 @@ void MallocTracer::audit_write(const Region& region, FlatPtr address, size_t siz
     if (!m_auditing_enabled)
         return;
 
-    if (m_emulator.is_in_malloc_or_free())
+    if (m_emulator.is_memory_auditing_suppressed()) {
         return;
+    }
 
     if (m_emulator.is_in_loader_code()) {
         return;

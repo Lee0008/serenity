@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,17 +14,17 @@
 class GraphWidget final : public GUI::Frame {
     C_OBJECT(GraphWidget)
 public:
-    virtual ~GraphWidget() override;
+    virtual ~GraphWidget() override = default;
 
-    void set_max(int max) { m_max = max; }
-    int max() const { return m_max; }
+    void set_max(u64 max) { m_max = max; }
+    u64 max() const { return m_max; }
 
-    void add_value(Vector<int, 1>&&);
+    void add_value(Vector<u64, 1>&&);
 
     struct ValueFormat {
         Gfx::ColorRole graph_color_role { Gfx::ColorRole::Base };
         Color text_shadow_color { Color::Transparent };
-        Function<String(int)> text_formatter;
+        Function<String(size_t)> text_formatter;
     };
     void set_value_format(size_t index, ValueFormat&& format)
     {
@@ -34,13 +35,13 @@ public:
     void set_stack_values(bool stack_values) { m_stack_values = stack_values; }
 
 private:
-    explicit GraphWidget();
+    explicit GraphWidget() = default;
 
     virtual void paint_event(GUI::PaintEvent&) override;
 
-    int m_max { 100 };
+    u64 m_max { 100 };
     Vector<ValueFormat, 1> m_value_format;
-    CircularQueue<Vector<int, 1>, 4000> m_values;
+    CircularQueue<Vector<u64, 1>, 4000> m_values;
     bool m_stack_values { false };
 
     Vector<Gfx::IntPoint, 1> m_calculated_points;

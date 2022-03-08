@@ -68,7 +68,8 @@ static String mime_type_from_content_type(const String& content_type)
 void Resource::did_load(Badge<ResourceLoader>, ReadonlyBytes data, const HashMap<String, String, CaseInsensitiveStringTraits>& headers, Optional<u32> status_code)
 {
     VERIFY(!m_loaded);
-    m_encoded_data = ByteBuffer::copy(data);
+    // FIXME: Handle OOM failure.
+    m_encoded_data = ByteBuffer::copy(data).release_value_but_fixme_should_propagate_errors();
     m_response_headers = headers;
     m_status_code = move(status_code);
     m_loaded = true;
@@ -78,6 +79,11 @@ void Resource::did_load(Badge<ResourceLoader>, ReadonlyBytes data, const HashMap
     if (content_type.has_value()) {
         dbgln_if(RESOURCE_DEBUG, "Content-Type header: '{}'", content_type.value());
         m_mime_type = mime_type_from_content_type(content_type.value());
+        // FIXME: "The Quite OK Image Format" doesn't have an official mime type yet,
+        //        and servers like nginx will send a generic octet-stream mime type instead.
+        //        Let's use image/x-qoi for now, which is also what our Core::MimeData uses & would guess.
+        if (m_mime_type == "application/octet-stream" && url().path().ends_with(".qoi"))
+            m_mime_type = "image/x-qoi";
     } else if (url().protocol() == "data" && !url().data_mime_type().is_empty()) {
         dbgln_if(RESOURCE_DEBUG, "This is a data URL with mime-type _{}_", url().data_mime_type());
         m_mime_type = url().data_mime_type();

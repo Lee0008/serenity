@@ -1,17 +1,21 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGfx/Painter.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLBodyElement.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
-#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/Box.h>
-#include <LibWeb/Page/BrowsingContext.h>
+#include <LibWeb/Layout/FormattingContext.h>
+#include <LibWeb/Painting/BackgroundPainting.h>
 #include <LibWeb/Painting/BorderPainting.h>
+#include <LibWeb/Painting/ShadowPainting.h>
 
 namespace Web::Layout {
 
@@ -20,15 +24,9 @@ void Box::paint(PaintContext& context, PaintPhase phase)
     if (!is_visible())
         return;
 
-    Gfx::PainterStateSaver saver(context.painter());
-    if (is_fixed_position())
-        context.painter().translate(context.scroll_offset());
-
-    auto padded_rect = this->padded_rect();
-
     if (phase == PaintPhase::Background) {
-
         paint_background(context);
+        paint_box_shadow(context);
     }
 
     if (phase == PaintPhase::Border) {
@@ -41,149 +39,65 @@ void Box::paint(PaintContext& context, PaintPhase phase)
         auto margin_box = box_model().margin_box();
         Gfx::FloatRect margin_rect;
         margin_rect.set_x(absolute_x() - margin_box.left);
-        margin_rect.set_width(width() + margin_box.left + margin_box.right);
+        margin_rect.set_width(content_width() + margin_box.left + margin_box.right);
         margin_rect.set_y(absolute_y() - margin_box.top);
-        margin_rect.set_height(height() + margin_box.top + margin_box.bottom);
+        margin_rect.set_height(content_height() + margin_box.top + margin_box.bottom);
 
-        context.painter().draw_rect(enclosing_int_rect(margin_rect), Color::Yellow);
-        context.painter().draw_rect(enclosing_int_rect(padded_rect), Color::Cyan);
-        context.painter().draw_rect(enclosing_int_rect(content_rect), Color::Magenta);
+        auto border_rect = absolute_border_box_rect();
+        auto padding_rect = absolute_padding_box_rect();
+
+        auto paint_inspector_rect = [&](Gfx::FloatRect const& rect, Color color) {
+            context.painter().fill_rect(enclosing_int_rect(rect), Color(color).with_alpha(100));
+            context.painter().draw_rect(enclosing_int_rect(rect), Color(color));
+        };
+
+        paint_inspector_rect(margin_rect, Color::Yellow);
+        paint_inspector_rect(padding_rect, Color::Cyan);
+        paint_inspector_rect(border_rect, Color::Green);
+        paint_inspector_rect(content_rect, Color::Magenta);
+
+        StringBuilder builder;
+        if (dom_node())
+            builder.append(dom_node()->debug_description());
+        else
+            builder.append(debug_description());
+        builder.appendff(" {}x{} @ {},{}", border_rect.width(), border_rect.height(), border_rect.x(), border_rect.y());
+        auto size_text = builder.to_string();
+        auto size_text_rect = border_rect;
+        size_text_rect.set_y(border_rect.y() + border_rect.height());
+        size_text_rect.set_top(size_text_rect.top());
+        size_text_rect.set_width((float)context.painter().font().width(size_text) + 4);
+        size_text_rect.set_height(context.painter().font().glyph_height() + 4);
+        context.painter().fill_rect(enclosing_int_rect(size_text_rect), context.palette().color(Gfx::ColorRole::Tooltip));
+        context.painter().draw_rect(enclosing_int_rect(size_text_rect), context.palette().threed_shadow1());
+        context.painter().draw_text(enclosing_int_rect(size_text_rect), size_text, Gfx::TextAlignment::Center, context.palette().color(Gfx::ColorRole::TooltipText));
     }
 
-    if (phase == PaintPhase::FocusOutline && dom_node() && dom_node()->is_element() && downcast<DOM::Element>(*dom_node()).is_focused()) {
+    if (phase == PaintPhase::FocusOutline && dom_node() && dom_node()->is_element() && verify_cast<DOM::Element>(*dom_node()).is_focused()) {
         context.painter().draw_rect(enclosing_int_rect(absolute_rect()), context.palette().focus_outline());
     }
 }
 
 void Box::paint_border(PaintContext& context)
 {
-    auto bordered_rect = this->bordered_rect();
-    auto border_rect = enclosing_int_rect(bordered_rect);
-
-    auto border_radius_data = normalized_border_radius_data();
-    auto top_left_radius = border_radius_data.top_left;
-    auto top_right_radius = border_radius_data.top_right;
-    auto bottom_right_radius = border_radius_data.bottom_right;
-    auto bottom_left_radius = border_radius_data.bottom_left;
-
-    // FIXME: Support elliptical border radii.
-
-    Gfx::FloatRect top_border_rect = {
-        border_rect.x() + top_left_radius,
-        border_rect.y(),
-        border_rect.width() - top_left_radius - top_right_radius,
-        border_rect.height()
+    auto borders_data = Painting::BordersData {
+        .top = computed_values().border_top(),
+        .right = computed_values().border_right(),
+        .bottom = computed_values().border_bottom(),
+        .left = computed_values().border_left(),
     };
-    Gfx::FloatRect right_border_rect = {
-        border_rect.x(),
-        border_rect.y() + top_right_radius,
-        border_rect.width(),
-        border_rect.height() - top_right_radius - bottom_right_radius
-    };
-    Gfx::FloatRect bottom_border_rect = {
-        border_rect.x() + bottom_left_radius,
-        border_rect.y(),
-        border_rect.width() - bottom_left_radius - bottom_right_radius,
-        border_rect.height()
-    };
-    Gfx::FloatRect left_border_rect = {
-        border_rect.x(),
-        border_rect.y() + top_left_radius,
-        border_rect.width(),
-        border_rect.height() - top_left_radius - bottom_left_radius
-    };
-
-    Painting::paint_border(context, Painting::BorderEdge::Top, top_border_rect, computed_values());
-    Painting::paint_border(context, Painting::BorderEdge::Right, right_border_rect, computed_values());
-    Painting::paint_border(context, Painting::BorderEdge::Bottom, bottom_border_rect, computed_values());
-    Painting::paint_border(context, Painting::BorderEdge::Left, left_border_rect, computed_values());
-
-    // Draws a quarter cirle clockwise
-    auto draw_quarter_circle = [&](Gfx::IntPoint& from, Gfx::IntPoint& to, Gfx::Color color, int thickness) {
-        Gfx::IntPoint center = { 0, 0 };
-        Gfx::IntPoint offset = { 0, 0 };
-        Gfx::IntPoint circle_position = { 0, 0 };
-
-        auto radius = abs(from.x() - to.x());
-
-        if (from.x() < to.x() && from.y() > to.y()) {
-            // top-left
-            center.set_x(radius);
-            center.set_y(radius);
-            offset.set_y(1);
-        } else if (from.x() < to.x() && from.y() < to.y()) {
-            // top-right
-            circle_position.set_x(from.x());
-            center.set_y(radius);
-            offset.set_x(-1);
-            offset.set_y(1);
-        } else if (from.x() > to.x() && from.y() < to.y()) {
-            // bottom-right
-            circle_position.set_x(to.x());
-            circle_position.set_y(from.y());
-            offset.set_x(-1);
-        } else if (from.x() > to.x() && from.y() > to.y()) {
-            // bottom-left
-            circle_position.set_y(to.y());
-            center.set_x(radius);
-        } else {
-            // How did you get here?
-            VERIFY_NOT_REACHED();
-        }
-
-        Gfx::IntRect circle_rect = {
-            border_rect.x() + circle_position.x(),
-            border_rect.y() + circle_position.y(),
-            radius,
-            radius
-        };
-
-        context.painter().draw_circle_arc_intersecting(
-            circle_rect,
-            center + offset,
-            radius,
-            color,
-            thickness);
-    };
-
-    // FIXME: Which color to use?
-    if (top_left_radius) {
-        Gfx::IntPoint arc_start = { 0, (int)top_left_radius };
-        Gfx::IntPoint arc_end = { (int)top_left_radius, 0 };
-        draw_quarter_circle(arc_start, arc_end, computed_values().border_top().color, computed_values().border_top().width);
-    }
-
-    if (top_right_radius) {
-        Gfx::IntPoint arc_start = { (int)top_left_radius + (int)top_border_rect.width(), 0 };
-        Gfx::IntPoint arc_end = { (int)bordered_rect.width(), (int)top_right_radius };
-        draw_quarter_circle(arc_start, arc_end, computed_values().border_top().color, computed_values().border_top().width);
-    }
-
-    if (bottom_right_radius) {
-        Gfx::IntPoint arc_start = { (int)bordered_rect.width(), (int)top_right_radius + (int)right_border_rect.height() };
-        Gfx::IntPoint arc_end = { (int)bottom_border_rect.width() + (int)bottom_left_radius, (int)bordered_rect.height() };
-        draw_quarter_circle(arc_start, arc_end, computed_values().border_bottom().color, computed_values().border_bottom().width);
-    }
-
-    if (bottom_left_radius) {
-        Gfx::IntPoint arc_start = { (int)bottom_left_radius, (int)bordered_rect.height() };
-        Gfx::IntPoint arc_end = { 0, (int)bordered_rect.height() - (int)bottom_left_radius };
-        draw_quarter_circle(arc_start, arc_end, computed_values().border_bottom().color, computed_values().border_bottom().width);
-    }
+    Painting::paint_all_borders(context, absolute_border_box_rect(), normalized_border_radius_data(), borders_data);
 }
 
 void Box::paint_background(PaintContext& context)
 {
-    auto padded_rect = this->padded_rect();
     // If the body's background properties were propagated to the root element, do no re-paint the body's background.
     if (is_body() && document().html_element()->should_use_body_background_properties())
         return;
 
     Gfx::IntRect background_rect;
     Color background_color = computed_values().background_color();
-    const Gfx::Bitmap* background_image = this->background_image() ? this->background_image()->bitmap() : nullptr;
-    CSS::Repeat background_repeat_x = computed_values().background_repeat_x();
-    CSS::Repeat background_repeat_y = computed_values().background_repeat_y();
+    auto* background_layers = &computed_values().background_layers();
 
     if (is_root_element()) {
         // CSS 2.1 Appendix E.2: If the element is a root element, paint the background over the entire canvas.
@@ -192,88 +106,71 @@ void Box::paint_background(PaintContext& context)
         // Section 2.11.2: If the computed value of background-image on the root element is none and its background-color is transparent,
         // user agents must instead propagate the computed values of the background properties from that element’s first HTML BODY child element.
         if (document().html_element()->should_use_body_background_properties()) {
+            background_layers = document().background_layers();
             background_color = document().background_color(context.palette());
-            background_image = document().background_image();
-            background_repeat_x = document().background_repeat_x();
-            background_repeat_y = document().background_repeat_y();
         }
     } else {
-        background_rect = enclosing_int_rect(padded_rect);
+        background_rect = enclosing_int_rect(absolute_padding_box_rect());
     }
 
     // HACK: If the Box has a border, use the bordered_rect to paint the background.
     //       This way if we have a border-radius there will be no gap between the filling and actual border.
     if (computed_values().border_top().width || computed_values().border_right().width || computed_values().border_bottom().width || computed_values().border_left().width)
-        background_rect = enclosing_int_rect(bordered_rect());
+        background_rect = enclosing_int_rect(absolute_border_box_rect());
 
-    // FIXME: some values should be relative to the height() if specified, but which? For now, all relative values are relative to the width.
-    auto border_radius_data = normalized_border_radius_data();
-    auto top_left_radius = border_radius_data.top_left;
-    auto top_right_radius = border_radius_data.top_right;
-    auto bottom_right_radius = border_radius_data.bottom_right;
-    auto bottom_left_radius = border_radius_data.bottom_left;
-
-    context.painter().fill_rect_with_rounded_corners(background_rect, move(background_color), top_left_radius, top_right_radius, bottom_right_radius, bottom_left_radius);
-
-    if (background_image)
-        paint_background_image(context, *background_image, background_repeat_x, background_repeat_y, move(background_rect));
+    Painting::paint_background(context, *this, background_rect, background_color, background_layers, normalized_border_radius_data());
 }
 
-void Box::paint_background_image(
-    PaintContext& context,
-    const Gfx::Bitmap& background_image,
-    CSS::Repeat background_repeat_x,
-    CSS::Repeat background_repeat_y,
-    Gfx::IntRect background_rect)
+void Box::paint_box_shadow(PaintContext& context)
 {
-    switch (background_repeat_x) {
-    case CSS::Repeat::Round:
-    case CSS::Repeat::Space:
-        // FIXME: Support 'round' and 'space'. Fall through to 'repeat' since that most closely resembles these.
-    case CSS::Repeat::Repeat:
-        // The background rect is already sized to align with 'repeat'.
-        break;
-    case CSS::Repeat::NoRepeat:
-        background_rect.set_width(background_image.width());
+    auto box_shadow_data = computed_values().box_shadow();
+    if (box_shadow_data.is_empty())
+        return;
+
+    Vector<Painting::BoxShadowData> resolved_box_shadow_data;
+    resolved_box_shadow_data.ensure_capacity(box_shadow_data.size());
+    for (auto const& layer : box_shadow_data) {
+        resolved_box_shadow_data.empend(
+            layer.color,
+            static_cast<int>(layer.offset_x.to_px(*this)),
+            static_cast<int>(layer.offset_y.to_px(*this)),
+            static_cast<int>(layer.blur_radius.to_px(*this)),
+            static_cast<int>(layer.spread_distance.to_px(*this)),
+            layer.placement == CSS::BoxShadowPlacement::Outer ? Painting::BoxShadowPlacement::Outer : Painting::BoxShadowPlacement::Inner);
+    }
+    Painting::paint_box_shadow(context, enclosing_int_rect(absolute_border_box_rect()), resolved_box_shadow_data);
+}
+
+Painting::BorderRadiusData Box::normalized_border_radius_data()
+{
+    return Painting::normalized_border_radius_data(*this, absolute_border_box_rect(),
+        computed_values().border_top_left_radius(),
+        computed_values().border_top_right_radius(),
+        computed_values().border_bottom_right_radius(),
+        computed_values().border_bottom_left_radius());
+}
+
+// https://www.w3.org/TR/css-display-3/#out-of-flow
+bool Box::is_out_of_flow(FormattingContext const& formatting_context) const
+{
+    // A box is out of flow if either:
+
+    // 1. It is floated (which requires that floating is not inhibited).
+    if (!formatting_context.inhibits_floating() && computed_values().float_() != CSS::Float::None)
+        return true;
+
+    // 2. It is "absolutely positioned".
+    switch (computed_values().position()) {
+    case CSS::Position::Absolute:
+    case CSS::Position::Fixed:
+        return true;
+    case CSS::Position::Static:
+    case CSS::Position::Relative:
+    case CSS::Position::Sticky:
         break;
     }
 
-    switch (background_repeat_y) {
-    case CSS::Repeat::Round:
-    case CSS::Repeat::Space:
-        // FIXME: Support 'round' and 'space'. Fall through to 'repeat' since that most closely resembles these.
-    case CSS::Repeat::Repeat:
-        // The background rect is already sized to align with 'repeat'.
-        break;
-    case CSS::Repeat::NoRepeat:
-        background_rect.set_height(background_image.height());
-        break;
-    }
-
-    context.painter().blit_tiled(background_rect, background_image, background_image.rect());
-}
-
-Box::BorderRadiusData Box::normalized_border_radius_data()
-{
-    // FIXME: some values should be relative to the height() if specified, but which? For now, all relative values are relative to the width.
-    auto bottom_left_radius = computed_values().border_bottom_left_radius().resolved_or_zero(*this, width()).to_px(*this);
-    auto bottom_right_radius = computed_values().border_bottom_right_radius().resolved_or_zero(*this, width()).to_px(*this);
-    auto top_left_radius = computed_values().border_top_left_radius().resolved_or_zero(*this, width()).to_px(*this);
-    auto top_right_radius = computed_values().border_top_right_radius().resolved_or_zero(*this, width()).to_px(*this);
-
-    // Scale overlapping curves according to https://www.w3.org/TR/css-backgrounds-3/#corner-overlap
-    auto f = 1.0f;
-    f = min(f, bordered_rect().width() / (float)(top_left_radius + top_right_radius));
-    f = min(f, bordered_rect().height() / (float)(top_right_radius + bottom_right_radius));
-    f = min(f, bordered_rect().width() / (float)(bottom_left_radius + bottom_right_radius));
-    f = min(f, bordered_rect().height() / (float)(top_left_radius + bottom_left_radius));
-
-    top_left_radius = (int)(top_left_radius * f);
-    top_right_radius = (int)(top_right_radius * f);
-    bottom_right_radius = (int)(bottom_right_radius * f);
-    bottom_left_radius = (int)(bottom_left_radius * f);
-
-    return { (int)top_left_radius, (int)top_right_radius, (int)bottom_right_radius, (int)bottom_left_radius };
+    return false;
 }
 
 HitTestResult Box::hit_test(const Gfx::IntPoint& position, HitTestType type) const
@@ -281,7 +178,7 @@ HitTestResult Box::hit_test(const Gfx::IntPoint& position, HitTestType type) con
     // FIXME: It would be nice if we could confidently skip over hit testing
     //        parts of the layout tree, but currently we can't just check
     //        m_rect.contains() since inline text rects can't be trusted..
-    HitTestResult result { absolute_rect().contains(position.x(), position.y()) ? this : nullptr };
+    HitTestResult result { absolute_border_box_rect().contains(position.x(), position.y()) ? this : nullptr };
     for_each_child_in_paint_order([&](auto& child) {
         auto child_result = child.hit_test(position, type);
         if (child_result.layout_node)
@@ -313,33 +210,35 @@ void Box::set_offset(const Gfx::FloatPoint& offset)
     did_set_rect();
 }
 
-void Box::set_size(const Gfx::FloatSize& size)
+void Box::set_content_size(Gfx::FloatSize const& size)
 {
-    if (m_size == size)
+    if (m_content_size == size)
         return;
-    m_size = size;
+    m_content_size = size;
     did_set_rect();
 }
 
 Gfx::FloatPoint Box::effective_offset() const
 {
-    if (m_containing_line_box_fragment)
-        return m_containing_line_box_fragment->offset();
+    if (m_containing_line_box_fragment.has_value()) {
+        auto const& fragment = containing_block()->line_boxes()[m_containing_line_box_fragment->line_box_index].fragments()[m_containing_line_box_fragment->fragment_index];
+        return fragment.offset();
+    }
     return m_offset;
 }
 
 const Gfx::FloatRect Box::absolute_rect() const
 {
-    Gfx::FloatRect rect { effective_offset(), size() };
+    Gfx::FloatRect rect { effective_offset(), content_size() };
     for (auto* block = containing_block(); block; block = block->containing_block()) {
         rect.translate_by(block->effective_offset());
     }
     return rect;
 }
 
-void Box::set_containing_line_box_fragment(LineBoxFragment& fragment)
+void Box::set_containing_line_box_fragment(Optional<LineBoxFragmentCoordinate> fragment_coordinate)
 {
-    m_containing_line_box_fragment = fragment.make_weak_ptr();
+    m_containing_line_box_fragment = fragment_coordinate;
 }
 
 StackingContext* Box::enclosing_stacking_context()
@@ -347,33 +246,32 @@ StackingContext* Box::enclosing_stacking_context()
     for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
         if (!is<Box>(ancestor))
             continue;
-        auto& ancestor_box = downcast<Box>(*ancestor);
+        auto& ancestor_box = verify_cast<Box>(*ancestor);
         if (!ancestor_box.establishes_stacking_context())
             continue;
         VERIFY(ancestor_box.stacking_context());
         return ancestor_box.stacking_context();
     }
-    // We should always reach the Layout::InitialContainingBlockBox stacking context.
+    // We should always reach the Layout::InitialContainingBlock stacking context.
     VERIFY_NOT_REACHED();
 }
 
-LineBox& Box::ensure_last_line_box()
+void Box::before_children_paint(PaintContext& context, PaintPhase phase)
 {
-    if (m_line_boxes.is_empty())
-        return add_line_box();
-    return m_line_boxes.last();
+    NodeWithStyleAndBoxModelMetrics::before_children_paint(context, phase);
+    // FIXME: Support more overflow variations.
+    if (computed_values().overflow_x() == CSS::Overflow::Hidden && computed_values().overflow_y() == CSS::Overflow::Hidden) {
+        context.painter().save();
+        context.painter().add_clip_rect(enclosing_int_rect(absolute_border_box_rect()));
+    }
 }
 
-LineBox& Box::add_line_box()
+void Box::after_children_paint(PaintContext& context, PaintPhase phase)
 {
-    m_line_boxes.append(LineBox());
-    return m_line_boxes.last();
+    NodeWithStyleAndBoxModelMetrics::after_children_paint(context, phase);
+    // FIXME: Support more overflow variations.
+    if (computed_values().overflow_x() == CSS::Overflow::Hidden && computed_values().overflow_y() == CSS::Overflow::Hidden)
+        context.painter().restore();
 }
 
-float Box::width_of_logical_containing_block() const
-{
-    auto* containing_block = this->containing_block();
-    VERIFY(containing_block);
-    return containing_block->width();
-}
 }

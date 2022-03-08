@@ -7,22 +7,46 @@
 #pragma once
 
 #include <AK/String.h>
+#include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
+#include <LibJS/Runtime/Utf16String.h>
+#include <LibJS/Runtime/Value.h>
 
 namespace JS {
 
 class PrimitiveString final : public Cell {
 public:
     explicit PrimitiveString(String);
+    explicit PrimitiveString(Utf16String);
     virtual ~PrimitiveString();
 
-    const String& string() const { return m_string; }
+    PrimitiveString(PrimitiveString const&) = delete;
+    PrimitiveString& operator=(PrimitiveString const&) = delete;
+
+    String const& string() const;
+    bool has_utf8_string() const { return m_has_utf8_string; }
+
+    Utf16String const& utf16_string() const;
+    Utf16View utf16_string_view() const;
+    bool has_utf16_string() const { return m_has_utf16_string; }
+
+    Optional<Value> get(GlobalObject&, PropertyKey const&) const;
 
 private:
     virtual const char* class_name() const override { return "PrimitiveString"; }
 
-    String m_string;
+    mutable String m_utf8_string;
+    mutable bool m_has_utf8_string { false };
+
+    mutable Utf16String m_utf16_string;
+    mutable bool m_has_utf16_string { false };
 };
+
+PrimitiveString* js_string(Heap&, Utf16View const&);
+PrimitiveString* js_string(VM&, Utf16View const&);
+
+PrimitiveString* js_string(Heap&, Utf16String);
+PrimitiveString* js_string(VM&, Utf16String);
 
 PrimitiveString* js_string(Heap&, String);
 PrimitiveString* js_string(VM&, String);

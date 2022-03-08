@@ -15,6 +15,7 @@ Set* Set::create(GlobalObject& global_object)
 
 Set::Set(Object& prototype)
     : Object(prototype)
+    , m_values(*prototype.global_object().map_prototype())
 {
 }
 
@@ -24,9 +25,8 @@ Set::~Set()
 
 void Set::visit_edges(Cell::Visitor& visitor)
 {
-    Object::visit_edges(visitor);
-    for (auto& value : m_values)
-        visitor.visit(value);
+    Base::visit_edges(visitor);
+    static_cast<Object&>(m_values).visit_edges(visitor);
 }
 
 }

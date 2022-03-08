@@ -28,6 +28,8 @@ BoardWidget::BoardWidget(size_t rows, size_t columns)
 
     on_pattern_selection = [this](auto* pattern) {
         m_selected_pattern = pattern;
+        if (on_pattern_selection_state_change)
+            on_pattern_selection_state_change();
     };
 
     setup_patterns();
@@ -137,7 +139,7 @@ void BoardWidget::paint_event(GUI::PaintEvent& event)
 
             bool on = m_board->cell(row, column);
             if (on) {
-                fill_color = Color::from_rgb(Gfx::make_rgb(220, 220, 80));
+                fill_color = Color::from_rgb(0xdcdc50);
             } else {
                 fill_color = Color::MidGray;
             }
@@ -166,7 +168,7 @@ void BoardWidget::paint_event(GUI::PaintEvent& event)
 
 void BoardWidget::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         set_toggling_cells(true);
         auto row_and_column = get_row_and_column_for_point(event.x(), event.y());
         if (!row_and_column.has_value())
@@ -245,6 +247,8 @@ void BoardWidget::place_pattern(size_t row, size_t column)
         y_offset++;
     }
     m_selected_pattern = nullptr;
+    if (on_pattern_selection_state_change)
+        on_pattern_selection_state_change();
     if (m_pattern_preview_timer->is_active())
         m_pattern_preview_timer->stop();
 }

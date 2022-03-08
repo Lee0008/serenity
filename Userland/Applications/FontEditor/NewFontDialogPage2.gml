@@ -1,22 +1,20 @@
 @GUI::Widget {
     layout: @GUI::VerticalBoxLayout {
-        margins: [20, 20, 20, 20]
+        margins: [20]
     }
 
     @GUI::Widget {
-        layout: @GUI::HorizontalBoxLayout {
-        }
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::GroupBox {
             title: "Metadata"
             fixed_width: 200
             layout: @GUI::VerticalBoxLayout {
-                margins: [8, 16, 8, 8]
+                margins: [6]
             }
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Label {
                     fixed_width: 80
@@ -26,13 +24,12 @@
 
                 @GUI::SpinBox {
                     name: "height_spinbox"
-                    min: 0
+                    min: 1
                 }
             }
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Label {
                     fixed_width: 80
@@ -42,13 +39,12 @@
 
                 @GUI::SpinBox {
                     name: "width_spinbox"
-                    min: 0
+                    min: 1
                 }
             }
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Label {
                     fixed_width: 80
@@ -63,8 +59,7 @@
             }
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Label {
                     fixed_width: 80
@@ -83,8 +78,7 @@
             }
 
             @GUI::Widget {
-                layout: @GUI::HorizontalBoxLayout {
-                }
+                layout: @GUI::HorizontalBoxLayout {}
 
                 @GUI::Label {
                     fixed_width: 80
@@ -101,7 +95,10 @@
 
             @GUI::Widget {
                 fixed_height: 22
-                layout: @GUI::HorizontalBoxLayout {
+                layout: @GUI::HorizontalBoxLayout {}
+
+                @GUI::Widget {
+                    fixed_width: 80
                 }
 
                 @GUI::CheckBox {
@@ -109,28 +106,22 @@
                     text: "Fixed width"
                     autosize: true
                 }
-
-                @GUI::Widget {
-                }
             }
         }
 
         @GUI::Widget {
-            layout: @GUI::VerticalBoxLayout {
-            }
+            layout: @GUI::VerticalBoxLayout {}
 
-            @GUI::Widget {
-            }
+            @GUI::Widget {}
 
             @GUI::Widget {
                 name: "glyph_editor_container"
                 layout: @GUI::VerticalBoxLayout {
-                    margins: [0, 5, 0, 0]
+                    margins: [5, 0, 0]
                 }
             }
 
-            @GUI::Widget {
-            }
+            @GUI::Widget {}
         }
     }
 }

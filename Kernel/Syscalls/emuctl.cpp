@@ -8,8 +8,9 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$emuctl()
+ErrorOr<FlatPtr> Process::sys$emuctl()
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
     return ENOSYS;
 }
 

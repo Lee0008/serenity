@@ -8,13 +8,14 @@
 
 #include <AK/AllOf.h>
 #include <AK/AnyOf.h>
+#include <AK/Array.h>
 #include <AK/StdLibExtras.h>
 #include <AK/StringView.h>
 
 #ifdef ENABLE_COMPILETIME_FORMAT_CHECK
 // FIXME: Seems like clang doesn't like calling 'consteval' functions inside 'consteval' functions quite the same way as GCC does,
 //        it seems to entirely forget that it accepted that parameters to a 'consteval' function to begin with.
-#    ifdef __clang__
+#    if defined(__clang__) || defined(__CLION_IDE_)
 #        undef ENABLE_COMPILETIME_FORMAT_CHECK
 #    endif
 #endif
@@ -199,8 +200,7 @@ private:
                 return false;
             };
             auto references_all_arguments = AK::all_of(
-                all_parameters.begin(),
-                all_parameters.end(),
+                all_parameters,
                 [&](auto& entry) {
                     return contains(
                         check.used_arguments.begin(),

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,16 +15,12 @@ IdentityCell::IdentityCell()
 {
 }
 
-IdentityCell::~IdentityCell()
+JS::ThrowCompletionOr<String> IdentityCell::display(Cell& cell, const CellTypeMetadata&) const
 {
+    return cell.js_data().to_string(cell.sheet().global_object());
 }
 
-String IdentityCell::display(Cell& cell, const CellTypeMetadata&) const
-{
-    return cell.js_data().to_string_without_side_effects();
-}
-
-JS::Value IdentityCell::js_value(Cell& cell, const CellTypeMetadata&) const
+JS::ThrowCompletionOr<JS::Value> IdentityCell::js_value(Cell& cell, const CellTypeMetadata&) const
 {
     return cell.js_data();
 }

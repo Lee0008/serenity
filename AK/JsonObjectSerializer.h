@@ -1,141 +1,236 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2022, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/JsonArraySerializer.h>
-#include <AK/JsonValue.h>
+#include <AK/Try.h>
+
+#ifndef KERNEL
+#    include <AK/JsonValue.h>
+#endif
 
 namespace AK {
 
 template<typename Builder>
 class JsonObjectSerializer {
 public:
-    explicit JsonObjectSerializer(Builder& builder)
-        : m_builder(builder)
+    static ErrorOr<JsonObjectSerializer> try_create(Builder& builder)
     {
-        m_builder.append('{');
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(builder.try_append('{'));
+        else
+            TRY(builder.append('{'));
+        return JsonObjectSerializer { builder };
+    }
+
+    JsonObjectSerializer(JsonObjectSerializer&& other)
+        : m_builder(other.m_builder)
+        , m_empty(other.m_empty)
+        , m_finished(exchange(other.m_finished, true))
+    {
     }
 
     JsonObjectSerializer(const JsonObjectSerializer&) = delete;
-    JsonObjectSerializer(JsonObjectSerializer&&) = delete;
 
     ~JsonObjectSerializer()
     {
-        if (!m_finished)
-            finish();
+        VERIFY(m_finished);
     }
 
-    void add(const StringView& key, const JsonValue& value)
+#ifndef KERNEL
+    ErrorOr<void> add(StringView key, const JsonValue& value)
     {
-        begin_item(key);
+        TRY(begin_item(key));
         value.serialize(m_builder);
+        return {};
     }
+#endif
 
-    void add(const StringView& key, const StringView& value)
+    ErrorOr<void> add(StringView key, StringView value)
     {
-        begin_item(key);
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(value);
-        m_builder.append('"');
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>) {
+            TRY(m_builder.try_append('"'));
+            TRY(m_builder.try_append_escaped_for_json(value));
+            TRY(m_builder.try_append('"'));
+        } else {
+            TRY(m_builder.append('"'));
+            TRY(m_builder.append_escaped_for_json(value));
+            TRY(m_builder.append('"'));
+        }
+        return {};
     }
 
-    void add(const StringView& key, const String& value)
+#ifndef KERNEL
+    ErrorOr<void> add(StringView key, const String& value)
     {
-        begin_item(key);
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(value);
-        m_builder.append('"');
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>) {
+            TRY(m_builder.try_append('"'));
+            TRY(m_builder.try_append_escaped_for_json(value));
+            TRY(m_builder.try_append('"'));
+        } else {
+            TRY(m_builder.append('"'));
+            TRY(m_builder.append_escaped_for_json(value));
+            TRY(m_builder.append('"'));
+        }
+        return {};
     }
+#endif
 
-    void add(const StringView& key, const char* value)
+    ErrorOr<void> add(StringView key, const char* value)
     {
-        begin_item(key);
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(value);
-        m_builder.append('"');
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>) {
+            TRY(m_builder.try_append('"'));
+            TRY(m_builder.try_append_escaped_for_json(value));
+            TRY(m_builder.try_append('"'));
+        } else {
+            TRY(m_builder.append('"'));
+            TRY(m_builder.append_escaped_for_json(value));
+            TRY(m_builder.append('"'));
+        }
+        return {};
     }
 
-    void add(const StringView& key, bool value)
+    ErrorOr<void> add(StringView key, bool value)
     {
-        begin_item(key);
-        m_builder.append(value ? "true" : "false");
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_append(value ? "true" : "false"));
+        else
+            TRY(m_builder.append(value ? "true" : "false"));
+        return {};
     }
 
-    void add(const StringView& key, int value)
+    ErrorOr<void> add(StringView key, int value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
 
-    void add(const StringView& key, unsigned value)
+    ErrorOr<void> add(StringView key, unsigned value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
 
-    void add(const StringView& key, long value)
+    ErrorOr<void> add(StringView key, long value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
 
-    void add(const StringView& key, long unsigned value)
+    ErrorOr<void> add(StringView key, long unsigned value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
 
-    void add(const StringView& key, long long value)
+    ErrorOr<void> add(StringView key, long long value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
 
-    void add(const StringView& key, long long unsigned value)
+    ErrorOr<void> add(StringView key, long long unsigned value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
 
-    void add(const StringView& key, double value)
+#ifndef KERNEL
+    ErrorOr<void> add(StringView key, double value)
     {
-        begin_item(key);
-        m_builder.appendff("{}", value);
+        TRY(begin_item(key));
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_appendff("{}", value));
+        else
+            TRY(m_builder.appendff("{}", value));
+        return {};
     }
+#endif
 
-    JsonArraySerializer<Builder> add_array(const StringView& key)
+    ErrorOr<JsonArraySerializer<Builder>> add_array(StringView key)
     {
-        begin_item(key);
-        return JsonArraySerializer(m_builder);
+        TRY(begin_item(key));
+        return JsonArraySerializer<Builder>::try_create(m_builder);
     }
 
-    JsonObjectSerializer<Builder> add_object(const StringView& key)
+    ErrorOr<JsonObjectSerializer<Builder>> add_object(StringView key)
     {
-        begin_item(key);
-        return JsonObjectSerializer(m_builder);
+        TRY(begin_item(key));
+        return JsonObjectSerializer::try_create(m_builder);
     }
 
-    void finish()
+    ErrorOr<void> finish()
     {
         VERIFY(!m_finished);
         m_finished = true;
-        m_builder.append('}');
+        if constexpr (IsLegacyBuilder<Builder>)
+            TRY(m_builder.try_append('}'));
+        else
+            TRY(m_builder.append('}'));
+        return {};
     }
 
 private:
-    void begin_item(const StringView& key)
+    explicit JsonObjectSerializer(Builder& builder)
+        : m_builder(builder)
     {
-        if (!m_empty)
-            m_builder.append(',');
+    }
+
+    ErrorOr<void> begin_item(StringView key)
+    {
+        VERIFY(!m_finished);
+        if (!m_empty) {
+            if constexpr (IsLegacyBuilder<Builder>)
+                TRY(m_builder.try_append(','));
+            else
+                TRY(m_builder.append(','));
+        }
         m_empty = false;
 
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(key);
-        m_builder.append("\":");
+        if constexpr (IsLegacyBuilder<Builder>) {
+            TRY(m_builder.try_append('"'));
+            TRY(m_builder.try_append_escaped_for_json(key));
+            TRY(m_builder.try_append("\":"));
+        } else {
+            TRY(m_builder.append('"'));
+            TRY(m_builder.append_escaped_for_json(key));
+            TRY(m_builder.append("\":"));
+        }
+        return {};
     }
 
     Builder& m_builder;
@@ -143,11 +238,21 @@ private:
     bool m_finished { false };
 };
 
+// Template magic to allow for JsonObjectSerializer<>::try_create(...) - Blame CxByte
+template<>
+struct JsonObjectSerializer<void> {
+    template<typename Builder>
+    static ErrorOr<JsonObjectSerializer<Builder>> try_create(Builder& builder)
+    {
+        return JsonObjectSerializer<Builder>::try_create(builder);
+    }
+};
+
 template<typename Builder>
-JsonObjectSerializer<Builder> JsonArraySerializer<Builder>::add_object()
+ErrorOr<JsonObjectSerializer<Builder>> JsonArraySerializer<Builder>::add_object()
 {
-    begin_item();
-    return JsonObjectSerializer(m_builder);
+    TRY(begin_item());
+    return JsonObjectSerializer<Builder>::try_create(m_builder);
 }
 
 }

@@ -1,3 +1,5 @@
-interface Text : CharacterData {
+#import <DOM/CharacterData.idl>
 
+interface Text : CharacterData {
+    constructor(optional DOMString data = "");
 };

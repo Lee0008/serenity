@@ -4,41 +4,23 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Clipboard/ClientConnection.h>
+#include <Clipboard/ConnectionFromClient.h>
 #include <Clipboard/Storage.h>
 #include <LibCore/EventLoop.h>
-#include <LibCore/LocalServer.h>
-#include <LibIPC/ClientConnection.h>
+#include <LibCore/System.h>
+#include <LibIPC/MultiServer.h>
+#include <LibMain/Main.h>
 
-int main(int, char**)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
-    if (pledge("stdio recvfd sendfd accept", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd accept"));
     Core::EventLoop event_loop;
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    auto server = Core::LocalServer::construct();
-    bool ok = server->take_over_from_system_server();
-    VERIFY(ok);
-
-    server->on_ready_to_accept = [&] {
-        auto client_socket = server->accept();
-        if (!client_socket) {
-            dbgln("Clipboard: accept failed.");
-            return;
-        }
-        static int s_next_client_id = 0;
-        int client_id = ++s_next_client_id;
-        IPC::new_client_connection<Clipboard::ClientConnection>(client_socket.release_nonnull(), client_id);
-    };
+    auto server = TRY(IPC::MultiServer<Clipboard::ConnectionFromClient>::try_create());
 
     Clipboard::Storage::the().on_content_change = [&] {
-        Clipboard::ClientConnection::for_each_client([&](auto& client) {
+        Clipboard::ConnectionFromClient::for_each_client([&](auto& client) {
             client.notify_about_clipboard_change();
         });
     };

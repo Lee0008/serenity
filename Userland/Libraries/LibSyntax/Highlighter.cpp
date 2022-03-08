@@ -91,11 +91,8 @@ void Highlighter::highlight_matching_token_pair()
             }
         }
 
-        auto right_of_end = span.range.end();
-        right_of_end.set_column(right_of_end.column() + 1);
-
         for (auto& pair : pairs) {
-            if (token_types_equal(token_type, pair.close) && right_of_end == m_client->get_cursor()) {
+            if (token_types_equal(token_type, pair.close) && span.range.end() == m_client->get_cursor()) {
                 auto buddy = find_span_of_type(i, pair.open, pair.close, Direction::Backward);
                 if (buddy.has_value())
                     make_buddies(i, buddy.value());
@@ -143,6 +140,32 @@ void Highlighter::register_nested_token_pairs(Vector<MatchingTokenPair> pairs)
 {
     for (auto& pair : pairs)
         m_nested_token_pairs.set(pair);
+}
+
+StringView Highlighter::language_string(Language language) const
+{
+    switch (language) {
+    case Language::Cpp:
+        return "C++"sv;
+    case Language::CSS:
+        return "CSS"sv;
+    case Language::GitCommit:
+        return "Git"sv;
+    case Language::GML:
+        return "GML"sv;
+    case Language::HTML:
+        return "HTML"sv;
+    case Language::INI:
+        return "INI"sv;
+    case Language::JavaScript:
+        return "JavaScript"sv;
+    case Language::Shell:
+        return "Shell"sv;
+    case Language::SQL:
+        return "SQL"sv;
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
 }

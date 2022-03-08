@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/Badge.h>
 #include <AK/Debug.h>
 #include <AK/DistinctNumeric.h>
 #include <AK/MemoryStream.h>
@@ -14,6 +15,7 @@
 #include <AK/String.h>
 #include <AK/Variant.h>
 #include <LibWasm/Constants.h>
+#include <LibWasm/Forward.h>
 #include <LibWasm/Opcode.h>
 
 namespace Wasm {
@@ -36,6 +38,7 @@ enum class ParseError {
     InvalidTag,
     InvalidType,
     HugeAllocationRequested,
+    OutOfMemory,
     // FIXME: This should not exist!
     NotImplemented,
 };
@@ -178,6 +181,8 @@ public:
         : m_kind(kind)
     {
     }
+
+    bool operator==(ValueType const&) const = default;
 
     auto is_reference() const { return m_kind == ExternReference || m_kind == FunctionReference || m_kind == NullExternReference || m_kind == NullFunctionReference; }
     auto is_numeric() const { return !is_reference(); }
@@ -614,8 +619,8 @@ public:
 public:
     static constexpr u8 section_id = 5;
 
-    explicit MemorySection(Vector<Memory> memorys)
-        : m_memories(move(memorys))
+    explicit MemorySection(Vector<Memory> memories)
+        : m_memories(move(memories))
     {
     }
 
@@ -952,6 +957,12 @@ private:
 
 class Module {
 public:
+    enum class ValidationStatus {
+        Unchecked,
+        Invalid,
+        Valid,
+    };
+
     class Function {
     public:
         explicit Function(TypeIndex type, Vector<ValueType> local_types, Expression body)
@@ -992,7 +1003,10 @@ public:
     explicit Module(Vector<AnySection> sections)
         : m_sections(move(sections))
     {
-        populate_sections();
+        if (!populate_sections()) {
+            m_validation_status = ValidationStatus::Invalid;
+            m_validation_error = "Failed to populate module sections"sv;
+        }
     }
 
     auto& sections() const { return m_sections; }
@@ -1025,12 +1039,20 @@ public:
         }
     }
 
+    void set_validation_status(ValidationStatus status, Badge<Validator>) { set_validation_status(status); }
+    ValidationStatus validation_status() const { return m_validation_status; }
+    StringView validation_error() const { return *m_validation_error; }
+    void set_validation_error(String error) { m_validation_error = move(error); }
+
     static ParseResult<Module> parse(InputStream& stream);
 
 private:
-    void populate_sections();
+    bool populate_sections();
+    void set_validation_status(ValidationStatus status) { m_validation_status = status; }
 
     Vector<AnySection> m_sections;
     Vector<Function> m_functions;
+    ValidationStatus m_validation_status { ValidationStatus::Unchecked };
+    Optional<String> m_validation_error;
 };
 }

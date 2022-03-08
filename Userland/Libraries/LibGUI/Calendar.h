@@ -30,9 +30,6 @@ public:
         YearOnly
     };
 
-    Calendar(Core::DateTime date_time = Core::DateTime::now(), Mode mode = Month);
-    virtual ~Calendar() override;
-
     void set_selected_date(Core::DateTime date_time) { m_selected_date = date_time; }
     Core::DateTime selected_date() const { return m_selected_date; }
 
@@ -75,12 +72,15 @@ public:
     Function<void()> on_month_click;
 
 private:
+    Calendar(Core::DateTime date_time = Core::DateTime::now(), Mode mode = Month);
+    virtual ~Calendar() override;
+
     virtual void resize_event(GUI::ResizeEvent&) override;
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void mousemove_event(GUI::MouseEvent&) override;
     virtual void mousedown_event(MouseEvent&) override;
     virtual void mouseup_event(MouseEvent&) override;
-    virtual void doubleclick_event(MouseEvent&);
+    virtual void doubleclick_event(MouseEvent&) override;
     virtual void leave_event(Core::Event&) override;
 
     struct Day {

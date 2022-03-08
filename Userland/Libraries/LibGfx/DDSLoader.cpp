@@ -6,9 +6,8 @@
 
 #include <AK/Debug.h>
 #include <AK/Endian.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <AK/MemoryStream.h>
+#include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/Vector.h>
 #include <LibGfx/DDSLoader.h>
@@ -784,7 +783,8 @@ static bool decode_dds(DDSLoadingContext& context)
         return false;
     }
 
-    for (size_t mipmap_level = 0; mipmap_level < max(context.header.mip_map_count, 1u); mipmap_level++) {
+    // We support parsing mipmaps, but we only care about the largest one :^) (At least for now)
+    if (size_t mipmap_level = 0; mipmap_level < max(context.header.mip_map_count, 1u)) {
         u64 width = get_width(context.header, mipmap_level);
         u64 height = get_height(context.header, mipmap_level);
 
@@ -792,12 +792,9 @@ static bool decode_dds(DDSLoadingContext& context)
         dbgln_if(DDS_DEBUG, "There are {} bytes remaining, we need {} for mipmap level {} of the image", stream.remaining(), needed_bytes, mipmap_level);
         VERIFY(stream.remaining() >= needed_bytes);
 
-        context.bitmap = Bitmap::create_purgeable(BitmapFormat::BGRA8888, { width, height });
+        context.bitmap = Bitmap::try_create(BitmapFormat::BGRA8888, { width, height }).release_value_but_fixme_should_propagate_errors();
 
         decode_bitmap(stream, context, format, width, height);
-
-        // We support parsing mipmaps, but we only care about the largest one :^) (Atleast for now)
-        break;
     }
 
     context.state = DDSLoadingContext::State::BitmapDecoded;
@@ -940,37 +937,6 @@ void DDSLoadingContext::dump_debug()
     dbgln("{}", builder.to_string());
 }
 
-static RefPtr<Gfx::Bitmap> load_dds_impl(const u8* data, size_t length)
-{
-    DDSLoadingContext context;
-    context.data = data;
-    context.data_size = length;
-
-    if (!decode_dds(context))
-        return nullptr;
-
-    return context.bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_dds(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    auto bitmap = load_dds_impl((const u8*)file_or_error.value()->data(), file_or_error.value()->size());
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded DDS: {}", bitmap->size(), LexicalPath::canonicalized_path(path)));
-    return bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_dds_from_memory(const u8* data, size_t length)
-{
-    auto bitmap = load_dds_impl(data, length);
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded DDS: <memory>", bitmap->size()));
-    return bitmap;
-}
-
 DDSImageDecoderPlugin::DDSImageDecoderPlugin(const u8* data, size_t size)
 {
     m_context = make<DDSLoadingContext>();
@@ -993,37 +959,22 @@ IntSize DDSImageDecoderPlugin::size()
     return {};
 }
 
-RefPtr<Gfx::Bitmap> DDSImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == DDSLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < DDSLoadingContext::State::BitmapDecoded) {
-        bool success = decode_dds(*m_context);
-        if (!success)
-            return nullptr;
-    }
-
-    VERIFY(m_context->bitmap);
-    return m_context->bitmap;
-}
-
 void DDSImageDecoderPlugin::set_volatile()
 {
     if (m_context->bitmap)
         m_context->bitmap->set_volatile();
 }
 
-bool DDSImageDecoderPlugin::set_nonvolatile()
+bool DDSImageDecoderPlugin::set_nonvolatile(bool& was_purged)
 {
     if (!m_context->bitmap)
         return false;
-    return m_context->bitmap->set_nonvolatile();
+    return m_context->bitmap->set_nonvolatile(was_purged);
 }
 
 bool DDSImageDecoderPlugin::sniff()
 {
-    // The header is always atleast 128 bytes, so if the file is smaller, it cant be a DDS.
+    // The header is always at least 128 bytes, so if the file is smaller, it can't be a DDS.
     return m_context->data_size > 128
         && m_context->data[0] == 0x44
         && m_context->data[1] == 0x44
@@ -1046,9 +997,22 @@ size_t DDSImageDecoderPlugin::frame_count()
     return 1;
 }
 
-ImageFrameDescriptor DDSImageDecoderPlugin::frame([[maybe_unused]] size_t i)
+ErrorOr<ImageFrameDescriptor> DDSImageDecoderPlugin::frame(size_t index)
 {
-    // We have "frames", but they are all the same image, so lets just use the largest version.
-    return { bitmap(), 0 };
+    if (index > 0)
+        return Error::from_string_literal("DDSImageDecoderPlugin: Invalid frame index"sv);
+
+    if (m_context->state == DDSLoadingContext::State::Error)
+        return Error::from_string_literal("DDSImageDecoderPlugin: Decoding failed"sv);
+
+    if (m_context->state < DDSLoadingContext::State::BitmapDecoded) {
+        bool success = decode_dds(*m_context);
+        if (!success)
+            return Error::from_string_literal("DDSImageDecoderPlugin: Decoding failed"sv);
+    }
+
+    VERIFY(m_context->bitmap);
+    return ImageFrameDescriptor { m_context->bitmap, 0 };
 }
+
 }

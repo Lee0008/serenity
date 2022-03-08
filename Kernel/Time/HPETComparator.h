@@ -19,7 +19,7 @@ public:
     static NonnullRefPtr<HPETComparator> create(u8 number, u8 irq, bool periodic_capable, bool is_64bit_capable);
 
     virtual HardwareTimerType timer_type() const override { return HardwareTimerType::HighPrecisionEventTimer; }
-    virtual const char* model() const override { return "HPET"; }
+    virtual StringView model() const override { return "HPET"sv; }
 
     u8 comparator_number() const { return m_comparator_number; }
     bool is_enabled() const { return m_enabled; }
@@ -43,7 +43,7 @@ public:
 
 private:
     void set_new_countdown();
-    virtual void handle_irq(const RegisterState&) override;
+    virtual bool handle_irq(const RegisterState&) override;
     HPETComparator(u8 number, u8 irq, bool periodic_capable, bool is_64bit_capable);
     bool m_periodic : 1;
     bool m_periodic_capable : 1;

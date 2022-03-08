@@ -5,14 +5,15 @@
  */
 
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Event.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
 #include <LibWeb/Layout/FrameBox.h>
 #include <LibWeb/Origin.h>
-#include <LibWeb/Page/BrowsingContext.h>
 
 namespace Web::HTML {
 
-HTMLIFrameElement::HTMLIFrameElement(DOM::Document& document, QualifiedName qualified_name)
+HTMLIFrameElement::HTMLIFrameElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : BrowsingContextContainer(document, move(qualified_name))
 {
 }
@@ -21,9 +22,8 @@ HTMLIFrameElement::~HTMLIFrameElement()
 {
 }
 
-RefPtr<Layout::Node> HTMLIFrameElement::create_layout_node()
+RefPtr<Layout::Node> HTMLIFrameElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
 {
-    auto style = document().style_resolver().resolve_style(*this);
     return adopt_ref(*new Layout::FrameBox(document(), *this, move(style)));
 }
 
@@ -49,7 +49,7 @@ void HTMLIFrameElement::load_src(const String& value)
     if (value.is_null())
         return;
 
-    auto url = document().complete_url(value);
+    auto url = document().parse_url(value);
     if (!url.is_valid()) {
         dbgln("iframe failed to load URL: Invalid URL: {}", value);
         return;
@@ -61,6 +61,25 @@ void HTMLIFrameElement::load_src(const String& value)
 
     dbgln("Loading iframe document from {}", value);
     m_nested_browsing_context->loader().load(url, FrameLoader::Type::IFrame);
+}
+
+// https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
+void run_iframe_load_event_steps(HTML::HTMLIFrameElement& element)
+{
+    // 1. Assert: element's nested browsing context is not null.
+    VERIFY(element.nested_browsing_context());
+
+    // 2. Let childDocument be the active document of element's nested browsing context.
+    [[maybe_unused]] auto* child_document = element.nested_browsing_context()->active_document();
+
+    // FIXME: 3. If childDocument has its mute iframe load flag set, then return.
+
+    // FIXME: 4. Set childDocument's iframe load in progress flag.
+
+    // 5. Fire an event named load at element.
+    element.dispatch_event(DOM::Event::create(HTML::EventNames::load));
+
+    // FIXME: 6. Unset childDocument's iframe load in progress flag.
 }
 
 }

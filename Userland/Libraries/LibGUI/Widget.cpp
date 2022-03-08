@@ -5,22 +5,28 @@
  */
 
 #include <AK/Assertions.h>
+#include <AK/Debug.h>
+#include <AK/IterationDecision.h>
 #include <AK/JsonObject.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/RefPtr.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/ConnectionToWindowServer.h>
 #include <LibGUI/Event.h>
-#include <LibGUI/GMLParser.h>
+#include <LibGUI/GML/AST.h>
+#include <LibGUI/GML/Parser.h>
 #include <LibGUI/Layout.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
-#include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
+#include <LibGfx/SystemTheme.h>
 #include <unistd.h>
 
 REGISTER_CORE_OBJECT(GUI, Widget)
@@ -136,6 +142,50 @@ Widget::Widget()
             }
             return false;
         });
+
+    register_property(
+        "foreground_role", [this]() -> JsonValue { return Gfx::to_string(foreground_role()); },
+        [this](auto& value) {
+            if (!value.is_string())
+                return false;
+            auto str = value.as_string();
+            if (str == "NoRole") {
+                set_foreground_role(Gfx::ColorRole::NoRole);
+                return true;
+            }
+#undef __ENUMERATE_COLOR_ROLE
+#define __ENUMERATE_COLOR_ROLE(role)               \
+    else if (str == #role)                         \
+    {                                              \
+        set_foreground_role(Gfx::ColorRole::role); \
+        return true;                               \
+    }
+            ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
+#undef __ENUMERATE_COLOR_ROLE
+            return false;
+        });
+
+    register_property(
+        "background_role", [this]() -> JsonValue { return Gfx::to_string(background_role()); },
+        [this](auto& value) {
+            if (!value.is_string())
+                return false;
+            auto str = value.as_string();
+            if (str == "NoRole") {
+                set_background_role(Gfx::ColorRole::NoRole);
+                return true;
+            }
+#undef __ENUMERATE_COLOR_ROLE
+#define __ENUMERATE_COLOR_ROLE(role)               \
+    else if (str == #role)                         \
+    {                                              \
+        set_background_role(Gfx::ColorRole::role); \
+        return true;                               \
+    }
+            ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
+#undef __ENUMERATE_COLOR_ROLE
+            return false;
+        });
 }
 
 Widget::~Widget()
@@ -147,22 +197,22 @@ void Widget::child_event(Core::ChildEvent& event)
     if (event.type() == Event::ChildAdded) {
         if (event.child() && is<Widget>(*event.child()) && layout()) {
             if (event.insertion_before_child() && is<Widget>(event.insertion_before_child()))
-                layout()->insert_widget_before(downcast<Widget>(*event.child()), downcast<Widget>(*event.insertion_before_child()));
+                layout()->insert_widget_before(verify_cast<Widget>(*event.child()), verify_cast<Widget>(*event.insertion_before_child()));
             else
-                layout()->add_widget(downcast<Widget>(*event.child()));
+                layout()->add_widget(verify_cast<Widget>(*event.child()));
         }
         if (window() && event.child() && is<Widget>(*event.child()))
-            window()->did_add_widget({}, downcast<Widget>(*event.child()));
+            window()->did_add_widget({}, verify_cast<Widget>(*event.child()));
     }
     if (event.type() == Event::ChildRemoved) {
         if (layout()) {
             if (event.child() && is<Widget>(*event.child()))
-                layout()->remove_widget(downcast<Widget>(*event.child()));
+                layout()->remove_widget(verify_cast<Widget>(*event.child()));
             else
                 invalidate_layout();
         }
         if (window() && event.child() && is<Widget>(*event.child()))
-            window()->did_remove_widget({}, downcast<Widget>(*event.child()));
+            window()->did_remove_widget({}, verify_cast<Widget>(*event.child()));
         update();
     }
     return Core::Object::child_event(event);
@@ -250,12 +300,18 @@ void Widget::event(Core::Event& event)
         return drop_event(static_cast<DropEvent&>(event));
     case Event::ThemeChange:
         return theme_change_event(static_cast<ThemeChangeEvent&>(event));
+    case Event::FontsChange:
+        return fonts_change_event(static_cast<FontsChangeEvent&>(event));
     case Event::Enter:
         return handle_enter_event(event);
     case Event::Leave:
         return handle_leave_event(event);
     case Event::EnabledChange:
         return change_event(static_cast<Event&>(event));
+    case Event::ContextMenu:
+        return context_menu_event(static_cast<ContextMenuEvent&>(event));
+    case Event::AppletAreaRectChange:
+        return applet_area_rect_change_event(static_cast<AppletAreaRectChangeEvent&>(event));
     default:
         return Core::Object::event(event);
     }
@@ -266,13 +322,20 @@ void Widget::handle_keydown_event(KeyEvent& event)
     keydown_event(event);
     if (event.key() == KeyCode::Key_Menu) {
         ContextMenuEvent c_event(window_relative_rect().bottom_right(), screen_relative_rect().bottom_right());
-        context_menu_event(c_event);
+        dispatch_event(c_event);
     }
 }
 
 void Widget::handle_paint_event(PaintEvent& event)
 {
     VERIFY(is_visible());
+
+    if (!rect().intersects(event.rect())) {
+        // This widget is not inside the paint event rect.
+        // Since widgets fully contain their children, we don't need to recurse further.
+        return;
+    }
+
     if (fill_with_background_color()) {
         Painter painter(*this);
         painter.fill_rect(event.rect(), palette().color(background_role()));
@@ -300,6 +363,11 @@ void Widget::handle_paint_event(PaintEvent& event)
     if (app && app->focus_debugging_enabled() && is_focused()) {
         Painter painter(*this);
         painter.draw_rect(rect(), Color::Cyan);
+    }
+
+    if (app && app->hover_debugging_enabled() && this == window()->hovered_widget()) {
+        Painter painter(*this);
+        painter.draw_rect(rect(), Color::Red);
     }
 
     if (is_being_inspected()) {
@@ -359,9 +427,9 @@ void Widget::handle_mousedown_event(MouseEvent& event)
     if (has_flag(focus_policy(), FocusPolicy::ClickFocus))
         set_focus(true, FocusSource::Mouse);
     mousedown_event(event);
-    if (event.button() == MouseButton::Right) {
+    if (event.button() == MouseButton::Secondary) {
         ContextMenuEvent c_event(event.position(), screen_relative_rect().location().translated(event.position()));
-        context_menu_event(c_event);
+        dispatch_event(c_event);
     }
 }
 
@@ -457,8 +525,9 @@ void Widget::mousewheel_event(MouseEvent& event)
     event.ignore();
 }
 
-void Widget::context_menu_event(ContextMenuEvent&)
+void Widget::context_menu_event(ContextMenuEvent& event)
 {
+    event.ignore();
 }
 
 void Widget::focusin_event(FocusEvent&)
@@ -489,24 +558,35 @@ void Widget::drag_enter_event(DragEvent& event)
 {
     StringBuilder builder;
     builder.join(',', event.mime_types());
-    dbgln("{} {:p} DRAG ENTER @ {}, {}", class_name(), this, event.position(), builder.string_view());
+    dbgln_if(DRAG_DEBUG, "{} {:p} DRAG ENTER @ {}, {}", class_name(), this, event.position(), builder.string_view());
 }
 
 void Widget::drag_leave_event(Event&)
 {
-    dbgln("{} {:p} DRAG LEAVE", class_name(), this);
+    dbgln_if(DRAG_DEBUG, "{} {:p} DRAG LEAVE", class_name(), this);
 }
 
 void Widget::drop_event(DropEvent& event)
 {
-    dbgln("{} {:p} DROP @ {}, '{}'", class_name(), this, event.position(), event.text());
+    dbgln_if(DRAG_DEBUG, "{} {:p} DROP @ {}, '{}'", class_name(), this, event.position(), event.text());
+    event.ignore();
 }
 
 void Widget::theme_change_event(ThemeChangeEvent&)
 {
 }
 
-void Widget::screen_rect_change_event(ScreenRectChangeEvent&)
+void Widget::fonts_change_event(FontsChangeEvent&)
+{
+    if (m_default_font)
+        set_font(nullptr);
+}
+
+void Widget::screen_rects_change_event(ScreenRectsChangeEvent&)
+{
+}
+
+void Widget::applet_area_rect_change_event(AppletAreaRectChangeEvent&)
 {
 }
 
@@ -541,6 +621,22 @@ void Widget::update(const Gfx::IntRect& rect)
         window->update(bound_by_widget.translated(window_relative_rect().location()));
 }
 
+void Widget::repaint()
+{
+    if (rect().is_empty())
+        return;
+    repaint(rect());
+}
+
+void Widget::repaint(Gfx::IntRect const& rect)
+{
+    auto* window = this->window();
+    if (!window)
+        return;
+    update(rect);
+    window->flush_pending_paints_immediately();
+}
+
 Gfx::IntRect Widget::window_relative_rect() const
 {
     auto rect = relative_rect();
@@ -563,10 +659,10 @@ Widget* Widget::child_at(const Gfx::IntPoint& point) const
     for (int i = children().size() - 1; i >= 0; --i) {
         if (!is<Widget>(children()[i]))
             continue;
-        auto& child = downcast<Widget>(children()[i]);
+        auto& child = verify_cast<Widget>(children()[i]);
         if (!child.is_visible())
             continue;
-        if (child.content_rect().contains(point))
+        if (child.relative_non_grabbable_rect().contains(point))
             return const_cast<Widget*>(&child);
     }
     return nullptr;
@@ -647,10 +743,13 @@ void Widget::set_font(const Gfx::Font* font)
     if (m_font.ptr() == font)
         return;
 
-    if (!font)
+    if (!font) {
         m_font = Gfx::FontDatabase::default_font();
-    else
+        m_default_font = true;
+    } else {
         m_font = *font;
+        m_default_font = false;
+    }
 
     did_change_font();
     update();
@@ -658,41 +757,25 @@ void Widget::set_font(const Gfx::Font* font)
 
 void Widget::set_font_family(const String& family)
 {
-    set_font(Gfx::FontDatabase::the().get(family, m_font->presentation_size(), m_font->weight()));
+    set_font(Gfx::FontDatabase::the().get(family, m_font->presentation_size(), m_font->weight(), m_font->slope()));
 }
 
 void Widget::set_font_size(unsigned size)
 {
-    set_font(Gfx::FontDatabase::the().get(m_font->family(), size, m_font->weight()));
+    set_font(Gfx::FontDatabase::the().get(m_font->family(), size, m_font->weight(), m_font->slope()));
 }
 
 void Widget::set_font_weight(unsigned weight)
 {
-    set_font(Gfx::FontDatabase::the().get(m_font->family(), m_font->presentation_size(), weight));
+    set_font(Gfx::FontDatabase::the().get(m_font->family(), m_font->presentation_size(), weight, m_font->slope()));
 }
 
 void Widget::set_font_fixed_width(bool fixed_width)
 {
     if (fixed_width)
-        set_font(Gfx::FontDatabase::the().get(Gfx::FontDatabase::the().default_fixed_width_font().family(), m_font->presentation_size(), m_font->weight()));
+        set_font(Gfx::FontDatabase::the().get(Gfx::FontDatabase::the().default_fixed_width_font().family(), m_font->presentation_size(), m_font->weight(), m_font->slope()));
     else
-        set_font(Gfx::FontDatabase::the().get(Gfx::FontDatabase::the().default_font().family(), m_font->presentation_size(), m_font->weight()));
-}
-
-void Widget::set_global_cursor_tracking(bool enabled)
-{
-    auto* win = window();
-    if (!win)
-        return;
-    win->set_global_cursor_tracking_widget(enabled ? this : nullptr);
-}
-
-bool Widget::global_cursor_tracking() const
-{
-    auto* win = window();
-    if (!win)
-        return false;
-    return win->global_cursor_tracking_widget() == this;
+        set_font(Gfx::FontDatabase::the().get(Gfx::FontDatabase::the().default_font().family(), m_font->presentation_size(), m_font->weight(), m_font->slope()));
 }
 
 void Widget::set_min_size(const Gfx::IntSize& size)
@@ -829,7 +912,7 @@ Action* Widget::action_for_key_event(const KeyEvent& event)
 
     Action* found_action = nullptr;
     for_each_child_of_type<Action>([&](auto& action) {
-        if (action.shortcut() == shortcut) {
+        if (action.shortcut() == shortcut || action.alternate_shortcut() == shortcut) {
             found_action = &action;
             return IterationDecision::Break;
         }
@@ -891,16 +974,19 @@ Vector<Widget&> Widget::child_widgets() const
 void Widget::set_palette(const Palette& palette)
 {
     m_palette = palette.impl();
+    update();
 }
 
 void Widget::set_background_role(ColorRole role)
 {
     m_background_role = role;
+    update();
 }
 
 void Widget::set_foreground_role(ColorRole role)
 {
     m_foreground_role = role;
+    update();
 }
 
 Gfx::Palette Widget::palette() const
@@ -918,20 +1004,20 @@ void Widget::did_end_inspection()
     update();
 }
 
-void Widget::set_content_margins(const Margins& margins)
+void Widget::set_grabbable_margins(const Margins& margins)
 {
-    if (m_content_margins == margins)
+    if (m_grabbable_margins == margins)
         return;
-    m_content_margins = margins;
+    m_grabbable_margins = margins;
     invalidate_layout();
 }
 
-Gfx::IntRect Widget::content_rect() const
+Gfx::IntRect Widget::relative_non_grabbable_rect() const
 {
     auto rect = relative_rect();
-    rect.translate_by(m_content_margins.left(), m_content_margins.top());
-    rect.set_width(rect.width() - (m_content_margins.left() + m_content_margins.right()));
-    rect.set_height(rect.height() - (m_content_margins.top() + m_content_margins.bottom()));
+    rect.translate_by(m_grabbable_margins.left(), m_grabbable_margins.top());
+    rect.set_width(rect.width() - (m_grabbable_margins.left() + m_grabbable_margins.right()));
+    rect.set_height(rect.height() - (m_grabbable_margins.top() + m_grabbable_margins.bottom()));
     return rect;
 }
 
@@ -955,17 +1041,26 @@ Gfx::IntRect Widget::children_clip_rect() const
     return rect();
 }
 
-void Widget::set_override_cursor(Gfx::StandardCursor cursor)
+void Widget::set_override_cursor(AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> cursor)
 {
-    if (m_override_cursor == cursor)
+    auto const& are_cursors_the_same = [](AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const& a, AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const& b) {
+        if (a.has<Gfx::StandardCursor>() != b.has<Gfx::StandardCursor>())
+            return false;
+        if (a.has<Gfx::StandardCursor>())
+            return a.get<Gfx::StandardCursor>() == b.get<Gfx::StandardCursor>();
+        return a.get<NonnullRefPtr<Gfx::Bitmap>>().ptr() == b.get<NonnullRefPtr<Gfx::Bitmap>>().ptr();
+    };
+
+    if (are_cursors_the_same(m_override_cursor, cursor))
         return;
 
-    m_override_cursor = cursor;
-    if (auto* window = this->window())
+    m_override_cursor = move(cursor);
+    if (auto* window = this->window()) {
         window->update_cursor({});
+    }
 }
 
-bool Widget::load_from_gml(const StringView& gml_string)
+bool Widget::load_from_gml(StringView gml_string)
 {
     return load_from_gml(gml_string, [](const String& class_name) -> RefPtr<Core::Object> {
         dbgln("Class '{}' not registered", class_name);
@@ -973,71 +1068,76 @@ bool Widget::load_from_gml(const StringView& gml_string)
     });
 }
 
-bool Widget::load_from_gml(const StringView& gml_string, RefPtr<Core::Object> (*unregistered_child_handler)(const String&))
+bool Widget::load_from_gml(StringView gml_string, RefPtr<Core::Object> (*unregistered_child_handler)(const String&))
 {
-    auto value = parse_gml(gml_string);
-    if (!value.is_object())
+    auto value = GML::parse_gml(gml_string);
+    if (value.is_error()) {
+        // FIXME: We don't report the error, so at least print it.
+        dbgln("Error while parsing GML: {}", value.error());
         return false;
-    return load_from_json(value.as_object(), unregistered_child_handler);
+    }
+    return load_from_gml_ast(value.release_value(), unregistered_child_handler);
 }
 
-bool Widget::load_from_json(const JsonObject& json, RefPtr<Core::Object> (*unregistered_child_handler)(const String&))
+bool Widget::load_from_gml_ast(NonnullRefPtr<GUI::GML::Node> ast, RefPtr<Core::Object> (*unregistered_child_handler)(const String&))
 {
-    json.for_each_member([&](auto& key, auto& value) {
+    if (is<GUI::GML::GMLFile>(ast.ptr()))
+        return load_from_gml_ast(static_ptr_cast<GUI::GML::GMLFile>(ast)->main_class(), unregistered_child_handler);
+
+    VERIFY(is<GUI::GML::Object>(ast.ptr()));
+    auto object = static_ptr_cast<GUI::GML::Object>(ast);
+
+    object->for_each_property([&](auto key, auto value) {
         set_property(key, value);
     });
 
-    auto layout_value = json.get("layout");
-    if (!layout_value.is_null() && !layout_value.is_object()) {
-        dbgln("layout is not an object");
-        return false;
-    }
-    if (layout_value.is_object()) {
-        auto& layout = layout_value.as_object();
-        auto class_name = layout.get("class");
+    auto layout = object->layout_object();
+    if (!layout.is_null()) {
+        auto class_name = layout->name();
         if (class_name.is_null()) {
             dbgln("Invalid layout class name");
             return false;
         }
 
-        if (class_name.to_string() == "GUI::VerticalBoxLayout") {
-            set_layout<GUI::VerticalBoxLayout>();
-        } else if (class_name.to_string() == "GUI::HorizontalBoxLayout") {
-            set_layout<GUI::HorizontalBoxLayout>();
+        auto& layout_class = *Core::ObjectClassRegistration::find("GUI::Layout");
+        if (auto* registration = Core::ObjectClassRegistration::find(class_name)) {
+            auto layout = registration->construct();
+            if (!layout || !registration->is_derived_from(layout_class)) {
+                dbgln("Invalid layout class: '{}'", class_name.to_string());
+                return false;
+            }
+            set_layout(static_ptr_cast<Layout>(layout).release_nonnull());
         } else {
             dbgln("Unknown layout class: '{}'", class_name.to_string());
             return false;
         }
 
-        layout.for_each_member([&](auto& key, auto& value) {
+        layout->for_each_property([&](auto key, auto value) {
             this->layout()->set_property(key, value);
         });
     }
 
-    auto children = json.get("children");
-    if (children.is_array()) {
-        for (auto& child_json_value : children.as_array().values()) {
-            if (!child_json_value.is_object())
-                return false;
-            auto& child_json = child_json_value.as_object();
-            auto class_name = child_json.get("class");
-            if (!class_name.is_string()) {
-                dbgln("No class name in entry");
-                return false;
-            }
+    auto& widget_class = *Core::ObjectClassRegistration::find("GUI::Widget");
+    object->for_each_child_object_interruptible([&](auto child_data) {
+        auto class_name = child_data->name();
 
-            RefPtr<Core::Object> child;
-            if (auto* registration = Core::ObjectClassRegistration::find(class_name.as_string())) {
-                child = registration->construct();
-            } else {
-                child = unregistered_child_handler(class_name.as_string());
+        RefPtr<Core::Object> child;
+        if (auto* registration = Core::ObjectClassRegistration::find(class_name)) {
+            child = registration->construct();
+            if (!child || !registration->is_derived_from(widget_class)) {
+                dbgln("Invalid widget class: '{}'", class_name);
+                return IterationDecision::Break;
             }
-            if (!child)
-                return false;
-            add_child(*child);
-            child->load_from_json(child_json, unregistered_child_handler);
+        } else {
+            child = unregistered_child_handler(class_name);
         }
-    }
+        if (!child)
+            return IterationDecision::Break;
+        add_child(*child);
+        // This is possible as we ensure that Widget is a base class above.
+        static_ptr_cast<Widget>(child)->load_from_gml_ast(child_data, unregistered_child_handler);
+        return IterationDecision::Continue;
+    });
 
     return true;
 }
@@ -1064,6 +1164,11 @@ void Widget::set_shrink_to_fit(bool b)
 bool Widget::has_pending_drop() const
 {
     return Application::the()->pending_drop_widget() == this;
+}
+
+bool Widget::is_visible_for_timer_purposes() const
+{
+    return is_visible() && Object::is_visible_for_timer_purposes();
 }
 
 }

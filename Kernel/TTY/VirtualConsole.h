@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -9,10 +9,9 @@
 
 #include <AK/Noncopyable.h>
 #include <AK/NonnullOwnPtrVector.h>
-#include <AK/String.h>
 #include <AK/Vector.h>
 #include <Kernel/API/KeyCode.h>
-#include <Kernel/ConsoleDevice.h>
+#include <Kernel/Devices/ConsoleDevice.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/Graphics/Console/Console.h>
 #include <Kernel/TTY/TTY.h>
@@ -48,8 +47,8 @@ private:
 class VirtualConsole final : public TTY
     , public KeyboardClient
     , public VT::TerminalClient {
-    AK_MAKE_ETERNAL
     friend class ConsoleManagement;
+    friend class DeviceManagement;
     friend class ConsoleImpl;
     friend class VT::Terminal;
 
@@ -85,19 +84,18 @@ public:
     void emit_char(char);
 
 private:
-    explicit VirtualConsole(const unsigned index);
-    VirtualConsole(const unsigned index, const CircularQueue<char, 16384>&);
+    explicit VirtualConsole(const unsigned index, NonnullOwnPtr<KString> tty_name);
     // ^KeyboardClient
     virtual void on_key_pressed(KeyEvent) override;
 
     // ^TTY
-    virtual ssize_t on_tty_write(const UserOrKernelBuffer&, ssize_t) override;
-    virtual String const& tty_name() const override { return m_tty_name; }
+    virtual ErrorOr<size_t> on_tty_write(const UserOrKernelBuffer&, size_t) override;
+    virtual KString const& tty_name() const override { return *m_tty_name; }
     virtual void echo(u8) override;
 
     // ^TerminalClient
     virtual void beep() override;
-    virtual void set_window_title(const StringView&) override;
+    virtual void set_window_title(StringView) override;
     virtual void set_window_progress(int, int) override;
     virtual void terminal_did_resize(u16 columns, u16 rows) override;
     virtual void terminal_history_changed(int) override;
@@ -105,10 +103,7 @@ private:
     virtual void set_cursor_style(VT::CursorStyle) override;
 
     // ^CharacterDevice
-    virtual const char* class_name() const override { return "VirtualConsole"; }
-
-    // ^Device
-    virtual String device_name() const override;
+    virtual StringView class_name() const override { return "VirtualConsole"sv; }
 
     void set_active(bool);
     void flush_dirty_lines();
@@ -117,8 +112,7 @@ private:
     bool m_active { false };
     bool m_graphical { false };
 
-    String m_tty_name;
-    RecursiveSpinLock m_lock;
+    NonnullOwnPtr<KString> m_tty_name;
 
 private:
     void initialize();
@@ -127,11 +121,11 @@ private:
 
     void clear();
 
-    void inject_string(const StringView&);
+    void inject_string(StringView);
 
     Cell& cell_at(size_t column, size_t row);
 
-    typedef Vector<unsigned, 4> ParamVector;
+    using ParamVector = Vector<unsigned, 4>;
 
     void on_code_point(u32);
 
@@ -146,7 +140,7 @@ private:
     void clear_in_line(u16 row, u16 first_column, u16 last_column);
     void put_character_at(unsigned row, unsigned column, u32 ch, const VT::Attribute&);
 
-    OwnPtr<Region> m_cells;
+    OwnPtr<Memory::Region> m_cells;
     Vector<VirtualConsole::Line> m_lines;
     ConsoleImpl m_console_impl;
 };

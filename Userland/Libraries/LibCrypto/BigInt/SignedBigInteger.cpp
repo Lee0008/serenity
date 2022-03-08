@@ -27,57 +27,30 @@ size_t SignedBigInteger::export_data(Bytes data, bool remove_leading_zeros) cons
     return m_unsigned_data.export_data(bytes_view, remove_leading_zeros) + 1;
 }
 
-static bool parse_sign(StringView& str)
+SignedBigInteger SignedBigInteger::from_base(u16 N, StringView str)
 {
-    bool sign = false;
+    auto sign = false;
     if (str.length() > 1) {
         auto maybe_sign = str[0];
         if (maybe_sign == '-') {
-            str = str.substring_view(1, str.length() - 1);
+            str = str.substring_view(1);
             sign = true;
         }
         if (maybe_sign == '+')
-            str = str.substring_view(1, str.length() - 1);
+            str = str.substring_view(1);
     }
-    return sign;
-}
-
-SignedBigInteger SignedBigInteger::from_base10(StringView str)
-{
-    auto sign = parse_sign(str);
-    auto unsigned_data = UnsignedBigInteger::from_base10(str);
+    auto unsigned_data = UnsignedBigInteger::from_base(N, str);
     return { move(unsigned_data), sign };
 }
 
-SignedBigInteger SignedBigInteger::from_base2(StringView str)
-{
-    auto sign = parse_sign(str);
-    auto unsigned_data = UnsignedBigInteger::from_base2(str);
-    return { move(unsigned_data), sign };
-}
-
-SignedBigInteger SignedBigInteger::from_base8(StringView str)
-{
-    auto sign = parse_sign(str);
-    auto unsigned_data = UnsignedBigInteger::from_base8(str);
-    return { move(unsigned_data), sign };
-}
-
-SignedBigInteger SignedBigInteger::from_base16(StringView str)
-{
-    auto sign = parse_sign(str);
-    auto unsigned_data = UnsignedBigInteger::from_base16(str);
-    return { move(unsigned_data), sign };
-}
-
-String SignedBigInteger::to_base10() const
+String SignedBigInteger::to_base(u16 N) const
 {
     StringBuilder builder;
 
     if (m_sign)
         builder.append('-');
 
-    builder.append(m_unsigned_data.to_base10());
+    builder.append(m_unsigned_data.to_base(N));
 
     return builder.to_string();
 }
@@ -87,7 +60,15 @@ u64 SignedBigInteger::to_u64() const
     u64 unsigned_value = m_unsigned_data.to_u64();
     if (!m_sign)
         return unsigned_value;
-    return ~(unsigned_value - 1); // equivalent to `-unsigned_value`, but doesnt trigger UBSAN
+    return ~(unsigned_value - 1); // equivalent to `-unsigned_value`, but doesn't trigger UBSAN
+}
+
+double SignedBigInteger::to_double() const
+{
+    double unsigned_value = m_unsigned_data.to_double();
+    if (!m_sign)
+        return unsigned_value;
+    return -unsigned_value;
 }
 
 FLATTEN SignedBigInteger SignedBigInteger::plus(const SignedBigInteger& other) const
@@ -128,11 +109,15 @@ FLATTEN SignedBigInteger SignedBigInteger::minus(const SignedBigInteger& other) 
     // -x - -y = y - x
     if (m_unsigned_data < other.m_unsigned_data) {
         // The result will be positive.
-        return SignedBigInteger { other.m_unsigned_data.minus(m_unsigned_data), true };
+        return SignedBigInteger { other.m_unsigned_data.minus(m_unsigned_data) };
     }
-    // The result will be either zero, or negative.
     // y - x = - (x - y)
-    return SignedBigInteger { m_unsigned_data.minus(other.m_unsigned_data) };
+    if (m_unsigned_data > other.m_unsigned_data) {
+        // The result will be negative.
+        return SignedBigInteger { m_unsigned_data.minus(other.m_unsigned_data), true };
+    }
+    // Both operands have the same magnitude, the result is positive zero.
+    return SignedBigInteger { 0 };
 }
 
 FLATTEN SignedBigInteger SignedBigInteger::plus(const UnsignedBigInteger& other) const
@@ -158,55 +143,95 @@ FLATTEN SignedBigInteger SignedBigInteger::minus(const UnsignedBigInteger& other
     return { other.minus(m_unsigned_data), true };
 }
 
-FLATTEN SignedBigInteger SignedBigInteger::bitwise_or(const UnsignedBigInteger& other) const
-{
-    return { unsigned_value().bitwise_or(other), m_sign };
-}
-
-FLATTEN SignedBigInteger SignedBigInteger::bitwise_and(const UnsignedBigInteger& other) const
-{
-    return { unsigned_value().bitwise_and(other), false };
-}
-
-FLATTEN SignedBigInteger SignedBigInteger::bitwise_xor(const UnsignedBigInteger& other) const
-{
-    return { unsigned_value().bitwise_xor(other), m_sign };
-}
-
 FLATTEN SignedBigInteger SignedBigInteger::bitwise_not() const
 {
-    return { unsigned_value().bitwise_not(), !m_sign };
+    // Bitwise operators assume two's complement, while SignedBigInteger uses sign-magnitude.
+    // In two's complement, -x := ~x + 1.
+    // Hence, ~x == -x -1 == -(x + 1).
+    SignedBigInteger result = plus(SignedBigInteger { 1 });
+    result.negate();
+    return result;
+}
+
+FLATTEN SignedBigInteger SignedBigInteger::multiplied_by(UnsignedBigInteger const& other) const
+{
+    return { unsigned_value().multiplied_by(other), m_sign };
+}
+
+FLATTEN SignedDivisionResult SignedBigInteger::divided_by(UnsignedBigInteger const& divisor) const
+{
+    auto division_result = unsigned_value().divided_by(divisor);
+    return {
+        { move(division_result.quotient), m_sign },
+        { move(division_result.remainder), m_sign },
+    };
 }
 
 FLATTEN SignedBigInteger SignedBigInteger::bitwise_or(const SignedBigInteger& other) const
 {
-    auto result = bitwise_or(other.unsigned_value());
+    // See bitwise_and() for derivations.
+    if (!is_negative() && !other.is_negative())
+        return { unsigned_value().bitwise_or(other.unsigned_value()), false };
 
-    // The sign bit will have to be OR'd manually.
-    if (other.is_negative())
-        result.negate();
+    // -A | B == (~A + 1) | B == ~(A - 1) | B. The result is negative, so need to two's complement at the end to move the sign into the m_sign field.
+    // That can be simplified to:
+    //   -(-A | B) == ~(~(A - 1) | B) + 1 = (A - 1) & ~B + 1
+    // This saves one ~.
+    if (is_negative() && !other.is_negative()) {
+        size_t index = unsigned_value().one_based_index_of_highest_set_bit();
+        return { unsigned_value().minus(1).bitwise_and(other.unsigned_value().bitwise_not_fill_to_one_based_index(index)).plus(1), true };
+    }
 
-    return result;
+    // -(A | -B) == ~A & (B - 1) + 1
+    if (!is_negative() && other.is_negative()) {
+        size_t index = other.unsigned_value().one_based_index_of_highest_set_bit();
+        return { unsigned_value().bitwise_not_fill_to_one_based_index(index).bitwise_and(other.unsigned_value().minus(1)).plus(1), true };
+    }
+
+    return { unsigned_value().minus(1).bitwise_and(other.unsigned_value().minus(1)).plus(1), true };
 }
 
 FLATTEN SignedBigInteger SignedBigInteger::bitwise_and(const SignedBigInteger& other) const
 {
-    auto result = bitwise_and(other.unsigned_value());
+    if (!is_negative() && !other.is_negative())
+        return { unsigned_value().bitwise_and(other.unsigned_value()), false };
 
-    // The sign bit will have to be AND'd manually.
-    result.m_sign = is_negative() || other.is_negative();
+    // These two just use that -x == ~x + 1 (see below).
 
-    return result;
+    // -A & B == (~A + 1) & B.
+    if (is_negative() && !other.is_negative()) {
+        size_t index = other.unsigned_value().one_based_index_of_highest_set_bit();
+        return { unsigned_value().bitwise_not_fill_to_one_based_index(index).plus(1).bitwise_and(other.unsigned_value()), false };
+    }
+
+    // A & -B == A & (~B + 1).
+    if (!is_negative() && other.is_negative()) {
+        size_t index = unsigned_value().one_based_index_of_highest_set_bit();
+        return { unsigned_value().bitwise_and(other.unsigned_value().bitwise_not_fill_to_one_based_index(index).plus(1)), false };
+    }
+
+    // Both numbers are negative.
+    // x + ~x == 0xff...ff, up to however many bits x is wide.
+    // In two's complement, x + ~x + 1 == 0 since the 1 in the overflowing bit position is masked out.
+    // Rearranging terms, ~x = -x - 1 (eq1).
+    // Substituting x = y - 1, ~(y - 1) == -(y - 1) - 1 == -y +1 -1 == -y, or ~(y - 1) == -y (eq2).
+    // Since both numbers are negative, we want to compute -A & -B.
+    // Per (eq2):
+    //   -A & -B == ~(A - 1) & ~(B - 1)
+    // Inverting both sides:
+    //   ~(-A & -B) == ~(~(A - 1) & ~(B - 1)) == ~~(A - 1) | ~~(B - 1) == (A - 1) | (B - 1).
+    // Applying (q1) on the LHS:
+    //   -(-A & -B) - 1 == (A - 1) | (B - 1)
+    // Adding 1 on both sides and then multiplying both sides by -1:
+    //   -A & -B == -( (A - 1) | (B - 1) + 1)
+    // So we can compute the bitwise and by returning a negative number with magnitude (A - 1) | (B - 1) + 1.
+    // This is better than the naive (~A + 1) & (~B + 1) because it needs just one O(n) scan for the or instead of 2 for the ~s.
+    return { unsigned_value().minus(1).bitwise_or(other.unsigned_value().minus(1)).plus(1), true };
 }
 
 FLATTEN SignedBigInteger SignedBigInteger::bitwise_xor(const SignedBigInteger& other) const
 {
-    auto result = bitwise_xor(other.unsigned_value());
-
-    // The sign bit will have to be XOR'd manually.
-    result.m_sign = is_negative() ^ other.is_negative();
-
-    return result;
+    return bitwise_or(other).minus(bitwise_and(other));
 }
 
 bool SignedBigInteger::operator==(const UnsignedBigInteger& other) const
@@ -228,6 +253,11 @@ bool SignedBigInteger::operator<(const UnsignedBigInteger& other) const
     if (m_sign)
         return true;
     return m_unsigned_data < other;
+}
+
+bool SignedBigInteger::operator>(const UnsignedBigInteger& other) const
+{
+    return *this != other && !(*this < other);
 }
 
 FLATTEN SignedBigInteger SignedBigInteger::shift_left(size_t num_bits) const
@@ -289,4 +319,26 @@ bool SignedBigInteger::operator<(const SignedBigInteger& other) const
     return m_unsigned_data < other.m_unsigned_data;
 }
 
+bool SignedBigInteger::operator<=(const SignedBigInteger& other) const
+{
+    return *this < other || *this == other;
+}
+
+bool SignedBigInteger::operator>(const SignedBigInteger& other) const
+{
+    return *this != other && !(*this < other);
+}
+
+bool SignedBigInteger::operator>=(const SignedBigInteger& other) const
+{
+    return !(*this < other);
+}
+
+}
+
+ErrorOr<void> AK::Formatter<Crypto::SignedBigInteger>::format(FormatBuilder& fmtbuilder, const Crypto::SignedBigInteger& value)
+{
+    if (value.is_negative())
+        TRY(fmtbuilder.put_string("-"));
+    return Formatter<Crypto::UnsignedBigInteger>::format(fmtbuilder, value.unsigned_value());
 }

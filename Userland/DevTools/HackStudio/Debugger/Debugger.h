@@ -11,7 +11,7 @@
 #include <AK/LexicalPath.h>
 #include <AK/Vector.h>
 #include <LibDebug/DebugSession.h>
-#include <LibThreading/Lock.h>
+#include <LibThreading/Mutex.h>
 #include <LibThreading/Thread.h>
 
 namespace HackStudio {
@@ -60,6 +60,8 @@ public:
     void set_requested_debugger_action(DebuggerAction);
     void reset_breakpoints() { m_breakpoints.clear(); }
 
+    void set_child_setup_callback(Function<ErrorOr<void>()> callback) { m_child_setup_callback = move(callback); }
+
 private:
     class DebuggingState {
     public:
@@ -78,13 +80,13 @@ private:
 
         bool should_stop_single_stepping(const Debug::DebugInfo::SourcePosition& current_source_position) const;
         void clear_temporary_breakpoints();
-        void add_temporary_breakpoint(u32 address);
-        const Vector<u32>& temporary_breakpoints() const { return m_addresses_of_temporary_breakpoints; }
+        void add_temporary_breakpoint(FlatPtr address);
+        const Vector<FlatPtr>& temporary_breakpoints() const { return m_addresses_of_temporary_breakpoints; }
 
     private:
         State m_state { Normal };
         Optional<Debug::DebugInfo::SourcePosition> m_original_source_position; // The source position at which we started the current single step
-        Vector<u32> m_addresses_of_temporary_breakpoints;
+        Vector<FlatPtr> m_addresses_of_temporary_breakpoints;
     };
 
     explicit Debugger(
@@ -119,6 +121,7 @@ private:
     Function<HasControlPassedToUser(const PtraceRegisters&)> m_on_stopped_callback;
     Function<void()> m_on_continue_callback;
     Function<void()> m_on_exit_callback;
+    Function<ErrorOr<void>()> m_child_setup_callback;
 };
 
 }

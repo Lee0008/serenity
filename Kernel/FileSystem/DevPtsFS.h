@@ -15,24 +15,21 @@ namespace Kernel {
 class SlavePTY;
 class DevPtsFSInode;
 
-class DevPtsFS final : public FS {
+class DevPtsFS final : public FileSystem {
     friend class DevPtsFSInode;
 
 public:
     virtual ~DevPtsFS() override;
-    static NonnullRefPtr<DevPtsFS> create();
+    static ErrorOr<NonnullRefPtr<DevPtsFS>> try_create();
 
-    virtual bool initialize() override;
-    virtual const char* class_name() const override { return "DevPtsFS"; }
+    virtual ErrorOr<void> initialize() override;
+    virtual StringView class_name() const override { return "DevPtsFS"sv; }
 
-    virtual NonnullRefPtr<Inode> root_inode() const override;
-
-    static void register_slave_pty(SlavePTY&);
-    static void unregister_slave_pty(SlavePTY&);
+    virtual Inode& root_inode() override;
 
 private:
     DevPtsFS();
-    RefPtr<Inode> get_inode(InodeIdentifier) const;
+    ErrorOr<NonnullRefPtr<Inode>> get_inode(InodeIdentifier) const;
 
     RefPtr<DevPtsFSInode> m_root_inode;
 };
@@ -43,22 +40,24 @@ class DevPtsFSInode final : public Inode {
 public:
     virtual ~DevPtsFSInode() override;
 
+    DevPtsFS& fs() { return static_cast<DevPtsFS&>(Inode::fs()); }
+    DevPtsFS const& fs() const { return static_cast<DevPtsFS const&>(Inode::fs()); }
+
 private:
     DevPtsFSInode(DevPtsFS&, InodeIndex, SlavePTY*);
 
     // ^Inode
-    virtual KResultOr<ssize_t> read_bytes(off_t, ssize_t, UserOrKernelBuffer& buffer, FileDescription*) const override;
+    virtual ErrorOr<size_t> read_bytes(off_t, size_t, UserOrKernelBuffer& buffer, OpenFileDescription*) const override;
     virtual InodeMetadata metadata() const override;
-    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)>) const override;
-    virtual RefPtr<Inode> lookup(StringView name) override;
-    virtual void flush_metadata() override;
-    virtual KResultOr<ssize_t> write_bytes(off_t, ssize_t, const UserOrKernelBuffer& buffer, FileDescription*) override;
-    virtual KResultOr<NonnullRefPtr<Inode>> create_child(const String& name, mode_t, dev_t, uid_t, gid_t) override;
-    virtual KResult add_child(Inode&, const StringView& name, mode_t) override;
-    virtual KResult remove_child(const StringView& name) override;
-    virtual KResultOr<size_t> directory_entry_count() const override;
-    virtual KResult chmod(mode_t) override;
-    virtual KResult chown(uid_t, gid_t) override;
+    virtual ErrorOr<void> traverse_as_directory(Function<ErrorOr<void>(FileSystem::DirectoryEntryView const&)>) const override;
+    virtual ErrorOr<NonnullRefPtr<Inode>> lookup(StringView name) override;
+    virtual ErrorOr<void> flush_metadata() override;
+    virtual ErrorOr<size_t> write_bytes(off_t, size_t, const UserOrKernelBuffer& buffer, OpenFileDescription*) override;
+    virtual ErrorOr<NonnullRefPtr<Inode>> create_child(StringView name, mode_t, dev_t, UserID, GroupID) override;
+    virtual ErrorOr<void> add_child(Inode&, StringView name, mode_t) override;
+    virtual ErrorOr<void> remove_child(StringView name) override;
+    virtual ErrorOr<void> chmod(mode_t) override;
+    virtual ErrorOr<void> chown(UserID, GroupID) override;
 
     WeakPtr<SlavePTY> m_pty;
     InodeMetadata m_metadata;

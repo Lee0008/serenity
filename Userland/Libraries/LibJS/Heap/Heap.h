@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <AK/Badge.h>
 #include <AK/HashTable.h>
+#include <AK/IntrusiveList.h>
 #include <AK/Noncopyable.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/Types.h>
@@ -17,7 +19,9 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibJS/Heap/CellAllocator.h>
 #include <LibJS/Heap/Handle.h>
+#include <LibJS/Heap/MarkedVector.h>
 #include <LibJS/Runtime/Object.h>
+#include <LibJS/Runtime/WeakContainer.h>
 
 namespace JS {
 
@@ -43,12 +47,7 @@ public:
         auto* memory = allocate_cell(sizeof(T));
         new (memory) T(forward<Args>(args)...);
         auto* cell = static_cast<T*>(memory);
-        constexpr bool is_object = IsBaseOf<Object, T>;
-        if constexpr (is_object)
-            static_cast<Object*>(cell)->disable_transitions();
         cell->initialize(global_object);
-        if constexpr (is_object)
-            static_cast<Object*>(cell)->enable_transitions();
         return cell;
     }
 
@@ -67,8 +66,8 @@ public:
     void did_create_handle(Badge<HandleImpl>, HandleImpl&);
     void did_destroy_handle(Badge<HandleImpl>, HandleImpl&);
 
-    void did_create_marked_value_list(Badge<MarkedValueList>, MarkedValueList&);
-    void did_destroy_marked_value_list(Badge<MarkedValueList>, MarkedValueList&);
+    void did_create_marked_vector(Badge<MarkedVectorBase>, MarkedVectorBase&);
+    void did_destroy_marked_vector(Badge<MarkedVectorBase>, MarkedVectorBase&);
 
     void did_create_weak_container(Badge<WeakContainer>, WeakContainer&);
     void did_destroy_weak_container(Badge<WeakContainer>, WeakContainer&);
@@ -77,6 +76,8 @@ public:
     void undefer_gc(Badge<DeferGC>);
 
     BlockAllocator& block_allocator() { return m_block_allocator; }
+
+    void uproot_cell(Cell* cell);
 
 private:
     Cell* allocate_cell(size_t);
@@ -97,7 +98,7 @@ private:
         }
     }
 
-    size_t m_max_allocations_between_gc { 10000 };
+    size_t m_max_allocations_between_gc { 100000 };
     size_t m_allocations_since_last_gc { 0 };
 
     bool m_should_collect_on_every_allocation { false };
@@ -105,11 +106,12 @@ private:
     VM& m_vm;
 
     Vector<NonnullOwnPtr<CellAllocator>> m_allocators;
-    HashTable<HandleImpl*> m_handles;
 
-    HashTable<MarkedValueList*> m_marked_value_lists;
+    HandleImpl::List m_handles;
+    MarkedVectorBase::List m_marked_vectors;
+    WeakContainer::List m_weak_containers;
 
-    HashTable<WeakContainer*> m_weak_containers;
+    Vector<Cell*> m_uprooted_cells;
 
     BlockAllocator m_block_allocator;
 

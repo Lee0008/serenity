@@ -14,6 +14,7 @@
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <AK/WeakPtr.h>
+#include <LibGUI/Command.h>
 
 namespace Spreadsheet {
 
@@ -49,15 +50,20 @@ struct Cell : public Weakable<Cell> {
     bool dirty() const { return m_dirty; }
     void clear_dirty() { m_dirty = false; }
 
-    void set_exception(JS::Exception* exc) { m_js_exception = exc; }
-    JS::Exception* exception() const { return m_js_exception; }
+    void set_thrown_value(JS::Value value) { m_thrown_value = value; }
+    Optional<JS::Value> thrown_value() const
+    {
+        if (m_thrown_value.is_empty())
+            return {};
+        return m_thrown_value;
+    }
 
     const String& data() const { return m_data; }
     const JS::Value& evaluated_data() const { return m_evaluated_data; }
     Kind kind() const { return m_kind; }
     const Vector<WeakPtr<Cell>>& referencing_cells() const { return m_referencing_cells; }
 
-    void set_type(const StringView& name);
+    void set_type(StringView name);
     void set_type(const CellType*);
     void set_type_metadata(CellTypeMetadata&&);
 
@@ -79,8 +85,8 @@ struct Cell : public Weakable<Cell> {
         m_conditional_formats = move(fmts);
     }
 
-    String typed_display() const;
-    JS::Value typed_js_data() const;
+    JS::ThrowCompletionOr<String> typed_display() const;
+    JS::ThrowCompletionOr<JS::Value> typed_js_data() const;
 
     const CellType& type() const;
     const CellTypeMetadata& type_metadata() const { return m_type_metadata; }
@@ -103,7 +109,7 @@ private:
     bool m_evaluated_externally { false };
     String m_data;
     JS::Value m_evaluated_data;
-    JS::Exception* m_js_exception { nullptr };
+    JS::Value m_thrown_value;
     Kind m_kind { LiteralString };
     WeakPtr<Sheet> m_sheet;
     Vector<WeakPtr<Cell>> m_referencing_cells;
@@ -113,6 +119,19 @@ private:
 
     Vector<ConditionalFormat> m_conditional_formats;
     Format m_evaluated_formats;
+};
+
+class CellUndoCommand : public GUI::Command {
+public:
+    CellUndoCommand(Cell&, String const&);
+
+    virtual void undo() override;
+    virtual void redo() override;
+
+private:
+    Cell& m_cell;
+    String m_current_data;
+    String m_previous_data;
 };
 
 }

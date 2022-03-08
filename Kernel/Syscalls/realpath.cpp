@@ -11,28 +11,19 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$realpath(Userspace<const Syscall::SC_realpath_params*> user_params)
+ErrorOr<FlatPtr> Process::sys$realpath(Userspace<const Syscall::SC_realpath_params*> user_params)
 {
-    REQUIRE_PROMISE(rpath);
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
+    TRY(require_promise(Pledge::rpath));
+    auto params = TRY(copy_typed_from_user(user_params));
 
-    Syscall::SC_realpath_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    auto path = TRY(get_syscall_path_argument(params.path));
+    auto custody = TRY(VirtualFileSystem::the().resolve_path(path->view(), current_directory()));
+    auto absolute_path = TRY(custody->try_serialize_absolute_path());
 
-    auto path = get_syscall_path_argument(params.path);
-    if (path.is_error())
-        return path.error();
-
-    auto custody_or_error = VFS::the().resolve_path(path.value()->view(), current_directory());
-    if (custody_or_error.is_error())
-        return custody_or_error.error();
-    auto& custody = custody_or_error.value();
-    auto absolute_path = custody->absolute_path();
-
-    size_t ideal_size = absolute_path.length() + 1;
+    size_t ideal_size = absolute_path->length() + 1;
     auto size_to_copy = min(ideal_size, params.buffer.size);
-    if (!copy_to_user(params.buffer.data, absolute_path.characters(), size_to_copy))
-        return EFAULT;
+    TRY(copy_to_user(params.buffer.data, absolute_path->characters(), size_to_copy));
     // Note: we return the whole size here, not the copied size.
     return ideal_size;
 };

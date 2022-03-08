@@ -5,42 +5,51 @@
  */
 
 #include <Kernel/FileSystem/FIFO.h>
-#include <Kernel/FileSystem/FileDescription.h>
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$pipe(int pipefd[2], int flags)
+ErrorOr<FlatPtr> Process::sys$pipe(int pipefd[2], int flags)
 {
-    REQUIRE_PROMISE(stdio);
-    if (number_of_open_file_descriptors() + 2 > max_open_file_descriptors())
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::stdio));
+    auto open_count = fds().with_shared([](auto& fds) { return fds.open_count(); });
+    if (open_count + 2 > OpenFileDescriptions::max_open())
         return EMFILE;
-    // Reject flags other than O_CLOEXEC.
-    if ((flags & O_CLOEXEC) != flags)
+    // Reject flags other than O_CLOEXEC, O_NONBLOCK
+    if ((flags & (O_CLOEXEC | O_NONBLOCK)) != flags)
         return EINVAL;
 
     u32 fd_flags = (flags & O_CLOEXEC) ? FD_CLOEXEC : 0;
-    auto fifo = FIFO::create(uid());
+    auto fifo = TRY(FIFO::try_create(uid()));
 
-    auto open_reader_result = fifo->open_direction(FIFO::Direction::Reader);
-    if (open_reader_result.is_error())
-        return open_reader_result.error();
-    auto open_writer_result = fifo->open_direction(FIFO::Direction::Writer);
-    if (open_writer_result.is_error())
-        return open_writer_result.error();
+    ScopedDescriptionAllocation reader_fd_allocation;
+    ScopedDescriptionAllocation writer_fd_allocation;
 
-    int reader_fd = alloc_fd();
-    m_fds[reader_fd].set(open_reader_result.release_value(), fd_flags);
-    m_fds[reader_fd].description()->set_readable(true);
-    if (!copy_to_user(&pipefd[0], &reader_fd))
-        return EFAULT;
+    TRY(m_fds.with_exclusive([&](auto& fds) -> ErrorOr<void> {
+        reader_fd_allocation = TRY(fds.allocate());
+        writer_fd_allocation = TRY(fds.allocate());
+        return {};
+    }));
 
-    int writer_fd = alloc_fd();
-    m_fds[writer_fd].set(open_writer_result.release_value(), fd_flags);
-    m_fds[writer_fd].description()->set_writable(true);
-    if (!copy_to_user(&pipefd[1], &writer_fd))
-        return EFAULT;
+    auto reader_description = TRY(fifo->open_direction(FIFO::Direction::Reader));
+    auto writer_description = TRY(fifo->open_direction(FIFO::Direction::Writer));
 
+    reader_description->set_readable(true);
+    writer_description->set_writable(true);
+    if (flags & O_NONBLOCK) {
+        reader_description->set_blocking(false);
+        writer_description->set_blocking(false);
+    }
+
+    TRY(m_fds.with_exclusive([&](auto& fds) -> ErrorOr<void> {
+        fds[reader_fd_allocation.fd].set(move(reader_description), fd_flags);
+        fds[writer_fd_allocation.fd].set(move(writer_description), fd_flags);
+        return {};
+    }));
+
+    TRY(copy_to_user(&pipefd[0], &reader_fd_allocation.fd));
+    TRY(copy_to_user(&pipefd[1], &writer_fd_allocation.fd));
     return 0;
 }
 

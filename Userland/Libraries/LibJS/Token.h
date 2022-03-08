@@ -6,18 +6,34 @@
 
 #pragma once
 
+#include <AK/FlyString.h>
 #include <AK/String.h>
 #include <AK/StringView.h>
+#include <AK/Variant.h>
 
 namespace JS {
 
 // U+2028 LINE SEPARATOR
 constexpr const char line_separator_chars[] { (char)0xe2, (char)0x80, (char)0xa8, 0 };
-constexpr const StringView LINE_SEPARATOR { line_separator_chars };
+constexpr const StringView LINE_SEPARATOR_STRING { line_separator_chars };
+constexpr const u32 LINE_SEPARATOR { 0x2028 };
 
 // U+2029 PARAGRAPH SEPARATOR
 constexpr const char paragraph_separator_chars[] { (char)0xe2, (char)0x80, (char)0xa9, 0 };
-constexpr const StringView PARAGRAPH_SEPARATOR { paragraph_separator_chars };
+constexpr const StringView PARAGRAPH_SEPARATOR_STRING { paragraph_separator_chars };
+constexpr const u32 PARAGRAPH_SEPARATOR { 0x2029 };
+
+// U+00A0 NO BREAK SPACE
+constexpr const u32 NO_BREAK_SPACE { 0x00A0 };
+
+// U+200C ZERO WIDTH NON-JOINER
+constexpr const u32 ZERO_WIDTH_NON_JOINER { 0x200C };
+
+// U+FEFF ZERO WIDTH NO-BREAK SPACE
+constexpr const u32 ZERO_WIDTH_NO_BREAK_SPACE { 0xFEFF };
+
+// U+200D ZERO WIDTH JOINER
+constexpr const u32 ZERO_WIDTH_JOINER { 0x200D };
 
 #define ENUMERATE_JS_TOKENS                                     \
     __ENUMERATE_JS_TOKEN(Ampersand, Operator)                   \
@@ -61,6 +77,7 @@ constexpr const StringView PARAGRAPH_SEPARATOR { paragraph_separator_chars };
     __ENUMERATE_JS_TOKEN(Equals, Operator)                      \
     __ENUMERATE_JS_TOKEN(EqualsEquals, Operator)                \
     __ENUMERATE_JS_TOKEN(EqualsEqualsEquals, Operator)          \
+    __ENUMERATE_JS_TOKEN(EscapedKeyword, Identifier)            \
     __ENUMERATE_JS_TOKEN(ExclamationMark, Operator)             \
     __ENUMERATE_JS_TOKEN(ExclamationMarkEquals, Operator)       \
     __ENUMERATE_JS_TOKEN(ExclamationMarkEqualsEquals, Operator) \
@@ -100,6 +117,7 @@ constexpr const StringView PARAGRAPH_SEPARATOR { paragraph_separator_chars };
     __ENUMERATE_JS_TOKEN(PlusEquals, Operator)                  \
     __ENUMERATE_JS_TOKEN(PlusPlus, Operator)                    \
     __ENUMERATE_JS_TOKEN(Private, Keyword)                      \
+    __ENUMERATE_JS_TOKEN(PrivateIdentifier, Identifier)         \
     __ENUMERATE_JS_TOKEN(Protected, Keyword)                    \
     __ENUMERATE_JS_TOKEN(Public, Keyword)                       \
     __ENUMERATE_JS_TOKEN(QuestionMark, Operator)                \
@@ -161,14 +179,18 @@ enum class TokenCategory {
 
 class Token {
 public:
-    Token(TokenType type, String message, StringView trivia, StringView value, StringView filename, size_t line_number, size_t line_column)
+    Token() = default;
+
+    Token(TokenType type, String message, StringView trivia, StringView value, StringView filename, size_t line_number, size_t line_column, size_t offset)
         : m_type(type)
         , m_message(message)
         , m_trivia(trivia)
+        , m_original_value(value)
         , m_value(value)
         , m_filename(filename)
         , m_line_number(line_number)
         , m_line_column(line_column)
+        , m_offset(offset)
     {
     }
 
@@ -179,11 +201,28 @@ public:
     static const char* name(TokenType);
 
     const String& message() const { return m_message; }
-    const StringView& trivia() const { return m_trivia; }
-    const StringView& value() const { return m_value; }
-    const StringView& filename() const { return m_filename; }
+    StringView trivia() const { return m_trivia; }
+    StringView original_value() const { return m_original_value; }
+    StringView value() const
+    {
+        return m_value.visit(
+            [](StringView view) { return view; },
+            [](FlyString const& identifier) { return identifier.view(); },
+            [](Empty) -> StringView { VERIFY_NOT_REACHED(); });
+    }
+
+    FlyString flystring_value() const
+    {
+        return m_value.visit(
+            [](StringView view) -> FlyString { return view; },
+            [](FlyString const& identifier) -> FlyString { return identifier; },
+            [](Empty) -> FlyString { VERIFY_NOT_REACHED(); });
+    }
+
+    StringView filename() const { return m_filename; }
     size_t line_number() const { return m_line_number; }
     size_t line_column() const { return m_line_column; }
+    size_t offset() const { return m_offset; }
     double double_value() const;
     bool bool_value() const;
 
@@ -195,18 +234,26 @@ public:
         LegacyOctalEscapeSequence,
     };
     String string_value(StringValueStatus& status) const;
+    String raw_template_value() const;
+
+    void set_identifier_value(FlyString value)
+    {
+        m_value = move(value);
+    }
 
     bool is_identifier_name() const;
     bool trivia_contains_line_terminator() const;
 
 private:
-    TokenType m_type;
+    TokenType m_type { TokenType::Invalid };
     String m_message;
     StringView m_trivia;
-    StringView m_value;
+    StringView m_original_value;
+    Variant<Empty, StringView, FlyString> m_value {};
     StringView m_filename;
-    size_t m_line_number;
-    size_t m_line_column;
+    size_t m_line_number { 0 };
+    size_t m_line_column { 0 };
+    size_t m_offset { 0 };
 };
 
 }

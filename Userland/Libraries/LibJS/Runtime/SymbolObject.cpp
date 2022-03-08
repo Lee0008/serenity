@@ -4,12 +4,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibJS/Heap/Heap.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Symbol.h>
 #include <LibJS/Runtime/SymbolObject.h>
-#include <LibJS/Runtime/SymbolPrototype.h>
-#include <LibJS/Runtime/Value.h>
 
 namespace JS {
 
@@ -30,7 +27,7 @@ SymbolObject::~SymbolObject()
 
 void SymbolObject::visit_edges(Cell::Visitor& visitor)
 {
-    Object::visit_edges(visitor);
+    Base::visit_edges(visitor);
     visitor.visit(&m_symbol);
 }
 

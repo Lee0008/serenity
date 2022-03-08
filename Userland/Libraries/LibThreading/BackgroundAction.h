@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,7 +14,6 @@
 #include <LibCore/Event.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/Object.h>
-#include <LibThreading/Lock.h>
 #include <LibThreading/Thread.h>
 
 namespace Threading {
@@ -28,7 +28,7 @@ class BackgroundActionBase {
 private:
     BackgroundActionBase() { }
 
-    static Lockable<Queue<Function<void()>>>& all_actions();
+    static void enqueue_work(Function<void()>);
     static Thread& background_thread();
 };
 
@@ -38,38 +38,40 @@ class BackgroundAction final : public Core::Object
     C_OBJECT(BackgroundAction);
 
 public:
-    static NonnullRefPtr<BackgroundAction<Result>> create(
-        Function<Result()> action,
-        Function<void(Result)> on_complete = nullptr)
+    void cancel()
     {
-        return adopt_ref(*new BackgroundAction(move(action), move(on_complete)));
+        m_cancelled = true;
+    }
+
+    bool is_cancelled() const
+    {
+        return m_cancelled;
     }
 
     virtual ~BackgroundAction() { }
 
 private:
-    BackgroundAction(Function<Result()> action, Function<void(Result)> on_complete)
+    BackgroundAction(Function<Result(BackgroundAction&)> action, Function<void(Result)> on_complete)
         : Core::Object(&background_thread())
         , m_action(move(action))
         , m_on_complete(move(on_complete))
     {
-        Locker locker(all_actions().lock());
-
-        all_actions().resource().enqueue([this] {
-            m_result = m_action();
+        enqueue_work([this, origin_event_loop = &Core::EventLoop::current()] {
+            m_result = m_action(*this);
             if (m_on_complete) {
-                Core::EventLoop::current().post_event(*this, make<Core::DeferredInvocationEvent>([this](auto&) {
+                origin_event_loop->deferred_invoke([this] {
                     m_on_complete(m_result.release_value());
-                    this->remove_from_parent();
-                }));
-                Core::EventLoop::wake();
+                    remove_from_parent();
+                });
+                origin_event_loop->wake();
             } else {
                 this->remove_from_parent();
             }
         });
     }
 
-    Function<Result()> m_action;
+    bool m_cancelled { false };
+    Function<Result(BackgroundAction&)> m_action;
     Function<void(Result)> m_on_complete;
     Optional<Result> m_result;
 };

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/BuiltinWrappers.h>
 #include <AK/Checked.h>
 #include <AK/Concepts.h>
 #include <AK/Format.h>
@@ -54,7 +55,6 @@ public:
         , m_high(high)
     {
     }
-
     constexpr T& low()
     {
         return m_low;
@@ -91,9 +91,9 @@ public:
     constexpr size_t clz() const requires(IsSame<T, u64>)
     {
         if (m_high)
-            return __builtin_clzll(m_high);
+            return count_leading_zeroes(m_high);
         else
-            return sizeof(T) * 8 + __builtin_clzll(m_low);
+            return sizeof(T) * 8 + count_leading_zeroes(m_low);
     }
     constexpr size_t clz() const requires(!IsSame<T, u64>)
     {
@@ -105,9 +105,9 @@ public:
     constexpr size_t ctz() const requires(IsSame<T, u64>)
     {
         if (m_low)
-            return __builtin_ctzll(m_low);
+            return count_trailing_zeroes(m_low);
         else
-            return sizeof(T) * 8 + __builtin_ctzll(m_high);
+            return sizeof(T) * 8 + count_trailing_zeroes(m_high);
     }
     constexpr size_t ctz() const requires(!IsSame<T, u64>)
     {
@@ -135,32 +135,32 @@ public:
         return m_low || m_high;
     }
     template<Unsigned U>
-    requires(sizeof(T) >= sizeof(U)) constexpr bool operator==(const T& other) const
+    requires(sizeof(T) >= sizeof(U)) constexpr bool operator==(const U& other) const
     {
         return !m_high && m_low == other;
     }
     template<Unsigned U>
-    requires(sizeof(T) >= sizeof(U)) constexpr bool operator!=(const T& other) const
+    requires(sizeof(T) >= sizeof(U)) constexpr bool operator!=(const U& other) const
     {
         return m_high || m_low != other;
     }
     template<Unsigned U>
-    requires(sizeof(T) >= sizeof(U)) constexpr bool operator>(const T& other) const
+    requires(sizeof(T) >= sizeof(U)) constexpr bool operator>(const U& other) const
     {
         return m_high || m_low > other;
     }
     template<Unsigned U>
-    requires(sizeof(T) >= sizeof(U)) constexpr bool operator<(const T& other) const
+    requires(sizeof(T) >= sizeof(U)) constexpr bool operator<(const U& other) const
     {
         return !m_high && m_low < other;
     }
     template<Unsigned U>
-    requires(sizeof(T) >= sizeof(U)) constexpr bool operator>=(const T& other) const
+    requires(sizeof(T) >= sizeof(U)) constexpr bool operator>=(const U& other) const
     {
         return *this == other || *this > other;
     }
     template<Unsigned U>
-    requires(sizeof(T) >= sizeof(U)) constexpr bool operator<=(const T& other) const
+    requires(sizeof(T) >= sizeof(U)) constexpr bool operator<=(const U& other) const
     {
         return *this == other || *this < other;
     }
@@ -314,7 +314,12 @@ public:
         return *this;
     }
 
-    // Arithmetics
+    static constexpr size_t my_size()
+    {
+        return sizeof(R);
+    }
+
+    // Arithmetic
 
     // implies size of less than u64, so passing references isn't useful
     template<Unsigned U>
@@ -335,7 +340,7 @@ public:
         };
     }
     template<Unsigned U>
-    requires(sizeof(R) > sizeof(U) && sizeof(T) > sizeof(u64)) constexpr R addc(const U& other, bool& carry) const
+    requires(my_size() > sizeof(U) && sizeof(T) > sizeof(u64)) constexpr R addc(const U& other, bool& carry) const
     {
         T lower = m_low.addc(other, carry);
         T higher = m_high.addc(0u, carry);
@@ -377,7 +382,7 @@ public:
         };
     }
     template<Unsigned U>
-    requires(sizeof(R) < sizeof(U)) constexpr U addc(const U& other, bool& carry) const
+    requires(my_size() < sizeof(U)) constexpr U addc(const U& other, bool& carry) const
     {
         return other.addc(*this, carry);
     }
@@ -474,7 +479,7 @@ public:
 
     // FIXME: no restraints on this
     template<Unsigned U>
-    requires(sizeof(R) >= sizeof(U)) constexpr R div_mod(const U& divisor, U& remainder) const
+    requires(my_size() >= sizeof(U)) constexpr R div_mod(const U& divisor, U& remainder) const
     {
         // FIXME: Is there a better way to raise a division by 0?
         //        Maybe as a compiletime warning?
@@ -594,7 +599,7 @@ public:
         R x1 = *this;
         R x2 = *this * *this;
         u64 exp_copy = exp;
-        for (ssize_t i = sizeof(u64) * 8 - __builtin_clzll(exp) - 2; i >= 0; --i) {
+        for (ssize_t i = sizeof(u64) * 8 - count_leading_zeroes(exp) - 2; i >= 0; --i) {
             if (exp_copy & 1u) {
                 x2 *= x1;
                 x1 *= x1;
@@ -638,7 +643,7 @@ public:
 
         U res = 1;
         u64 exp_copy = exp;
-        for (size_t i = sizeof(u64) - __builtin_clzll(exp) - 1u; i < exp; ++i) {
+        for (size_t i = sizeof(u64) - count_leading_zeroes(exp) - 1u; i < exp; ++i) {
             res *= res;
             res %= mod;
             if (exp_copy & 1u) {
@@ -672,18 +677,18 @@ public:
 
     constexpr size_t log2()
     {
-        // FIXME: propper rounding
+        // FIXME: proper rounding
         return sizeof(R) - clz();
     }
     constexpr size_t logn(u64 base)
     {
-        // FIXME: propper rounding
-        return log2() / (sizeof(u64) - __builtin_clzll(base));
+        // FIXME: proper rounding
+        return log2() / (sizeof(u64) - count_leading_zeroes(base));
     }
     template<Unsigned U>
     requires(sizeof(U) > sizeof(u64)) constexpr size_t logn(U base)
     {
-        // FIXME: propper rounding
+        // FIXME: proper rounding
         return log2() / base.log2();
     }
 
@@ -710,7 +715,7 @@ struct Formatter<UFixedBigInt<T>> : StandardFormatter {
     {
     }
 
-    void format(FormatBuilder& builder, UFixedBigInt<T> value)
+    ErrorOr<void> format(FormatBuilder& builder, UFixedBigInt<T> value)
     {
         if (m_precision.has_value())
             VERIFY_NOT_REACHED();
@@ -747,12 +752,13 @@ struct Formatter<UFixedBigInt<T>> : StandardFormatter {
         ssize_t lower_length = ceil_div(sizeof(T) * 8, (ssize_t)base);
         Formatter<T> formatter { *this };
         formatter.m_width = max(width - lower_length, (ssize_t)0);
-        formatter.format(builder, value.high());
-        builder.put_literal("'"sv);
+        TRY(formatter.format(builder, value.high()));
+        TRY(builder.put_literal("'"sv));
         formatter.m_zero_pad = true;
         formatter.m_alternative_form = false;
         formatter.m_width = lower_length;
-        formatter.format(builder, value.low());
+        TRY(formatter.format(builder, value.low()));
+        return {};
     }
 };
 }

@@ -17,19 +17,18 @@
 
 namespace Web {
 
-class BrowsingContext;
-
 class EventHandler {
 public:
-    explicit EventHandler(Badge<BrowsingContext>, BrowsingContext&);
+    explicit EventHandler(Badge<HTML::BrowsingContext>, HTML::BrowsingContext&);
     ~EventHandler();
 
     bool handle_mouseup(const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     bool handle_mousedown(const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     bool handle_mousemove(const Gfx::IntPoint&, unsigned buttons, unsigned modifiers);
-    bool handle_mousewheel(const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta);
+    bool handle_mousewheel(const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta_x, int wheel_delta_y);
 
     bool handle_keydown(KeyCode, unsigned modifiers, u32 code_point);
+    bool handle_keyup(KeyCode, unsigned modifiers, u32 code_point);
 
     void set_mouse_event_tracking_layout_node(Layout::Node*);
 
@@ -39,16 +38,18 @@ private:
     bool focus_next_element();
     bool focus_previous_element();
 
-    Layout::InitialContainingBlockBox* layout_root();
-    const Layout::InitialContainingBlockBox* layout_root() const;
+    Layout::InitialContainingBlock* layout_root();
+    const Layout::InitialContainingBlock* layout_root() const;
 
-    BrowsingContext& m_frame;
+    HTML::BrowsingContext& m_browsing_context;
 
     bool m_in_mouse_selection { false };
 
     WeakPtr<Layout::Node> m_mouse_event_tracking_layout_node;
 
     NonnullOwnPtr<EditEventHandler> m_edit_event_handler;
+
+    WeakPtr<DOM::EventTarget> m_mousedown_target;
 };
 
 }

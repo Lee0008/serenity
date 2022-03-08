@@ -1,13 +1,11 @@
 @GUI::Widget {
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
-        margins: [5, 5, 5, 5]
+        margins: [5]
     }
 
     @GUI::Widget {
         fixed_height: 44
-
         layout: @GUI::HorizontalBoxLayout {
             spacing: 10
         }
@@ -24,8 +22,7 @@
 
     @GUI::Widget {
         fixed_height: 18
-
-        layout: @GUI::HorizontalBoxLayout
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::Label {
             text: "Executable path:"
@@ -41,8 +38,7 @@
 
     @GUI::Widget {
         fixed_height: 18
-
-        layout: @GUI::HorizontalBoxLayout
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::Label {
             text: "Coredump path:"
@@ -58,8 +54,7 @@
 
     @GUI::Widget {
         fixed_height: 18
-
-        layout: @GUI::HorizontalBoxLayout
+        layout: @GUI::HorizontalBoxLayout {}
 
         @GUI::Label {
             text: "Arguments:"
@@ -73,23 +68,33 @@
         }
     }
 
+    @GUI::Progressbar {
+        name: "progressbar"
+        text: "Generating crash report: "
+    }
+
     @GUI::TabWidget {
         name: "tab_widget"
+        visible: false
     }
 
     @GUI::Widget {
         fixed_height: 32
+        layout: @GUI::HorizontalBoxLayout {}
 
-        layout: @GUI::HorizontalBoxLayout
+        @GUI::Button {
+            name: "debug_button"
+            text: "Debug in Hack Studio"
+            fixed_width: 150
+        }
 
         // HACK: We need something like Layout::add_spacer() in GML! :^)
-        @GUI::Widget
+        @GUI::Widget {}
 
         @GUI::Button {
             name: "close_button"
             text: "Close"
             fixed_width: 70
-            fixed_height: 22
         }
     }
 }

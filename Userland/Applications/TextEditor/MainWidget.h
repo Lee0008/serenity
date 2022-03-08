@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +9,7 @@
 
 #include <AK/Function.h>
 #include <AK/LexicalPath.h>
+#include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Icon.h>
@@ -22,8 +24,9 @@ class MainWidget final : public GUI::Widget {
     C_OBJECT(MainWidget);
 
 public:
-    virtual ~MainWidget() override;
-    bool open_file(const String& path);
+    virtual ~MainWidget() override = default;
+    bool read_file(Core::File&);
+    void open_nonexistent_file(String const& path);
     bool request_close();
 
     GUI::TextEditor& editor() { return *m_editor; }
@@ -38,15 +41,15 @@ public:
     void set_auto_detect_preview_mode(bool value) { m_auto_detect_preview_mode = value; }
 
     void update_title();
-    void initialize_menubar(GUI::Menubar&);
+    void update_statusbar();
+    void initialize_menubar(GUI::Window&);
 
 private:
     MainWidget();
-    void set_path(const LexicalPath& file);
+    void set_path(StringView);
     void update_preview();
     void update_markdown_preview();
     void update_html_preview();
-    void update_statusbar();
 
     Web::OutOfProcessWebView& ensure_web_view();
     void set_web_view_visible(bool);
@@ -81,6 +84,8 @@ private:
     RefPtr<GUI::Toolbar> m_toolbar;
     RefPtr<GUI::ToolbarContainer> m_toolbar_container;
     RefPtr<GUI::Statusbar> m_statusbar;
+    RefPtr<GUI::Menu> m_line_column_statusbar_menu;
+    RefPtr<GUI::Menu> m_syntax_statusbar_menu;
 
     RefPtr<GUI::TextBox> m_find_textbox;
     RefPtr<GUI::TextBox> m_replace_textbox;
@@ -102,6 +107,7 @@ private:
 
     RefPtr<GUI::Action> m_visualize_trailing_whitespace_action;
     RefPtr<GUI::Action> m_visualize_leading_whitespace_action;
+    RefPtr<GUI::Action> m_cursor_line_highlighting_action;
 
     GUI::ActionGroup m_soft_tab_width_actions;
     RefPtr<GUI::Action> m_soft_tab_1_width_action;
@@ -113,15 +119,16 @@ private:
     GUI::ActionGroup syntax_actions;
     RefPtr<GUI::Action> m_plain_text_highlight;
     RefPtr<GUI::Action> m_cpp_highlight;
+    RefPtr<GUI::Action> m_css_highlight;
     RefPtr<GUI::Action> m_js_highlight;
     RefPtr<GUI::Action> m_html_highlight;
+    RefPtr<GUI::Action> m_git_highlight;
     RefPtr<GUI::Action> m_gml_highlight;
     RefPtr<GUI::Action> m_ini_highlight;
     RefPtr<GUI::Action> m_shell_highlight;
     RefPtr<GUI::Action> m_sql_highlight;
 
     RefPtr<Web::OutOfProcessWebView> m_page_view;
-    RefPtr<Core::ConfigFile> m_config;
 
     bool m_auto_detect_preview_mode { false };
     bool m_use_regex { false };

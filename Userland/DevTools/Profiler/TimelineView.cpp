@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,10 +19,6 @@ TimelineView::TimelineView(Profile& profile)
     set_shrink_to_fit(true);
 }
 
-TimelineView::~TimelineView()
-{
-}
-
 u64 TimelineView::timestamp_at_x(int x) const
 {
     float column_width = (float)width() / (float)m_profile.length_in_ms();
@@ -31,7 +28,7 @@ u64 TimelineView::timestamp_at_x(int x) const
 
 void TimelineView::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
 
     set_selecting(true);
@@ -55,7 +52,7 @@ void TimelineView::mousemove_event(GUI::MouseEvent& event)
 
 void TimelineView::mouseup_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
 
     set_selecting(false);
@@ -67,7 +64,7 @@ void TimelineView::mousewheel_event(GUI::MouseEvent& event)
 {
     if (event.modifiers() == Mod_Ctrl) {
         event.accept();
-        m_scale += event.wheel_delta();
+        m_scale += event.wheel_delta_y();
         m_scale = clamp(m_scale, 1.0f, 100.0f);
         for_each_child_of_type<TimelineTrack>([&](auto& track) {
             track.set_scale(m_scale);

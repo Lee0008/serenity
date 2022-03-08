@@ -8,8 +8,10 @@
 #include "Editor.h"
 #include <AK/CharacterTypes.h>
 #include <AK/Debug.h>
+#include <AK/FileStream.h>
 #include <AK/GenericLexer.h>
 #include <AK/JsonObject.h>
+#include <AK/MemoryStream.h>
 #include <AK/ScopeGuard.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/StringBuilder.h>
@@ -21,6 +23,7 @@
 #include <LibCore/File.h>
 #include <LibCore/Notifier.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
@@ -34,16 +37,16 @@ constexpr u32 ctrl(char c) { return c & 0x3f; }
 
 namespace Line {
 
-Configuration Configuration::from_config(const StringView& libname)
+Configuration Configuration::from_config(StringView libname)
 {
     Configuration configuration;
-    auto config_file = Core::ConfigFile::get_for_lib(libname);
+    auto config_file = Core::ConfigFile::open_for_lib(libname).release_value_but_fixme_should_propagate_errors();
 
-    // Read behaviour options.
-    auto refresh = config_file->read_entry("behaviour", "refresh", "lazy");
-    auto operation = config_file->read_entry("behaviour", "operation_mode");
-    auto bracketed_paste = config_file->read_bool_entry("behaviour", "bracketed_paste", true);
-    auto default_text_editor = config_file->read_entry("behaviour", "default_text_editor");
+    // Read behavior options.
+    auto refresh = config_file->read_entry("behavior", "refresh", "lazy");
+    auto operation = config_file->read_entry("behavior", "operation_mode");
+    auto bracketed_paste = config_file->read_bool_entry("behavior", "bracketed_paste", true);
+    auto default_text_editor = config_file->read_entry("behavior", "default_text_editor");
 
     Configuration::Flags flags { Configuration::Flags::None };
     if (bracketed_paste)
@@ -182,8 +185,8 @@ void Editor::set_default_keybinds()
 Editor::Editor(Configuration configuration)
     : m_configuration(move(configuration))
 {
-    m_always_refresh = m_configuration.refresh_behaviour == Configuration::RefreshBehaviour::Eager;
-    m_pending_chars = ByteBuffer::create_uninitialized(0);
+    m_always_refresh = m_configuration.refresh_behavior == Configuration::RefreshBehavior::Eager;
+    m_pending_chars = {};
     get_terminal_size();
     m_suggestion_display = make<XtermSuggestionDisplay>(m_num_lines, m_num_columns);
 }
@@ -215,17 +218,20 @@ void Editor::ensure_free_lines_from_origin(size_t count)
 void Editor::get_terminal_size()
 {
     struct winsize ws;
-
-    if (ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) < 0) {
-        m_num_columns = 80;
-        m_num_lines = 25;
-    } else {
-        m_num_columns = ws.ws_col;
-        m_num_lines = ws.ws_row;
+    ioctl(STDERR_FILENO, TIOCGWINSZ, &ws);
+    if (ws.ws_col == 0 || ws.ws_row == 0) {
+        // LLDB uses ttys which "work" and then gives us a zero sized
+        // terminal which is far from useful
+        if (int fd = open("/dev/tty", O_RDONLY); fd != -1) {
+            ioctl(fd, TIOCGWINSZ, &ws);
+            close(fd);
+        }
     }
+    m_num_columns = ws.ws_col;
+    m_num_lines = ws.ws_row;
 }
 
-void Editor::add_to_history(const String& line)
+void Editor::add_to_history(String const& line)
 {
     if (line.is_empty())
         return;
@@ -244,7 +250,7 @@ void Editor::add_to_history(const String& line)
     m_history_dirty = true;
 }
 
-bool Editor::load_history(const String& path)
+bool Editor::load_history(String const& path)
 {
     auto history_file = Core::File::construct(path);
     if (!history_file->open(Core::OpenMode::ReadOnly))
@@ -252,7 +258,7 @@ bool Editor::load_history(const String& path)
     auto data = history_file->read_all();
     auto hist = StringView { data.data(), data.size() };
     for (auto& str : hist.split_view("\n\n")) {
-        auto it = str.find_first_of("::").value_or(0);
+        auto it = str.find("::").value_or(0);
         auto time = str.substring_view(0, it).to_uint<time_t>().value_or(0);
         auto string = str.substring_view(it == 0 ? it : it + 2);
         m_history.append({ string, time });
@@ -261,7 +267,7 @@ bool Editor::load_history(const String& path)
 }
 
 template<typename It0, typename It1, typename OutputT, typename MapperT, typename LessThan>
-static void merge(It0&& begin0, const It0& end0, It1&& begin1, const It1& end1, OutputT& output, MapperT left_mapper, LessThan less_than)
+static void merge(It0&& begin0, It0 const& end0, It1&& begin1, It1 const& end1, OutputT& output, MapperT left_mapper, LessThan less_than)
 {
     for (;;) {
         if (begin0 == end0 && begin1 == end1)
@@ -302,7 +308,7 @@ static void merge(It0&& begin0, const It0& end0, It1&& begin1, const It1& end1, 
     }
 }
 
-bool Editor::save_history(const String& path)
+bool Editor::save_history(String const& path)
 {
     Vector<HistoryEntry> final_history { { "", 0 } };
     {
@@ -318,7 +324,7 @@ bool Editor::save_history(const String& path)
                 auto string = str.substring_view(it == 0 ? it : it + 2);
                 return HistoryEntry { string, time };
             },
-            [](const HistoryEntry& left, const HistoryEntry& right) { return left.timestamp < right.timestamp; });
+            [](HistoryEntry const& left, HistoryEntry const& right) { return left.timestamp < right.timestamp; });
     }
 
     auto file_or_error = Core::File::open(path, Core::OpenMode::WriteOnly, 0600);
@@ -326,7 +332,7 @@ bool Editor::save_history(const String& path)
         return false;
     auto file = file_or_error.release_value();
     final_history.take_first();
-    for (const auto& entry : final_history)
+    for (auto const& entry : final_history)
         file->write(String::formatted("{}::{}\n\n", entry.timestamp, entry.entry));
 
     m_history_dirty = false;
@@ -345,19 +351,19 @@ void Editor::clear_line()
     m_inline_search_cursor = m_cursor;
 }
 
-void Editor::insert(const Utf32View& string)
+void Editor::insert(Utf32View const& string)
 {
     for (size_t i = 0; i < string.length(); ++i)
         insert(string.code_points()[i]);
 }
 
-void Editor::insert(const String& string)
+void Editor::insert(String const& string)
 {
     for (auto ch : Utf8View { string })
         insert(ch);
 }
 
-void Editor::insert(const StringView& string_view)
+void Editor::insert(StringView string_view)
 {
     for (auto ch : Utf8View { string_view })
         insert(ch);
@@ -368,7 +374,8 @@ void Editor::insert(const u32 cp)
     StringBuilder builder;
     builder.append(Utf32View(&cp, 1));
     auto str = builder.build();
-    m_pending_chars.append(str.characters(), str.length());
+    if (m_pending_chars.try_append(str.characters(), str.length()).is_error())
+        return;
 
     readjust_anchored_styles(m_cursor, ModificationKind::Insertion);
 
@@ -385,7 +392,7 @@ void Editor::insert(const u32 cp)
     m_inline_search_cursor = m_cursor;
 }
 
-void Editor::register_key_input_callback(const KeyBinding& binding)
+void Editor::register_key_input_callback(KeyBinding const& binding)
 {
     if (binding.kind == KeyBinding::Kind::InternalFunction) {
         auto internal_function = find_internal_function(binding.binding);
@@ -453,7 +460,7 @@ Editor::CodepointRange Editor::byte_offset_range_to_code_point_offset_range(size
     return range;
 }
 
-void Editor::stylize(const Span& span, const Style& style)
+void Editor::stylize(Span const& span, Style const& style)
 {
     if (style.is_empty())
         return;
@@ -471,25 +478,18 @@ void Editor::stylize(const Span& span, const Style& style)
     auto& spans_starting = style.is_anchored() ? m_current_spans.m_anchored_spans_starting : m_current_spans.m_spans_starting;
     auto& spans_ending = style.is_anchored() ? m_current_spans.m_anchored_spans_ending : m_current_spans.m_spans_ending;
 
-    auto starting_map = spans_starting.get(start).value_or({});
-
+    auto& starting_map = spans_starting.ensure(start);
     if (!starting_map.contains(end))
         m_refresh_needed = true;
-
     starting_map.set(end, style);
 
-    spans_starting.set(start, starting_map);
-
-    auto ending_map = spans_ending.get(end).value_or({});
-
+    auto& ending_map = spans_ending.ensure(end);
     if (!ending_map.contains(start))
         m_refresh_needed = true;
     ending_map.set(start, style);
-
-    spans_ending.set(end, ending_map);
 }
 
-void Editor::suggest(size_t invariant_offset, size_t static_offset, Span::Mode offset_mode) const
+void Editor::transform_suggestion_offsets(size_t& invariant_offset, size_t& static_offset, Span::Mode offset_mode) const
 {
     auto internal_static_offset = static_offset;
     auto internal_invariant_offset = invariant_offset;
@@ -501,7 +501,8 @@ void Editor::suggest(size_t invariant_offset, size_t static_offset, Span::Mode o
         internal_static_offset = offsets.start;
         internal_invariant_offset = offsets.end - offsets.start;
     }
-    m_suggestion_manager.set_suggestion_variants(internal_static_offset, internal_invariant_offset, 0);
+    invariant_offset = internal_invariant_offset;
+    static_offset = internal_static_offset;
 }
 
 void Editor::initialize()
@@ -578,11 +579,13 @@ void Editor::interrupted()
         return;
 
     m_finish = false;
-    reposition_cursor(true);
-    if (m_suggestion_display->cleanup())
-        reposition_cursor(true);
-    fprintf(stderr, "\n");
-    fflush(stderr);
+    {
+        OutputFileStream stderr_stream { stderr };
+        reposition_cursor(stderr_stream, true);
+        if (m_suggestion_display->cleanup())
+            reposition_cursor(stderr_stream, true);
+        stderr_stream.write("\n"sv.bytes());
+    }
     m_buffer.clear();
     m_chars_touched_in_the_middle = buffer().size();
     m_is_editing = false;
@@ -598,9 +601,33 @@ void Editor::resized()
     m_previous_num_columns = m_num_columns;
     get_terminal_size();
 
-    reposition_cursor(true);
+    if (!m_has_origin_reset_scheduled) {
+        // Reset the origin, but make sure it doesn't blow up if we can't read it
+        if (set_origin(false)) {
+            handle_resize_event(false);
+        } else {
+            deferred_invoke([this] { handle_resize_event(true); });
+            m_has_origin_reset_scheduled = true;
+        }
+    }
+}
+
+void Editor::handle_resize_event(bool reset_origin)
+{
+    m_has_origin_reset_scheduled = false;
+    if (reset_origin && !set_origin(false)) {
+        m_has_origin_reset_scheduled = true;
+        return deferred_invoke([this] { handle_resize_event(true); });
+    }
+
+    set_origin(m_origin_row, 1);
+
+    OutputFileStream stderr_stream { stderr };
+
+    reposition_cursor(stderr_stream, true);
     m_suggestion_display->redisplay(m_suggestion_manager, m_num_lines, m_num_columns);
-    reposition_cursor();
+    m_origin_row = m_suggestion_display->origin_row();
+    reposition_cursor(stderr_stream);
 
     if (m_is_searching)
         m_search_editor->resized();
@@ -609,9 +636,11 @@ void Editor::resized()
 void Editor::really_quit_event_loop()
 {
     m_finish = false;
-    reposition_cursor(true);
-    fprintf(stderr, "\n");
-    fflush(stderr);
+    {
+        OutputFileStream stderr_stream { stderr };
+        reposition_cursor(stderr_stream, true);
+        stderr_stream.write("\n"sv.bytes());
+    }
     auto string = line();
     m_buffer.clear();
     m_chars_touched_in_the_middle = buffer().size();
@@ -626,7 +655,7 @@ void Editor::really_quit_event_loop()
     Core::EventLoop::current().quit(Exit);
 }
 
-auto Editor::get_line(const String& prompt) -> Result<String, Editor::Error>
+auto Editor::get_line(String const& prompt) -> Result<String, Editor::Error>
 {
     initialize();
     m_is_editing = true;
@@ -672,11 +701,14 @@ auto Editor::get_line(const String& prompt) -> Result<String, Editor::Error>
     reset();
     strip_styles(true);
 
-    auto prompt_lines = max(current_prompt_metrics().line_metrics.size(), 1ul) - 1;
-    for (size_t i = 0; i < prompt_lines; ++i)
-        putc('\n', stderr);
+    {
+        OutputFileStream stderr_stream { stderr };
+        auto prompt_lines = max(current_prompt_metrics().line_metrics.size(), 1ul) - 1;
+        for (size_t i = 0; i < prompt_lines; ++i)
+            stderr_stream.write("\n"sv.bytes());
 
-    VT::move_relative(-prompt_lines, 0);
+        VT::move_relative(-static_cast<int>(prompt_lines), 0, stderr_stream);
+    }
 
     set_origin();
 
@@ -690,7 +722,7 @@ auto Editor::get_line(const String& prompt) -> Result<String, Editor::Error>
 
     m_notifier->on_ready_to_read = [&] { try_update_once(); };
     if (!m_incomplete_data.is_empty())
-        deferred_invoke([&](auto&) { try_update_once(); });
+        deferred_invoke([&] { try_update_once(); });
 
     if (loop.exec() == Retry)
         return get_line(prompt);
@@ -942,6 +974,12 @@ void Editor::handle_read_event()
                     }
                     if (is_in_paste && param1 == 201) {
                         m_state = InputState::Free;
+                        if (on_paste) {
+                            on_paste(Utf32View { m_paste_buffer.data(), m_paste_buffer.size() }, *this);
+                            m_paste_buffer.clear_with_capacity();
+                        }
+                        if (!m_paste_buffer.is_empty())
+                            insert(Utf32View { m_paste_buffer.data(), m_paste_buffer.size() });
                         continue;
                     }
                 }
@@ -953,7 +991,7 @@ void Editor::handle_read_event()
                 dbgln("LibLine: Unhandled final: {:02x} ({:c})", code_point, code_point);
                 continue;
             }
-            break;
+            VERIFY_NOT_REACHED();
         }
         case InputState::Verbatim:
             m_state = InputState::Free;
@@ -966,7 +1004,10 @@ void Editor::handle_read_event()
                 m_state = InputState::GotEscape;
                 continue;
             }
-            insert(code_point);
+            if (on_paste)
+                m_paste_buffer.append(code_point);
+            else
+                insert(code_point);
             continue;
         case InputState::Free:
             m_previous_free_state = InputState::Free;
@@ -991,8 +1032,8 @@ void Editor::handle_read_event()
         ArmedScopeGuard suggestion_cleanup { [this] { cleanup_suggestions(); } };
 
         // Normally ^D. `stty eof \^n` can change it to ^N (or something else), but Serenity doesn't have `stty` yet.
-        // Process this here since the keybinds might override its behaviour.
-        // This only applies when the buffer is empty. at any other time, the behaviour should be configurable.
+        // Process this here since the keybinds might override its behavior.
+        // This only applies when the buffer is empty. at any other time, the behavior should be configurable.
         if (code_point == m_termios.c_cc[VEOF] && m_buffer.size() == 0) {
             finish_edit();
             continue;
@@ -1020,6 +1061,7 @@ void Editor::handle_read_event()
             // further tabs simply show the cached completions.
             if (m_times_tab_pressed == 1) {
                 m_suggestion_manager.set_suggestions(on_tab_complete(*this));
+                m_suggestion_manager.set_start_index(0);
                 m_prompt_lines_at_suggestion_initiation = num_lines();
                 if (m_suggestion_manager.count() == 0) {
                     // There are no suggestions, beep.
@@ -1068,7 +1110,8 @@ void Editor::handle_read_event()
             for (auto& view : completion_result.insert)
                 insert(view);
 
-            reposition_cursor();
+            OutputFileStream stderr_stream { stderr };
+            reposition_cursor(stderr_stream);
 
             if (completion_result.style_to_apply.has_value()) {
                 // Apply the style of the last suggestion.
@@ -1087,17 +1130,15 @@ void Editor::handle_read_event()
                 break;
             }
 
-            if (m_times_tab_pressed > 1) {
-                if (m_suggestion_manager.count() > 0) {
-                    if (m_suggestion_display->cleanup())
-                        reposition_cursor();
+            if (m_times_tab_pressed > 1 && m_suggestion_manager.count() > 0) {
+                if (m_suggestion_display->cleanup())
+                    reposition_cursor(stderr_stream);
 
-                    m_suggestion_display->set_initial_prompt_lines(m_prompt_lines_at_suggestion_initiation);
+                m_suggestion_display->set_initial_prompt_lines(m_prompt_lines_at_suggestion_initiation);
 
-                    m_suggestion_display->display(m_suggestion_manager);
+                m_suggestion_display->display(m_suggestion_manager);
 
-                    m_origin_row = m_suggestion_display->origin_row();
-                }
+                m_origin_row = m_suggestion_display->origin_row();
             }
 
             if (m_times_tab_pressed > 2) {
@@ -1111,7 +1152,6 @@ void Editor::handle_read_event()
                 // We have none, or just one suggestion,
                 // we should just commit that and continue
                 // after it, as if it were auto-completed.
-                suggest(0, 0, Span::CodepointOriented);
                 m_times_tab_pressed = 0;
                 m_suggestion_manager.reset();
                 m_suggestion_display->finish();
@@ -1133,7 +1173,7 @@ void Editor::handle_read_event()
     }
 
     if (!m_incomplete_data.is_empty() && !m_finish)
-        deferred_invoke([&](auto&) { try_update_once(); });
+        deferred_invoke([&] { try_update_once(); });
 }
 
 void Editor::cleanup_suggestions()
@@ -1145,17 +1185,17 @@ void Editor::cleanup_suggestions()
         // We probably have some suggestions drawn,
         // let's clean them up.
         if (m_suggestion_display->cleanup()) {
-            reposition_cursor();
+            OutputFileStream stderr_stream { stderr };
+            reposition_cursor(stderr_stream);
             m_refresh_needed = true;
         }
         m_suggestion_manager.reset();
-        suggest(0, 0, Span::CodepointOriented);
         m_suggestion_display->finish();
     }
     m_times_tab_pressed = 0; // Safe to say if we get here, the user didn't press TAB
 }
 
-bool Editor::search(const StringView& phrase, bool allow_empty, bool from_beginning)
+bool Editor::search(StringView phrase, bool allow_empty, bool from_beginning)
 {
     int last_matching_offset = -1;
     bool found = false;
@@ -1218,15 +1258,26 @@ void Editor::cleanup()
     if (new_lines < shown_lines)
         m_extra_forward_lines = max(shown_lines - new_lines, m_extra_forward_lines);
 
-    reposition_cursor(true);
+    OutputFileStream stderr_stream { stderr };
+    reposition_cursor(stderr_stream, true);
     auto current_line = num_lines() - 1;
-    VT::clear_lines(current_line, m_extra_forward_lines);
+    VT::clear_lines(current_line, m_extra_forward_lines, stderr_stream);
     m_extra_forward_lines = 0;
-    reposition_cursor();
+    reposition_cursor(stderr_stream);
 };
 
 void Editor::refresh_display()
 {
+    DuplexMemoryStream output_stream;
+    ScopeGuard flush_stream {
+        [&] {
+            auto buffer = output_stream.copy_into_contiguous_buffer();
+            if (buffer.is_empty())
+                return;
+            fwrite(buffer.data(), sizeof(char), buffer.size(), stderr);
+        }
+    };
+
     auto has_cleaned_up = false;
     // Someone changed the window size, figure it out
     // and react to it, we might need to redraw.
@@ -1251,20 +1302,19 @@ void Editor::refresh_display()
     if (m_origin_row + current_num_lines > m_num_lines) {
         if (current_num_lines > m_num_lines) {
             for (size_t i = 0; i < m_num_lines; ++i)
-                putc('\n', stderr);
+                output_stream.write("\n"sv.bytes());
             m_origin_row = 0;
         } else {
             auto old_origin_row = m_origin_row;
             m_origin_row = m_num_lines - current_num_lines + 1;
             for (size_t i = 0; i < old_origin_row - m_origin_row; ++i)
-                putc('\n', stderr);
+                output_stream.write("\n"sv.bytes());
         }
-        fflush(stderr);
     }
     // Do not call hook on pure cursor movement.
     if (m_cached_prompt_valid && !m_refresh_needed && m_pending_chars.size() == 0) {
         // Probably just moving around.
-        reposition_cursor();
+        reposition_cursor(output_stream);
         m_cached_buffer_metrics = actual_rendered_string_metrics(buffer_view());
         m_drawn_end_of_line_offset = m_buffer.size();
         return;
@@ -1277,15 +1327,12 @@ void Editor::refresh_display()
         if (!m_refresh_needed && m_cursor == m_buffer.size()) {
             // Just write the characters out and continue,
             // no need to refresh the entire line.
-            char null = 0;
-            m_pending_chars.append(&null, 1);
-            fputs((char*)m_pending_chars.data(), stderr);
+            output_stream.write(m_pending_chars);
             m_pending_chars.clear();
             m_drawn_cursor = m_cursor;
             m_drawn_end_of_line_offset = m_buffer.size();
             m_cached_buffer_metrics = actual_rendered_string_metrics(buffer_view());
             m_drawn_spans = m_current_spans;
-            fflush(stderr);
             return;
         }
     }
@@ -1307,11 +1354,11 @@ void Editor::refresh_display()
                 style.unify_with(applicable_style.value);
 
             // Disable any style that should be turned off.
-            VT::apply_style(style, false);
+            VT::apply_style(style, output_stream, false);
 
             // Reapply styles for overlapping spans that include this one.
             style = find_applicable_style(i);
-            VT::apply_style(style, true);
+            VT::apply_style(style, output_stream, true);
         }
         if (starts.size() || anchored_starts.size()) {
             Style style;
@@ -1323,11 +1370,11 @@ void Editor::refresh_display()
                 style.unify_with(applicable_style.value);
 
             // Set new styles.
-            VT::apply_style(style, true);
+            VT::apply_style(style, output_stream, true);
         }
     };
 
-    auto print_character_at = [this](size_t i) {
+    auto print_character_at = [&](size_t i) {
         StringBuilder builder;
         auto c = m_buffer[i];
         bool should_print_masked = is_ascii_control(c) && c != '\n';
@@ -1340,26 +1387,26 @@ void Editor::refresh_display()
             builder.append(Utf32View { &c, 1 });
 
         if (should_print_masked)
-            fputs("\033[7m", stderr);
+            output_stream.write("\033[7m"sv.bytes());
 
-        fputs(builder.to_string().characters(), stderr);
+        output_stream.write(builder.string_view().bytes());
 
         if (should_print_masked)
-            fputs("\033[27m", stderr);
+            output_stream.write("\033[27m"sv.bytes());
     };
 
     // If there have been no changes to previous sections of the line (style or text)
     // just append the new text with the appropriate styles.
     if (!m_always_refresh && m_cached_prompt_valid && m_chars_touched_in_the_middle == 0 && m_drawn_spans.contains_up_to_offset(m_current_spans, m_drawn_cursor)) {
         auto initial_style = find_applicable_style(m_drawn_end_of_line_offset);
-        VT::apply_style(initial_style);
+        VT::apply_style(initial_style, output_stream);
 
         for (size_t i = m_drawn_end_of_line_offset; i < m_buffer.size(); ++i) {
             apply_styles(i);
             print_character_at(i);
         }
 
-        VT::apply_style(Style::reset_style());
+        VT::apply_style(Style::reset_style(), output_stream);
         m_pending_chars.clear();
         m_refresh_needed = false;
         m_cached_buffer_metrics = actual_rendered_string_metrics(buffer_view());
@@ -1395,18 +1442,18 @@ void Editor::refresh_display()
     if (!has_cleaned_up) {
         cleanup();
     }
-    VT::move_absolute(m_origin_row, m_origin_column);
+    VT::move_absolute(m_origin_row, m_origin_column, output_stream);
 
-    fputs(m_new_prompt.characters(), stderr);
+    output_stream.write(m_new_prompt.bytes());
 
-    VT::clear_to_end_of_line();
+    VT::clear_to_end_of_line(output_stream);
     StringBuilder builder;
     for (size_t i = 0; i < m_buffer.size(); ++i) {
         apply_styles(i);
         print_character_at(i);
     }
 
-    VT::apply_style(Style::reset_style()); // don't bleed to EOL
+    VT::apply_style(Style::reset_style(), output_stream); // don't bleed to EOL
 
     m_pending_chars.clear();
     m_refresh_needed = false;
@@ -1416,8 +1463,7 @@ void Editor::refresh_display()
     m_drawn_end_of_line_offset = m_buffer.size();
     m_cached_prompt_valid = true;
 
-    reposition_cursor();
-    fflush(stderr);
+    reposition_cursor(output_stream);
 }
 
 void Editor::strip_styles(bool strip_anchored)
@@ -1433,7 +1479,7 @@ void Editor::strip_styles(bool strip_anchored)
     m_refresh_needed = true;
 }
 
-void Editor::reposition_cursor(bool to_end)
+void Editor::reposition_cursor(OutputStream& stream, bool to_end)
 {
     auto cursor = m_cursor;
     auto saved_cursor = m_cursor;
@@ -1449,18 +1495,17 @@ void Editor::reposition_cursor(bool to_end)
     ensure_free_lines_from_origin(line);
 
     VERIFY(column + m_origin_column <= m_num_columns);
-    VT::move_absolute(line + m_origin_row, column + m_origin_column);
+    VT::move_absolute(line + m_origin_row, column + m_origin_column, stream);
 
     m_cursor = saved_cursor;
 }
 
-void VT::move_absolute(u32 row, u32 col)
+void VT::move_absolute(u32 row, u32 col, OutputStream& stream)
 {
-    fprintf(stderr, "\033[%d;%dH", row, col);
-    fflush(stderr);
+    stream.write(String::formatted("\033[{};{}H", row, col).bytes());
 }
 
-void VT::move_relative(int row, int col)
+void VT::move_relative(int row, int col, OutputStream& stream)
 {
     char x_op = 'A', y_op = 'D';
 
@@ -1474,9 +1519,9 @@ void VT::move_relative(int row, int col)
         col = -col;
 
     if (row > 0)
-        fprintf(stderr, "\033[%d%c", row, x_op);
+        stream.write(String::formatted("\033[{}{}", row, x_op).bytes());
     if (col > 0)
-        fprintf(stderr, "\033[%d%c", col, y_op);
+        stream.write(String::formatted("\033[{}{}", col, y_op).bytes());
 }
 
 Style Editor::find_applicable_style(size_t offset) const
@@ -1536,7 +1581,7 @@ String Style::Hyperlink::to_vt_escape(bool starting) const
     return String::formatted("\e]8;;{}\e\\", starting ? m_link : String::empty());
 }
 
-void Style::unify_with(const Style& other, bool prefer_other)
+void Style::unify_with(Style const& other, bool prefer_other)
 {
     // Unify colors.
     if (prefer_other || m_background.is_default())
@@ -1602,55 +1647,55 @@ String Style::to_string() const
     return builder.build();
 }
 
-void VT::apply_style(const Style& style, bool is_starting)
+void VT::apply_style(Style const& style, OutputStream& stream, bool is_starting)
 {
     if (is_starting) {
-        fprintf(stderr,
-            "\033[%d;%d;%dm%s%s%s",
+        stream.write(String::formatted("\033[{};{};{}m{}{}{}",
             style.bold() ? 1 : 22,
             style.underline() ? 4 : 24,
             style.italic() ? 3 : 23,
-            style.background().to_vt_escape().characters(),
-            style.foreground().to_vt_escape().characters(),
-            style.hyperlink().to_vt_escape(true).characters());
+            style.background().to_vt_escape(),
+            style.foreground().to_vt_escape(),
+            style.hyperlink().to_vt_escape(true))
+                         .bytes());
     } else {
-        fprintf(stderr, "%s", style.hyperlink().to_vt_escape(false).characters());
+        stream.write(style.hyperlink().to_vt_escape(false).bytes());
     }
 }
 
-void VT::clear_lines(size_t count_above, size_t count_below)
+void VT::clear_lines(size_t count_above, size_t count_below, OutputStream& stream)
 {
     if (count_below + count_above == 0) {
-        fputs("\033[2K", stderr);
+        stream.write("\033[2K"sv.bytes());
     } else {
         // Go down count_below lines.
         if (count_below > 0)
-            fprintf(stderr, "\033[%dB", (int)count_below);
+            stream.write(String::formatted("\033[{}B", count_below).bytes());
         // Then clear lines going upwards.
-        for (size_t i = count_below + count_above; i > 0; --i)
-            fputs(i == 1 ? "\033[2K" : "\033[2K\033[A", stderr);
+        for (size_t i = count_below + count_above; i > 0; --i) {
+            stream.write("\033[2K"sv.bytes());
+            if (i != 1)
+                stream.write("\033[A"sv.bytes());
+        }
     }
 }
 
-void VT::save_cursor()
+void VT::save_cursor(OutputStream& stream)
 {
-    fputs("\033[s", stderr);
-    fflush(stderr);
+    stream.write("\033[s"sv.bytes());
 }
 
-void VT::restore_cursor()
+void VT::restore_cursor(OutputStream& stream)
 {
-    fputs("\033[u", stderr);
-    fflush(stderr);
+    stream.write("\033[u"sv.bytes());
 }
 
-void VT::clear_to_end_of_line()
+void VT::clear_to_end_of_line(OutputStream& stream)
 {
-    fputs("\033[K", stderr);
-    fflush(stderr);
+    stream.write("\033[K"sv.bytes());
 }
 
-StringMetrics Editor::actual_rendered_string_metrics(const StringView& string)
+StringMetrics Editor::actual_rendered_string_metrics(StringView string)
 {
     StringMetrics metrics;
     StringMetrics::LineMetrics current_line;
@@ -1674,7 +1719,7 @@ StringMetrics Editor::actual_rendered_string_metrics(const StringView& string)
     return metrics;
 }
 
-StringMetrics Editor::actual_rendered_string_metrics(const Utf32View& view)
+StringMetrics Editor::actual_rendered_string_metrics(Utf32View const& view)
 {
     StringMetrics metrics;
     StringMetrics::LineMetrics current_line;
@@ -1751,7 +1796,7 @@ Editor::VTState Editor::actual_rendered_string_length_step(StringMetrics& metric
     return state;
 }
 
-Vector<size_t, 2> Editor::vt_dsr()
+Result<Vector<size_t, 2>, Editor::Error> Editor::vt_dsr()
 {
     char buf[16];
 
@@ -1783,7 +1828,7 @@ Vector<size_t, 2> Editor::vt_dsr()
     } while (more_junk_to_read);
 
     if (m_input_error.has_value())
-        return { 1, 1 };
+        return m_input_error.value();
 
     fputs("\033[6n", stderr);
     fflush(stderr);
@@ -1813,15 +1858,11 @@ Vector<size_t, 2> Editor::vt_dsr()
                 continue;
             }
             dbgln("Error while reading DSR: {}", strerror(errno));
-            m_input_error = Error::ReadFailure;
-            finish();
-            return { 1, 1 };
+            return Error::ReadFailure;
         }
         if (nread == 0) {
-            m_input_error = Error::Empty;
-            finish();
             dbgln("Terminal DSR issue; received no response");
-            return { 1, 1 };
+            return Error::Empty;
         }
 
         switch (state) {
@@ -1897,7 +1938,7 @@ Vector<size_t, 2> Editor::vt_dsr()
 
     if (has_error)
         dbgln("Terminal DSR issue, couldn't parse DSR response");
-    return { row, col };
+    return Vector<size_t, 2> { row, col };
 }
 
 String Editor::line(size_t up_to_index) const
@@ -1963,7 +2004,7 @@ void Editor::readjust_anchored_styles(size_t hint_index, ModificationKind modifi
     }
 }
 
-size_t StringMetrics::lines_with_addition(const StringMetrics& offset, size_t column_width) const
+size_t StringMetrics::lines_with_addition(StringMetrics const& offset, size_t column_width) const
 {
     size_t lines = 0;
 
@@ -1980,7 +2021,7 @@ size_t StringMetrics::lines_with_addition(const StringMetrics& offset, size_t co
     return lines;
 }
 
-size_t StringMetrics::offset_with_addition(const StringMetrics& offset, size_t column_width) const
+size_t StringMetrics::offset_with_addition(StringMetrics const& offset, size_t column_width) const
 {
     if (offset.line_metrics.size() > 1)
         return offset.line_metrics.last().total_length() % column_width;
@@ -1990,19 +2031,20 @@ size_t StringMetrics::offset_with_addition(const StringMetrics& offset, size_t c
     return last % column_width;
 }
 
-bool Editor::Spans::contains_up_to_offset(const Spans& other, size_t offset) const
+bool Editor::Spans::contains_up_to_offset(Spans const& other, size_t offset) const
 {
     auto compare = [&]<typename K, typename V>(const HashMap<K, HashMap<K, V>>& left, const HashMap<K, HashMap<K, V>>& right) -> bool {
         for (auto& entry : right) {
             if (entry.key > offset + 1)
                 continue;
 
-            auto left_map = left.get(entry.key);
-            if (!left_map.has_value())
+            auto left_map_it = left.find(entry.key);
+            if (left_map_it == left.end())
                 return false;
 
-            for (auto& left_entry : left_map.value()) {
-                if (auto value = entry.value.get(left_entry.key); !value.has_value()) {
+            for (auto& left_entry : left_map_it->value) {
+                auto value_it = entry.value.find(left_entry.key);
+                if (value_it == entry.value.end()) {
                     // Might have the same thing with a longer span
                     bool found = false;
                     for (auto& possibly_longer_span_entry : entry.value) {
@@ -2019,8 +2061,8 @@ bool Editor::Spans::contains_up_to_offset(const Spans& other, size_t offset) con
                             dbgln("Have: {}-{} = {}", entry.key, x.key, x.value.to_string());
                     }
                     return false;
-                } else if (value.value() != left_entry.value) {
-                    dbgln_if(LINE_EDITOR_DEBUG, "Compare for {}-{} failed, different values: {} != {}", entry.key, left_entry.key, value.value().to_string(), left_entry.value.to_string());
+                } else if (value_it->value != left_entry.value) {
+                    dbgln_if(LINE_EDITOR_DEBUG, "Compare for {}-{} failed, different values: {} != {}", entry.key, left_entry.key, value_it->value.to_string(), left_entry.value.to_string());
                     return false;
                 }
             }

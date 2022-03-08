@@ -6,17 +6,19 @@
 
 #pragma once
 
+#include <AK/Concepts.h>
 #include <AK/Forward.h>
 #include <AK/NumericLimits.h>
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
+#include <LibCore/Stream.h>
 #include <LibIPC/Forward.h>
 #include <LibIPC/Message.h>
 
 namespace IPC {
 
 template<typename T>
-inline bool decode(Decoder&, T&)
+inline ErrorOr<void> decode(Decoder&, T&)
 {
     static_assert(DependentFalse<T>, "Base IPC::decoder() instantiated");
     VERIFY_NOT_REACHED();
@@ -24,89 +26,97 @@ inline bool decode(Decoder&, T&)
 
 class Decoder {
 public:
-    Decoder(InputMemoryStream& stream, int sockfd)
+    Decoder(InputMemoryStream& stream, Core::Stream::LocalSocket& socket)
         : m_stream(stream)
-        , m_sockfd(sockfd)
+        , m_socket(socket)
     {
     }
 
-    bool decode(bool&);
-    bool decode(u8&);
-    bool decode(u16&);
-    bool decode(u32&);
-    bool decode(u64&);
-    bool decode(i8&);
-    bool decode(i16&);
-    bool decode(i32&);
-    bool decode(i64&);
-    bool decode(float&);
-    bool decode(String&);
-    bool decode(ByteBuffer&);
-    bool decode(URL&);
-    bool decode(Dictionary&);
-    bool decode(File&);
+    ErrorOr<void> decode(bool&);
+    ErrorOr<void> decode(u8&);
+    ErrorOr<void> decode(u16&);
+    ErrorOr<void> decode(unsigned&);
+    ErrorOr<void> decode(unsigned long&);
+    ErrorOr<void> decode(unsigned long long&);
+    ErrorOr<void> decode(i8&);
+    ErrorOr<void> decode(i16&);
+    ErrorOr<void> decode(i32&);
+    ErrorOr<void> decode(i64&);
+    ErrorOr<void> decode(float&);
+    ErrorOr<void> decode(double&);
+    ErrorOr<void> decode(String&);
+    ErrorOr<void> decode(ByteBuffer&);
+    ErrorOr<void> decode(URL&);
+    ErrorOr<void> decode(Dictionary&);
+    ErrorOr<void> decode(File&);
     template<typename K, typename V>
-    bool decode(HashMap<K, V>& hashmap)
+    ErrorOr<void> decode(HashMap<K, V>& hashmap)
     {
         u32 size;
-        if (!decode(size) || size > NumericLimits<i32>::max())
-            return false;
+        TRY(decode(size));
+        if (size > NumericLimits<i32>::max())
+            return Error::from_string_literal("IPC: Invalid HashMap size"sv);
 
         for (size_t i = 0; i < size; ++i) {
             K key;
-            if (!decode(key))
-                return false;
-
+            TRY(decode(key));
             V value;
-            if (!decode(value))
-                return false;
-
-            hashmap.set(move(key), move(value));
+            TRY(decode(value));
+            TRY(hashmap.try_set(move(key), move(value)));
         }
-        return true;
+        return {};
+    }
+
+    template<Enum T>
+    ErrorOr<void> decode(T& enum_value)
+    {
+        UnderlyingType<T> inner_value;
+        TRY(decode(inner_value));
+        enum_value = T(inner_value);
+        return {};
     }
 
     template<typename T>
-    bool decode(T& value)
+    ErrorOr<void> decode(T& value)
     {
         return IPC::decode(*this, value);
     }
 
     template<typename T>
-    bool decode(Vector<T>& vector)
+    ErrorOr<void> decode(Vector<T>& vector)
     {
         u64 size;
-        if (!decode(size) || size > NumericLimits<i32>::max())
-            return false;
+        TRY(decode(size));
+        if (size > NumericLimits<i32>::max())
+            return Error::from_string_literal("IPC: Invalid Vector size"sv);
+        VERIFY(vector.is_empty());
+        TRY(vector.try_ensure_capacity(size));
         for (size_t i = 0; i < size; ++i) {
             T value;
-            if (!decode(value))
-                return false;
-            vector.append(move(value));
+            TRY(decode(value));
+            vector.template unchecked_append(move(value));
         }
-        return true;
+        return {};
     }
 
     template<typename T>
-    bool decode(Optional<T>& optional)
+    ErrorOr<void> decode(Optional<T>& optional)
     {
         bool has_value;
-        if (!decode(has_value))
-            return false;
+        TRY(decode(has_value));
         if (!has_value) {
             optional = {};
-            return true;
+            return {};
         }
         T value;
-        if (!decode(value))
-            return false;
+        TRY(decode(value));
         optional = move(value);
-        return true;
+        return {};
     }
 
 private:
     InputMemoryStream& m_stream;
-    int m_sockfd { -1 };
+    Core::Stream::LocalSocket& m_socket;
 };
 
 }

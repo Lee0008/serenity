@@ -7,11 +7,14 @@
 #pragma once
 
 #include <AK/ByteBuffer.h>
-#include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#endif
 
 constexpr static auto IPAD = 0x36;
 constexpr static auto OPAD = 0x5c;
@@ -49,10 +52,10 @@ public:
     }
 
     TagType process(ReadonlyBytes span) { return process(span.data(), span.size()); }
-    TagType process(const StringView& string) { return process((const u8*)string.characters_without_null_termination(), string.length()); }
+    TagType process(StringView string) { return process((const u8*)string.characters_without_null_termination(), string.length()); }
 
     void update(ReadonlyBytes span) { return update(span.data(), span.size()); }
-    void update(const StringView& string) { return update((const u8*)string.characters_without_null_termination(), string.length()); }
+    void update(StringView string) { return update((const u8*)string.characters_without_null_termination(), string.length()); }
 
     TagType digest()
     {
@@ -70,6 +73,7 @@ public:
         m_outer_hasher.update(m_key_data + m_inner_hasher.block_size(), m_outer_hasher.block_size());
     }
 
+#ifndef KERNEL
     String class_name() const
     {
         StringBuilder builder;
@@ -77,6 +81,7 @@ public:
         builder.append(m_inner_hasher.class_name());
         return builder.build();
     }
+#endif
 
 private:
     void derive_key(const u8* key, size_t length)
@@ -85,7 +90,6 @@ private:
         // Note: The block size of all the current hash functions is 512 bits.
         Vector<u8, 64> v_key;
         v_key.resize(block_size);
-        __builtin_memset(v_key.data(), 0, block_size);
         auto key_buffer = v_key.span();
         // m_key_data is zero'd, so copying the data in
         // the first few bytes leaves the rest zero, which
@@ -110,7 +114,7 @@ private:
     }
 
     void derive_key(ReadonlyBytes key) { derive_key(key.data(), key.size()); }
-    void derive_key(const StringView& key) { derive_key(key.bytes()); }
+    void derive_key(StringView key) { derive_key(key.bytes()); }
 
     HashType m_inner_hasher, m_outer_hasher;
     u8 m_key_data[2048];

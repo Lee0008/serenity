@@ -22,8 +22,17 @@ public:
     RefPtr<Element> last_element_child();
     u32 child_element_count() const;
 
-    RefPtr<Element> query_selector(const StringView&);
-    NonnullRefPtrVector<Element> query_selector_all(const StringView&);
+    ExceptionOr<RefPtr<Element>> query_selector(StringView);
+    ExceptionOr<NonnullRefPtr<NodeList>> query_selector_all(StringView);
+
+    NonnullRefPtr<HTMLCollection> children();
+
+    NonnullRefPtr<HTMLCollection> get_elements_by_tag_name(FlyString const&);
+    NonnullRefPtr<HTMLCollection> get_elements_by_tag_name_ns(FlyString const&, FlyString const&);
+
+    ExceptionOr<void> prepend(Vector<Variant<NonnullRefPtr<Node>, String>> const& nodes);
+    ExceptionOr<void> append(Vector<Variant<NonnullRefPtr<Node>, String>> const& nodes);
+    ExceptionOr<void> replace_children(Vector<Variant<NonnullRefPtr<Node>, String>> const& nodes);
 
 protected:
     ParentNode(Document& document, NodeType type)

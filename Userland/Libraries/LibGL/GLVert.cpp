@@ -140,22 +140,92 @@ void glVertex4sv(const GLshort* v)
     g_gl_context->gl_vertex(v[0], v[1], v[2], v[3]);
 }
 
+void glTexCoord1f(GLfloat s)
+{
+    g_gl_context->gl_tex_coord(s, 0.0f, 0.0f, 1.0f);
+}
+
+void glTexCoord1fv(GLfloat const* v)
+{
+    g_gl_context->gl_tex_coord(v[0], 0.0f, 0.0f, 1.0f);
+}
+
+void glTexCoord2d(GLdouble s, GLdouble t)
+{
+    g_gl_context->gl_tex_coord(s, t, 0.0f, 1.0f);
+}
+
+void glTexCoord2dv(GLdouble const* v)
+{
+    g_gl_context->gl_tex_coord(v[0], v[1], 0.0f, 1.0f);
+}
+
 void glTexCoord2f(GLfloat s, GLfloat t)
 {
-    g_gl_context->gl_tex_coord(s, t, 0.0f, 0.0f);
+    g_gl_context->gl_tex_coord(s, t, 0.0f, 1.0f);
 }
 
-void glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z)
+void glTexCoord2fv(GLfloat const* v)
 {
-    g_gl_context->gl_rotate(angle, x, y, z);
+    g_gl_context->gl_tex_coord(v[0], v[1], 0.0f, 1.0f);
 }
 
-void glScalef(GLfloat x, GLfloat y, GLfloat z)
+void glTexCoord2i(GLint s, GLint t)
 {
-    g_gl_context->gl_scale(x, y, z);
+    g_gl_context->gl_tex_coord(s, t, 0.0f, 1.0f);
 }
 
-void glTranslatef(GLfloat x, GLfloat y, GLfloat z)
+void glTexCoord3f(GLfloat s, GLfloat t, GLfloat r)
 {
-    g_gl_context->gl_translate(x, y, z);
+    g_gl_context->gl_tex_coord(s, t, r, 1.0f);
+}
+
+void glTexCoord3fv(GLfloat const* v)
+{
+    g_gl_context->gl_tex_coord(v[0], v[1], v[2], 1.0f);
+}
+
+void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q)
+{
+    g_gl_context->gl_tex_coord(s, t, r, q);
+}
+
+void glTexCoord4fv(const GLfloat* v)
+{
+    g_gl_context->gl_tex_coord(v[0], v[1], v[2], v[3]);
+}
+
+void glMultiTexCoord2fARB(GLenum target, GLfloat s, GLfloat t)
+{
+    glMultiTexCoord2f(target, s, t);
+}
+
+void glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t)
+{
+    g_gl_context->gl_multi_tex_coord(target, s, t, 0.0f, 1.0f);
+}
+
+void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz)
+{
+    g_gl_context->gl_normal(nx, ny, nz);
+}
+
+void glNormal3fv(GLfloat const* v)
+{
+    g_gl_context->gl_normal(v[0], v[1], v[2]);
+}
+
+void glNormalPointer(GLenum type, GLsizei stride, void const* pointer)
+{
+    g_gl_context->gl_normal_pointer(type, stride, pointer);
+}
+
+void glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2)
+{
+    g_gl_context->gl_rect(x1, y1, x2, y2);
+}
+
+void glRecti(GLint x1, GLint y1, GLint x2, GLint y2)
+{
+    g_gl_context->gl_rect(x1, y1, x2, y2);
 }

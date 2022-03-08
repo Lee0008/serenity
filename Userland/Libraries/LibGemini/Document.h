@@ -10,7 +10,6 @@
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/String.h>
 #include <AK/URL.h>
-#include <AK/Vector.h>
 
 namespace Gemini {
 
@@ -33,7 +32,7 @@ class Document : public RefCounted<Document> {
 public:
     String render_to_html() const;
 
-    static NonnullRefPtr<Document> parse(const StringView& source, const URL&);
+    static NonnullRefPtr<Document> parse(StringView source, const URL&);
 
     const URL& url() const { return m_url; };
 
@@ -43,7 +42,7 @@ private:
     {
     }
 
-    void read_lines(const StringView&);
+    void read_lines(StringView);
 
     NonnullOwnPtrVector<Line> m_lines;
     URL m_url;

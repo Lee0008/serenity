@@ -1,15 +1,18 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <LibCrypto/Cipher/Mode/Mode.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#endif
 
 namespace Crypto {
 namespace Cipher {
@@ -88,7 +91,7 @@ class CTR : public Mode<T> {
 public:
     constexpr static size_t IVSizeInBits = 128;
 
-    virtual ~CTR() { }
+    virtual ~CTR() = default;
 
     // Must intercept `Intent`, because AES must always be set to
     // Encryption, even when decrypting AES-CTR.
@@ -101,6 +104,7 @@ public:
     {
     }
 
+#ifndef KERNEL
     virtual String class_name() const override
     {
         StringBuilder builder;
@@ -108,8 +112,12 @@ public:
         builder.append("_CTR");
         return builder.build();
     }
+#endif
 
-    virtual size_t IV_length() const override { return IVSizeInBits / 8; }
+    virtual size_t IV_length() const override
+    {
+        return IVSizeInBits / 8;
+    }
 
     virtual void encrypt(ReadonlyBytes in, Bytes& out, ReadonlyBytes ivec = {}, Bytes* ivec_out = nullptr) override
     {

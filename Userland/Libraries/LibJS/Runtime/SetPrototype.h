@@ -6,12 +6,13 @@
 
 #pragma once
 
+#include <LibJS/Runtime/PrototypeObject.h>
 #include <LibJS/Runtime/Set.h>
 
 namespace JS {
 
-class SetPrototype final : public Object {
-    JS_OBJECT(SetPrototype, Object);
+class SetPrototype final : public PrototypeObject<SetPrototype, Set> {
+    JS_PROTOTYPE_OBJECT(SetPrototype, Set, Set);
 
 public:
     SetPrototype(GlobalObject&);
@@ -19,8 +20,6 @@ public:
     virtual ~SetPrototype() override;
 
 private:
-    static Set* typed_this(VM&, GlobalObject&);
-
     JS_DECLARE_NATIVE_FUNCTION(add);
     JS_DECLARE_NATIVE_FUNCTION(clear);
     JS_DECLARE_NATIVE_FUNCTION(delete_);
@@ -29,7 +28,7 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(has);
     JS_DECLARE_NATIVE_FUNCTION(values);
 
-    JS_DECLARE_NATIVE_GETTER(size_getter);
+    JS_DECLARE_NATIVE_FUNCTION(size_getter);
 };
 
 }

@@ -5,52 +5,28 @@
  */
 
 #include "InspectableProcess.h"
-#include <InspectorServer/ClientConnection.h>
+#include <InspectorServer/ConnectionFromClient.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/LocalServer.h>
-#include <LibIPC/ClientConnection.h>
+#include <LibCore/System.h>
+#include <LibIPC/ConnectionFromClient.h>
+#include <LibIPC/MultiServer.h>
+#include <LibMain/Main.h>
 
-int main(int, char**)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
     Core::EventLoop event_loop;
-    auto server = Core::LocalServer::construct();
 
-    if (pledge("stdio unix accept", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio unix accept"));
 
-    bool ok = server->take_over_from_system_server("/tmp/portal/inspector");
-    VERIFY(ok);
-    server->on_ready_to_accept = [&] {
-        auto client_socket = server->accept();
-        if (!client_socket) {
-            dbgln("accept failed.");
-            return;
-        }
-        static int s_next_client_id = 0;
-        int client_id = ++s_next_client_id;
-        IPC::new_client_connection<InspectorServer::ClientConnection>(client_socket.release_nonnull(), client_id);
-    };
+    auto server = TRY(IPC::MultiServer<InspectorServer::ConnectionFromClient>::try_create("/tmp/portal/inspector"));
 
-    auto inspectables_server = Core::LocalServer::construct();
-    if (!inspectables_server->take_over_from_system_server("/tmp/portal/inspectables"))
-        VERIFY_NOT_REACHED();
+    auto inspectables_server = TRY(Core::LocalServer::try_create());
+    TRY(inspectables_server->take_over_from_system_server("/tmp/portal/inspectables"));
 
-    inspectables_server->on_ready_to_accept = [&] {
-        auto client_socket = inspectables_server->accept();
-        if (!client_socket) {
-            dbgln("backdoor accept failed.");
-            return;
-        }
-        struct ucred creds = {};
-        socklen_t creds_size = sizeof(creds);
-        if (getsockopt(client_socket->fd(), SOL_SOCKET, SO_PEERCRED, &creds, &creds_size) < 0) {
-            dbgln("SO_PEERCRED failed");
-            return;
-        }
-
-        InspectorServer::g_processes.set(creds.pid, make<InspectorServer::InspectableProcess>(creds.pid, client_socket.release_nonnull()));
+    inspectables_server->on_accept = [&](auto client_socket) {
+        auto pid = client_socket->peer_pid().release_value_but_fixme_should_propagate_errors();
+        InspectorServer::g_processes.set(pid, make<InspectorServer::InspectableProcess>(pid, move(client_socket)));
     };
 
     return event_loop.exec();

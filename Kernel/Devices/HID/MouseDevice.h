@@ -23,25 +23,20 @@ public:
     virtual ~MouseDevice() override;
 
     // ^CharacterDevice
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
-    virtual bool can_write(const FileDescription&, size_t) const override { return true; }
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return EINVAL; }
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return true; }
 
     // ^HIDDevice
-    virtual Type instrument_type() const { return Type::Mouse; }
-
-    // ^Device
-    virtual mode_t required_mode() const override { return 0440; }
-
-    virtual String device_name() const override { return String::formatted("mouse{}", minor()); }
+    virtual Type instrument_type() const override { return Type::Mouse; }
 
 protected:
     MouseDevice();
     // ^CharacterDevice
-    virtual const char* class_name() const override { return "MouseDevice"; }
+    virtual StringView class_name() const override { return "MouseDevice"sv; }
 
-    mutable SpinLock<u8> m_queue_lock;
+    mutable Spinlock m_queue_lock;
     CircularQueue<MousePacket, 100> m_queue;
 };
 

@@ -4,23 +4,26 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/FileSystem/FileDescription.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$dup2(int old_fd, int new_fd)
+ErrorOr<FlatPtr> Process::sys$dup2(int old_fd, int new_fd)
 {
-    REQUIRE_PROMISE(stdio);
-    auto description = file_description(old_fd);
-    if (!description)
-        return EBADF;
-    if (old_fd == new_fd)
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
+    TRY(require_promise(Pledge::stdio));
+    return m_fds.with_exclusive([&](auto& fds) -> ErrorOr<FlatPtr> {
+        auto description = TRY(fds.open_file_description(old_fd));
+        if (old_fd == new_fd)
+            return new_fd;
+        if (new_fd < 0 || static_cast<size_t>(new_fd) >= OpenFileDescriptions::max_open())
+            return EINVAL;
+        if (!fds.m_fds_metadatas[new_fd].is_allocated())
+            fds.m_fds_metadatas[new_fd].allocate();
+        fds[new_fd].set(move(description));
         return new_fd;
-    if (new_fd < 0 || new_fd >= m_max_open_file_descriptors)
-        return EINVAL;
-    m_fds[new_fd].set(*description);
-    return new_fd;
+    });
 }
 
 }

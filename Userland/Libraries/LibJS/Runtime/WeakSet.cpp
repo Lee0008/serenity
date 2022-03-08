@@ -23,10 +23,11 @@ WeakSet::~WeakSet()
 {
 }
 
-void WeakSet::remove_sweeped_cells(Badge<Heap>, Vector<Cell*>& cells)
+void WeakSet::remove_dead_cells(Badge<Heap>)
 {
-    for (auto* cell : cells)
-        m_values.remove(cell);
+    m_values.remove_all_matching([](Cell* cell) {
+        return cell->state() != Cell::State::Live;
+    });
 }
 
 }

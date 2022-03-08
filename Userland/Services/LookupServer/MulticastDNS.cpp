@@ -100,16 +100,17 @@ void MulticastDNS::announce()
         response.add_answer(answer);
     }
 
-    if (emit_packet(response) < 0)
+    if (emit_packet(response).is_error())
         perror("Failed to emit response packet");
 }
 
-ssize_t MulticastDNS::emit_packet(const DNSPacket& packet, const sockaddr_in* destination)
+ErrorOr<size_t> MulticastDNS::emit_packet(const DNSPacket& packet, const sockaddr_in* destination)
 {
     auto buffer = packet.to_byte_buffer();
     if (!destination)
         destination = &mdns_addr;
-    return sendto(fd(), buffer.data(), buffer.size(), 0, (const sockaddr*)destination, sizeof(*destination));
+
+    return send(buffer, *destination);
 }
 
 Vector<IPv4Address> MulticastDNS::local_addresses() const
@@ -121,12 +122,11 @@ Vector<IPv4Address> MulticastDNS::local_addresses() const
     }
 
     auto file_contents = file->read_all();
-    auto json = JsonValue::from_string(file_contents);
-    VERIFY(json.has_value());
+    auto json = JsonValue::from_string(file_contents).release_value_but_fixme_should_propagate_errors();
 
     Vector<IPv4Address> addresses;
 
-    json.value().as_array().for_each([&addresses](auto& value) {
+    json.as_array().for_each([&addresses](auto& value) {
         auto if_object = value.as_object();
         auto address = if_object.get("ipv4_address").to_string();
         auto ipv4_address = IPv4Address::from_string(address);
@@ -149,7 +149,7 @@ Vector<DNSAnswer> MulticastDNS::lookup(const DNSName& name, DNSRecordType record
     request.set_recursion_desired(false);
     request.add_question({ name, record_type, DNSRecordClass::IN, false });
 
-    if (emit_packet(request) < 0) {
+    if (emit_packet(request).is_error()) {
         perror("failed to emit request packet");
         return {};
     }

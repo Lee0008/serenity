@@ -7,6 +7,8 @@
 #pragma once
 
 #include <LibGUI/Forward.h>
+#include <LibGUI/Label.h>
+#include <LibGUI/TableView.h>
 #include <LibGUI/TextEditor.h>
 #include <LibGUI/Window.h>
 #include <LibIPC/Decoder.h>
@@ -20,13 +22,6 @@ class AutocompleteProvider {
 public:
     virtual ~AutocompleteProvider() { }
 
-    enum class CompletionKind {
-        Identifier,
-        PreprocessorDefinition,
-        SystemInclude,
-        ProjectInclude,
-    };
-
     enum class Language {
         Unspecified,
         Cpp,
@@ -35,8 +30,14 @@ public:
     struct Entry {
         String completion;
         size_t partial_input_length { 0 };
-        CompletionKind kind { CompletionKind::Identifier };
         Language language { Language::Unspecified };
+        String display_text {};
+
+        enum class HideAutocompleteAfterApplying {
+            No,
+            Yes,
+        };
+        HideAutocompleteAfterApplying hide_autocomplete_after_applying { HideAutocompleteAfterApplying::Yes };
     };
 
     struct ProjectLocation {
@@ -68,6 +69,32 @@ public:
 
     virtual void provide_completions(Function<void(Vector<Entry>)>) = 0;
 
+    struct TokenInfo {
+        enum class SemanticType : u32 {
+            Unknown,
+            Regular,
+            Keyword,
+            Type,
+            Identifier,
+            String,
+            Number,
+            IncludePath,
+            PreprocessorStatement,
+            Comment,
+            Whitespace,
+            Function,
+            Variable,
+            CustomType,
+            Namespace,
+            Member,
+            Parameter,
+        } type { SemanticType::Unknown };
+        size_t start_line { 0 };
+        size_t start_column { 0 };
+        size_t end_line { 0 };
+        size_t end_column { 0 };
+    };
+
     void attach(TextEditor& editor)
     {
         VERIFY(!m_editor);
@@ -91,14 +118,16 @@ public:
     void show(Gfx::IntPoint suggestion_box_location);
     void close();
 
+    bool has_suggestions() { return m_suggestion_view->model()->row_count() > 0; }
     void next_suggestion();
     void previous_suggestion();
-    void apply_suggestion();
+    AutocompleteProvider::Entry::HideAutocompleteAfterApplying apply_suggestion();
 
 private:
     WeakPtr<TextEditor> m_editor;
     RefPtr<GUI::Window> m_popup_window;
     RefPtr<GUI::TableView> m_suggestion_view;
+    RefPtr<GUI::Label> m_no_suggestions_view;
 };
 
 }

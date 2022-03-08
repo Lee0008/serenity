@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/String.h>
+#include <AK/StringView.h>
 #include <LibIPC/Forward.h>
 #include <time.h>
 
@@ -29,24 +30,24 @@ public:
     unsigned day_of_year() const;
     bool is_leap_year() const;
 
-    void set_time(unsigned year, unsigned month = 1, unsigned day = 0, unsigned hour = 0, unsigned minute = 0, unsigned second = 0);
-    String to_string(const String& format = "%Y-%m-%d %H:%M:%S") const;
+    void set_time(int year, int month = 1, int day = 1, int hour = 0, int minute = 0, int second = 0);
+    String to_string(StringView format = "%Y-%m-%d %H:%M:%S"sv) const;
 
-    static DateTime create(unsigned year, unsigned month = 1, unsigned day = 0, unsigned hour = 0, unsigned minute = 0, unsigned second = 0);
+    static DateTime create(int year, int month = 1, int day = 1, int hour = 0, int minute = 0, int second = 0);
     static DateTime now();
     static DateTime from_timestamp(time_t);
-    static Optional<DateTime> parse(const String& format, const String& string);
+    static Optional<DateTime> parse(StringView format, const String& string);
 
     bool operator<(const DateTime& other) const { return m_timestamp < other.m_timestamp; }
 
 private:
     time_t m_timestamp { 0 };
-    unsigned m_year { 0 };
-    unsigned m_month { 0 };
-    unsigned m_day { 0 };
-    unsigned m_hour { 0 };
-    unsigned m_minute { 0 };
-    unsigned m_second { 0 };
+    int m_year { 0 };
+    int m_month { 0 };
+    int m_day { 0 };
+    int m_hour { 0 };
+    int m_minute { 0 };
+    int m_second { 0 };
 };
 
 }
@@ -54,6 +55,6 @@ private:
 namespace IPC {
 
 bool encode(IPC::Encoder&, const Core::DateTime&);
-bool decode(IPC::Decoder&, Core::DateTime&);
+ErrorOr<void> decode(IPC::Decoder&, Core::DateTime&);
 
 }

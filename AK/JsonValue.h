@@ -8,8 +8,11 @@
 
 #include <AK/Forward.h>
 #include <AK/Optional.h>
-#include <AK/String.h>
 #include <AK/StringBuilder.h>
+
+#ifndef KERNEL
+#    include <AK/String.h>
+#endif
 
 namespace AK {
 
@@ -30,7 +33,7 @@ public:
         Object,
     };
 
-    static Optional<JsonValue> from_string(const StringView&);
+    static ErrorOr<JsonValue> from_string(StringView);
 
     explicit JsonValue(Type = Type::Null);
     ~JsonValue() { clear(); }
@@ -53,7 +56,10 @@ public:
 #endif
     JsonValue(bool);
     JsonValue(const char*);
+#ifndef KERNEL
     JsonValue(const String&);
+#endif
+    JsonValue(StringView);
     JsonValue(const JsonArray&);
     JsonValue(const JsonObject&);
 
@@ -69,7 +75,8 @@ public:
     template<typename Builder>
     void serialize(Builder&) const;
 
-    String as_string_or(const String& alternative)
+#ifndef KERNEL
+    String as_string_or(String const& alternative) const
     {
         if (is_string())
             return as_string();
@@ -82,14 +89,27 @@ public:
             return as_string();
         return serialized<StringBuilder>();
     }
+#endif
 
-    int to_int(int default_value = 0) const { return to_i32(default_value); }
+    int to_int(int default_value = 0) const
+    {
+        return to_i32(default_value);
+    }
     i32 to_i32(i32 default_value = 0) const { return to_number<i32>(default_value); }
     i64 to_i64(i64 default_value = 0) const { return to_number<i64>(default_value); }
 
     unsigned to_uint(unsigned default_value = 0) const { return to_u32(default_value); }
     u32 to_u32(u32 default_value = 0) const { return to_number<u32>(default_value); }
     u64 to_u64(u64 default_value = 0) const { return to_number<u64>(default_value); }
+
+    FlatPtr to_addr(FlatPtr default_value = 0) const
+    {
+#ifdef __LP64__
+        return to_u64(default_value);
+#else
+        return to_u32(default_value);
+#endif
+    }
 
     bool to_bool(bool default_value = false) const
     {
@@ -122,17 +142,19 @@ public:
         return m_value.as_u64;
     }
 
-    int as_bool() const
+    bool as_bool() const
     {
         VERIFY(is_bool());
         return m_value.as_bool;
     }
 
+#ifndef KERNEL
     String as_string() const
     {
         VERIFY(is_string());
         return *m_value.as_string;
     }
+#endif
 
     const JsonObject& as_object() const
     {
@@ -220,7 +242,9 @@ private:
     Type m_type { Type::Null };
 
     union {
+#ifndef KERNEL
         StringImpl* as_string { nullptr };
+#endif
         JsonArray* as_array;
         JsonObject* as_object;
 #if !defined(KERNEL)
@@ -234,13 +258,15 @@ private:
     } m_value;
 };
 
+#ifndef KERNEL
 template<>
 struct Formatter<JsonValue> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const JsonValue& value)
+    ErrorOr<void> format(FormatBuilder& builder, JsonValue const& value)
     {
-        Formatter<StringView>::format(builder, value.to_string());
+        return Formatter<StringView>::format(builder, value.to_string());
     }
 };
+#endif
 
 }
 

@@ -33,6 +33,8 @@ int pthread_attr_destroy(pthread_attr_t*);
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
 
+#define PTHREAD_CANCELED (-1)
+
 int pthread_attr_getdetachstate(const pthread_attr_t*, int*);
 int pthread_attr_setdetachstate(pthread_attr_t*, int);
 
@@ -66,6 +68,7 @@ int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param
 #define PTHREAD_MUTEX_RECURSIVE __PTHREAD_MUTEX_RECURSIVE
 #define PTHREAD_MUTEX_DEFAULT PTHREAD_MUTEX_NORMAL
 #define PTHREAD_MUTEX_INITIALIZER __PTHREAD_MUTEX_INITIALIZER
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP __PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
 
 #define PTHREAD_PROCESS_PRIVATE 1
 #define PTHREAD_PROCESS_SHARED 2
@@ -89,6 +92,7 @@ int pthread_cond_init(pthread_cond_t*, const pthread_condattr_t*);
 int pthread_cond_signal(pthread_cond_t*);
 int pthread_cond_wait(pthread_cond_t*, pthread_mutex_t*);
 int pthread_condattr_init(pthread_condattr_t*);
+int pthread_condattr_getclock(pthread_condattr_t* attr, clockid_t* clock);
 int pthread_condattr_setclock(pthread_condattr_t*, clockid_t);
 int pthread_condattr_destroy(pthread_condattr_t*);
 int pthread_cond_destroy(pthread_cond_t*);

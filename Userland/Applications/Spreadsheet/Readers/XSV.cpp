@@ -9,14 +9,14 @@
 
 namespace Reader {
 
-ParserBehaviour operator&(ParserBehaviour left, ParserBehaviour right)
+ParserBehavior operator&(ParserBehavior left, ParserBehavior right)
 {
-    return static_cast<ParserBehaviour>(static_cast<u32>(left) & static_cast<u32>(right));
+    return static_cast<ParserBehavior>(to_underlying(left) & to_underlying(right));
 }
 
-ParserBehaviour operator|(ParserBehaviour left, ParserBehaviour right)
+ParserBehavior operator|(ParserBehavior left, ParserBehavior right)
 {
-    return static_cast<ParserBehaviour>(static_cast<u32>(left) | static_cast<u32>(right));
+    return static_cast<ParserBehavior>(to_underlying(left) | to_underlying(right));
 }
 
 void XSV::set_error(ReadError error)
@@ -43,9 +43,23 @@ Vector<String> XSV::headers() const
     return headers;
 }
 
+void XSV::parse_preview()
+{
+    reset();
+    if ((m_behaviors & ParserBehavior::ReadHeaders) != ParserBehavior::None)
+        read_headers();
+
+    while (!has_error() && !m_lexer.is_eof()) {
+        if (m_rows.size() >= 10)
+            break;
+        m_rows.append(read_row());
+    }
+}
+
 void XSV::parse()
 {
-    if ((m_behaviours & ParserBehaviour::ReadHeaders) != ParserBehaviour::None)
+    reset();
+    if ((m_behaviors & ParserBehavior::ReadHeaders) != ParserBehavior::None)
         read_headers();
 
     while (!has_error() && !m_lexer.is_eof())
@@ -89,7 +103,7 @@ Vector<XSV::Field> XSV::read_row(bool header_row)
         }
     }
 
-    auto is_lenient = (m_behaviours & ParserBehaviour::Lenient) != ParserBehaviour::None;
+    auto is_lenient = (m_behaviors & ParserBehavior::Lenient) != ParserBehavior::None;
     if (is_lenient) {
         if (m_rows.is_empty())
             return row;
@@ -106,7 +120,7 @@ Vector<XSV::Field> XSV::read_row(bool header_row)
                 row.resize(new_size);
         }
     } else {
-        auto should_read_headers = (m_behaviours & ParserBehaviour::ReadHeaders) != ParserBehaviour::None;
+        auto should_read_headers = (m_behaviors & ParserBehavior::ReadHeaders) != ParserBehavior::None;
         if (!header_row && should_read_headers && row.size() != m_names.size())
             set_error(ReadError::NonConformingColumnCount);
         else if (!header_row && !has_explicit_headers() && !m_rows.is_empty() && m_rows.first().size() != row.size())
@@ -118,7 +132,7 @@ Vector<XSV::Field> XSV::read_row(bool header_row)
 
 XSV::Field XSV::read_one_field()
 {
-    if ((m_behaviours & ParserBehaviour::TrimLeadingFieldSpaces) != ParserBehaviour::None)
+    if ((m_behaviors & ParserBehavior::TrimLeadingFieldSpaces) != ParserBehavior::None)
         m_lexer.consume_while(is_any_of(" \t\v"));
 
     bool is_quoted = false;
@@ -130,7 +144,7 @@ XSV::Field XSV::read_one_field()
         field = read_one_unquoted_field();
     }
 
-    if ((m_behaviours & ParserBehaviour::TrimTrailingFieldSpaces) != ParserBehaviour::None) {
+    if ((m_behaviors & ParserBehavior::TrimTrailingFieldSpaces) != ParserBehavior::None) {
         m_lexer.consume_while(is_any_of(" \t\v"));
 
         if (!is_quoted) {
@@ -168,7 +182,7 @@ XSV::Field XSV::read_one_quoted_field()
     size_t start = m_lexer.tell(), end = start;
     bool is_copy = false;
     StringBuilder builder;
-    auto allow_newlines = (m_behaviours & ParserBehaviour::AllowNewlinesInFields) != ParserBehaviour::None;
+    auto allow_newlines = (m_behaviors & ParserBehavior::AllowNewlinesInFields) != ParserBehavior::None;
 
     for (; !m_lexer.is_eof();) {
         char ch;
@@ -234,7 +248,7 @@ XSV::Field XSV::read_one_quoted_field()
 XSV::Field XSV::read_one_unquoted_field()
 {
     size_t start = m_lexer.tell(), end = start;
-    bool allow_quote_in_field = (m_behaviours & ParserBehaviour::QuoteOnlyInFieldStart) != ParserBehaviour::None;
+    bool allow_quote_in_field = (m_behaviors & ParserBehavior::QuoteOnlyInFieldStart) != ParserBehavior::None;
 
     for (; !m_lexer.is_eof();) {
         if (m_lexer.next_is(m_traits.separator.view()))

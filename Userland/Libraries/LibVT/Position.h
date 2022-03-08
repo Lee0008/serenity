@@ -6,11 +6,13 @@
 
 #pragma once
 
+#include <AK/Types.h>
+
 namespace VT {
 
 class Position {
 public:
-    Position() { }
+    Position() = default;
     Position(int row, int column)
         : m_row(row)
         , m_column(column)
@@ -49,6 +51,17 @@ public:
 private:
     int m_row { -1 };
     int m_column { -1 };
+};
+
+struct CursorPosition {
+    size_t row { 0 };
+    size_t column { 0 };
+
+    void clamp(u16 max_row, u16 max_column)
+    {
+        row = min(row, max_row);
+        column = min(column, max_column);
+    }
 };
 
 }

@@ -7,11 +7,10 @@
 #include "TaskbarButton.h"
 #include "WindowList.h"
 #include <LibGUI/Action.h>
+#include <LibGUI/ConnectionToWindowMangerServer.h>
+#include <LibGUI/ConnectionToWindowServer.h>
 #include <LibGUI/Painter.h>
-#include <LibGUI/WindowManagerServerConnection.h>
-#include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Font.h>
-#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StylePainter.h>
 
@@ -26,7 +25,7 @@ TaskbarButton::~TaskbarButton()
 
 void TaskbarButton::context_menu_event(GUI::ContextMenuEvent&)
 {
-    GUI::WindowManagerServerConnection::the().async_popup_window_menu(
+    GUI::ConnectionToWindowMangerServer::the().async_popup_window_menu(
         m_identifier.client_id(),
         m_identifier.window_id(),
         screen_relative_rect().location());
@@ -34,7 +33,7 @@ void TaskbarButton::context_menu_event(GUI::ContextMenuEvent&)
 
 void TaskbarButton::update_taskbar_rect()
 {
-    GUI::WindowManagerServerConnection::the().async_set_window_taskbar_rect(
+    GUI::ConnectionToWindowMangerServer::the().async_set_window_taskbar_rect(
         m_identifier.client_id(),
         m_identifier.window_id(),
         screen_relative_rect());
@@ -42,7 +41,7 @@ void TaskbarButton::update_taskbar_rect()
 
 void TaskbarButton::clear_taskbar_rect()
 {
-    GUI::WindowManagerServerConnection::the().async_set_window_taskbar_rect(
+    GUI::ConnectionToWindowMangerServer::the().async_set_window_taskbar_rect(
         m_identifier.client_id(),
         m_identifier.window_id(),
         {});
@@ -54,7 +53,7 @@ void TaskbarButton::resize_event(GUI::ResizeEvent& event)
     return GUI::Button::resize_event(event);
 }
 
-static void paint_custom_progressbar(GUI::Painter& painter, const Gfx::IntRect& rect, const Gfx::IntRect& text_rect, const Palette& palette, int min, int max, int value, const StringView& text, const Gfx::Font& font, Gfx::TextAlignment text_alignment)
+static void paint_custom_progressbar(GUI::Painter& painter, const Gfx::IntRect& rect, const Gfx::IntRect& text_rect, const Palette& palette, int min, int max, int value, StringView text, const Gfx::Font& font, Gfx::TextAlignment text_alignment)
 {
     float range_size = max - min;
     float progress = (value - min) / range_size;
@@ -122,7 +121,9 @@ void TaskbarButton::paint_event(GUI::PaintEvent& event)
 
     if (window.progress().has_value()) {
         auto adjusted_rect = rect().shrunken(4, 4);
-        if (is_being_pressed() || is_checked()) {
+        if (!is_being_pressed() && !is_checked()) {
+            adjusted_rect.translate_by(-1, -1);
+            adjusted_rect.set_width(adjusted_rect.width() + 1);
             adjusted_rect.set_height(adjusted_rect.height() + 1);
         }
         paint_custom_progressbar(painter, adjusted_rect, text_rect, palette(), 0, 100, window.progress().value(), text(), font, text_alignment());

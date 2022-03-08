@@ -62,25 +62,25 @@ void OutOfProcessWebView::create_client()
 {
     m_client_state = {};
 
-    m_client_state.client = WebContentClient::construct(*this);
+    m_client_state.client = WebContentClient::try_create(*this).release_value_but_fixme_should_propagate_errors();
     m_client_state.client->on_web_content_process_crash = [this] {
-        deferred_invoke([this](auto&) {
+        deferred_invoke([this] {
             handle_web_content_process_crash();
         });
     };
 
     client().async_update_system_theme(Gfx::current_system_theme_buffer());
     client().async_update_system_fonts(Gfx::FontDatabase::default_font_query(), Gfx::FontDatabase::fixed_width_font_query());
-    client().async_update_screen_rect(GUI::Desktop::the().rect());
+    client().async_update_screen_rects(GUI::Desktop::the().rects(), GUI::Desktop::the().main_screen_index());
 }
 
-void OutOfProcessWebView::load(const URL& url)
+void OutOfProcessWebView::load(const AK::URL& url)
 {
     m_url = url;
     client().async_load_url(url);
 }
 
-void OutOfProcessWebView::load_html(const StringView& html, const URL& url)
+void OutOfProcessWebView::load_html(StringView html, const AK::URL& url)
 {
     m_url = url;
     client().async_load_html(html, url);
@@ -103,7 +103,7 @@ void OutOfProcessWebView::paint_event(GUI::PaintEvent& event)
     GUI::Painter painter(*this);
     painter.add_clip_rect(event.rect());
 
-    if (auto* bitmap = m_client_state.has_usable_bitmap ? m_client_state.front_bitmap.ptr() : m_backup_bitmap.ptr()) {
+    if (auto* bitmap = m_client_state.has_usable_bitmap ? m_client_state.front_bitmap.bitmap.ptr() : m_backup_bitmap.ptr()) {
         painter.add_clip_rect(frame_inner_rect());
         painter.translate(frame_thickness(), frame_thickness());
         painter.blit({ 0, 0 }, *bitmap, bitmap->rect());
@@ -125,36 +125,32 @@ void OutOfProcessWebView::handle_resize()
 
     if (m_client_state.has_usable_bitmap) {
         // NOTE: We keep the outgoing front bitmap as a backup so we have something to paint until we get a new one.
-        m_backup_bitmap = m_client_state.front_bitmap;
+        m_backup_bitmap = m_client_state.front_bitmap.bitmap;
     }
 
-    if (m_client_state.front_bitmap) {
-        m_client_state.front_bitmap = nullptr;
-        client().async_remove_backing_store(m_client_state.front_bitmap_id);
-    }
+    if (m_client_state.front_bitmap.bitmap)
+        client().async_remove_backing_store(m_client_state.front_bitmap.id);
 
-    if (m_client_state.back_bitmap) {
-        m_client_state.back_bitmap = nullptr;
-        client().async_remove_backing_store(m_client_state.back_bitmap_id);
-    }
+    if (m_client_state.back_bitmap.bitmap)
+        client().async_remove_backing_store(m_client_state.back_bitmap.id);
 
-    m_client_state.front_bitmap_id = -1;
-    m_client_state.back_bitmap_id = -1;
+    m_client_state.front_bitmap = {};
+    m_client_state.back_bitmap = {};
     m_client_state.has_usable_bitmap = false;
 
     if (available_size().is_empty())
         return;
 
-    if (auto new_bitmap = Gfx::Bitmap::create_shareable(Gfx::BitmapFormat::BGRx8888, available_size())) {
-        m_client_state.front_bitmap = move(new_bitmap);
-        m_client_state.front_bitmap_id = m_client_state.next_bitmap_id++;
-        client().async_add_backing_store(m_client_state.front_bitmap_id, m_client_state.front_bitmap->to_shareable_bitmap());
+    if (auto new_bitmap_or_error = Gfx::Bitmap::try_create_shareable(Gfx::BitmapFormat::BGRx8888, available_size()); !new_bitmap_or_error.is_error()) {
+        m_client_state.front_bitmap.bitmap = new_bitmap_or_error.release_value();
+        m_client_state.front_bitmap.id = m_client_state.next_bitmap_id++;
+        client().async_add_backing_store(m_client_state.front_bitmap.id, m_client_state.front_bitmap.bitmap->to_shareable_bitmap());
     }
 
-    if (auto new_bitmap = Gfx::Bitmap::create_shareable(Gfx::BitmapFormat::BGRx8888, available_size())) {
-        m_client_state.back_bitmap = move(new_bitmap);
-        m_client_state.back_bitmap_id = m_client_state.next_bitmap_id++;
-        client().async_add_backing_store(m_client_state.back_bitmap_id, m_client_state.back_bitmap->to_shareable_bitmap());
+    if (auto new_bitmap_or_error = Gfx::Bitmap::try_create_shareable(Gfx::BitmapFormat::BGRx8888, available_size()); !new_bitmap_or_error.is_error()) {
+        m_client_state.back_bitmap.bitmap = new_bitmap_or_error.release_value();
+        m_client_state.back_bitmap.id = m_client_state.next_bitmap_id++;
+        client().async_add_backing_store(m_client_state.back_bitmap.id, m_client_state.back_bitmap.bitmap->to_shareable_bitmap());
     }
 
     request_repaint();
@@ -163,6 +159,11 @@ void OutOfProcessWebView::handle_resize()
 void OutOfProcessWebView::keydown_event(GUI::KeyEvent& event)
 {
     client().async_key_down(event.key(), event.modifiers(), event.code_point());
+}
+
+void OutOfProcessWebView::keyup_event(GUI::KeyEvent& event)
+{
+    client().async_key_up(event.key(), event.modifiers(), event.code_point());
 }
 
 void OutOfProcessWebView::mousedown_event(GUI::MouseEvent& event)
@@ -182,7 +183,7 @@ void OutOfProcessWebView::mousemove_event(GUI::MouseEvent& event)
 
 void OutOfProcessWebView::mousewheel_event(GUI::MouseEvent& event)
 {
-    client().async_mouse_wheel(to_content_position(event.position()), event.button(), event.buttons(), event.modifiers(), event.wheel_delta());
+    client().async_mouse_wheel(to_content_position(event.position()), event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y());
 }
 
 void OutOfProcessWebView::theme_change_event(GUI::ThemeChangeEvent& event)
@@ -192,20 +193,25 @@ void OutOfProcessWebView::theme_change_event(GUI::ThemeChangeEvent& event)
     request_repaint();
 }
 
-void OutOfProcessWebView::screen_rect_change_event(GUI::ScreenRectChangeEvent& event)
+void OutOfProcessWebView::screen_rects_change_event(GUI::ScreenRectsChangeEvent& event)
 {
-    client().async_update_screen_rect(event.rect());
+    client().async_update_screen_rects(event.rects(), event.main_screen_index());
 }
 
 void OutOfProcessWebView::notify_server_did_paint(Badge<WebContentClient>, i32 bitmap_id)
 {
-    if (m_client_state.back_bitmap_id == bitmap_id) {
+    if (m_client_state.back_bitmap.id == bitmap_id) {
         m_client_state.has_usable_bitmap = true;
+        m_client_state.back_bitmap.pending_paints--;
         swap(m_client_state.back_bitmap, m_client_state.front_bitmap);
-        swap(m_client_state.back_bitmap_id, m_client_state.front_bitmap_id);
         // We don't need the backup bitmap anymore, so drop it.
         m_backup_bitmap = nullptr;
         update();
+
+        if (m_client_state.got_repaint_requests_while_painting) {
+            m_client_state.got_repaint_requests_while_painting = false;
+            request_repaint();
+        }
     }
 }
 
@@ -235,9 +241,16 @@ void OutOfProcessWebView::notify_server_did_change_title(Badge<WebContentClient>
         on_title_change(title);
 }
 
-void OutOfProcessWebView::notify_server_did_request_scroll(Badge<WebContentClient>, int wheel_delta)
+void OutOfProcessWebView::notify_server_did_request_scroll(Badge<WebContentClient>, i32 x_delta, i32 y_delta)
 {
-    vertical_scrollbar().set_value(vertical_scrollbar().value() + wheel_delta * 20);
+    horizontal_scrollbar().increase_slider_by(x_delta);
+    vertical_scrollbar().increase_slider_by(y_delta);
+}
+
+void OutOfProcessWebView::notify_server_did_request_scroll_to(Badge<WebContentClient>, Gfx::IntPoint const& scroll_position)
+{
+    horizontal_scrollbar().set_value(scroll_position.x());
+    vertical_scrollbar().set_value(scroll_position.y());
 }
 
 void OutOfProcessWebView::notify_server_did_request_scroll_into_view(Badge<WebContentClient>, const Gfx::IntRect& rect)
@@ -255,7 +268,7 @@ void OutOfProcessWebView::notify_server_did_leave_tooltip_area(Badge<WebContentC
     GUI::Application::the()->hide_tooltip();
 }
 
-void OutOfProcessWebView::notify_server_did_hover_link(Badge<WebContentClient>, const URL& url)
+void OutOfProcessWebView::notify_server_did_hover_link(Badge<WebContentClient>, const AK::URL& url)
 {
     if (on_link_hover)
         on_link_hover(url);
@@ -268,25 +281,25 @@ void OutOfProcessWebView::notify_server_did_unhover_link(Badge<WebContentClient>
         on_link_hover({});
 }
 
-void OutOfProcessWebView::notify_server_did_click_link(Badge<WebContentClient>, const URL& url, const String& target, unsigned int modifiers)
+void OutOfProcessWebView::notify_server_did_click_link(Badge<WebContentClient>, const AK::URL& url, const String& target, unsigned int modifiers)
 {
     if (on_link_click)
         on_link_click(url, target, modifiers);
 }
 
-void OutOfProcessWebView::notify_server_did_middle_click_link(Badge<WebContentClient>, const URL& url, const String& target, unsigned int modifiers)
+void OutOfProcessWebView::notify_server_did_middle_click_link(Badge<WebContentClient>, const AK::URL& url, const String& target, unsigned int modifiers)
 {
     if (on_link_middle_click)
         on_link_middle_click(url, target, modifiers);
 }
 
-void OutOfProcessWebView::notify_server_did_start_loading(Badge<WebContentClient>, const URL& url)
+void OutOfProcessWebView::notify_server_did_start_loading(Badge<WebContentClient>, const AK::URL& url)
 {
     if (on_load_start)
         on_load_start(url);
 }
 
-void OutOfProcessWebView::notify_server_did_finish_loading(Badge<WebContentClient>, const URL& url)
+void OutOfProcessWebView::notify_server_did_finish_loading(Badge<WebContentClient>, const AK::URL& url)
 {
     if (on_load_finish)
         on_load_finish(url);
@@ -298,13 +311,13 @@ void OutOfProcessWebView::notify_server_did_request_context_menu(Badge<WebConten
         on_context_menu_request(screen_relative_rect().location().translated(to_widget_position(content_position)));
 }
 
-void OutOfProcessWebView::notify_server_did_request_link_context_menu(Badge<WebContentClient>, const Gfx::IntPoint& content_position, const URL& url, const String&, unsigned)
+void OutOfProcessWebView::notify_server_did_request_link_context_menu(Badge<WebContentClient>, const Gfx::IntPoint& content_position, const AK::URL& url, const String&, unsigned)
 {
     if (on_link_context_menu_request)
         on_link_context_menu_request(url, screen_relative_rect().location().translated(to_widget_position(content_position)));
 }
 
-void OutOfProcessWebView::notify_server_did_request_image_context_menu(Badge<WebContentClient>, const Gfx::IntPoint& content_position, const URL& url, const String&, unsigned, const Gfx::ShareableBitmap& bitmap)
+void OutOfProcessWebView::notify_server_did_request_image_context_menu(Badge<WebContentClient>, const Gfx::IntPoint& content_position, const AK::URL& url, const String&, unsigned, const Gfx::ShareableBitmap& bitmap)
 {
     if (on_image_context_menu_request)
         on_image_context_menu_request(url, screen_relative_rect().location().translated(to_widget_position(content_position)), bitmap);
@@ -329,16 +342,34 @@ String OutOfProcessWebView::notify_server_did_request_prompt(Badge<WebContentCli
     return {};
 }
 
-void OutOfProcessWebView::notify_server_did_get_source(const URL& url, const String& source)
+void OutOfProcessWebView::notify_server_did_get_source(const AK::URL& url, const String& source)
 {
     if (on_get_source)
         on_get_source(url, source);
 }
 
-void OutOfProcessWebView::notify_server_did_js_console_output(const String& method, const String& line)
+void OutOfProcessWebView::notify_server_did_get_dom_tree(const String& dom_tree)
 {
-    if (on_js_console_output)
-        on_js_console_output(method, line);
+    if (on_get_dom_tree)
+        on_get_dom_tree(dom_tree);
+}
+
+void OutOfProcessWebView::notify_server_did_get_dom_node_properties(i32 node_id, String const& specified_style, String const& computed_style, String const& custom_properties)
+{
+    if (on_get_dom_node_properties)
+        on_get_dom_node_properties(node_id, specified_style, computed_style, custom_properties);
+}
+
+void OutOfProcessWebView::notify_server_did_output_js_console_message(i32 message_index)
+{
+    if (on_js_console_new_message)
+        on_js_console_new_message(message_index);
+}
+
+void OutOfProcessWebView::notify_server_did_get_js_console_messages(i32 start_index, const Vector<String>& message_types, const Vector<String>& messages)
+{
+    if (on_get_js_console_messages)
+        on_get_js_console_messages(start_index, message_types, messages);
 }
 
 void OutOfProcessWebView::notify_server_did_change_favicon(const Gfx::Bitmap& favicon)
@@ -347,14 +378,14 @@ void OutOfProcessWebView::notify_server_did_change_favicon(const Gfx::Bitmap& fa
         on_favicon_change(favicon);
 }
 
-String OutOfProcessWebView::notify_server_did_request_cookie(Badge<WebContentClient>, const URL& url, Cookie::Source source)
+String OutOfProcessWebView::notify_server_did_request_cookie(Badge<WebContentClient>, const AK::URL& url, Cookie::Source source)
 {
     if (on_get_cookie)
         return on_get_cookie(url, source);
     return {};
 }
 
-void OutOfProcessWebView::notify_server_did_set_cookie(Badge<WebContentClient>, const URL& url, const Cookie::ParsedCookie& cookie, Cookie::Source source)
+void OutOfProcessWebView::notify_server_did_set_cookie(Badge<WebContentClient>, const AK::URL& url, const Cookie::ParsedCookie& cookie, Cookie::Source source)
 {
     if (on_set_cookie)
         on_set_cookie(url, cookie, source);
@@ -370,9 +401,15 @@ void OutOfProcessWebView::request_repaint()
 {
     // If this widget was instantiated but not yet added to a window,
     // it won't have a back bitmap yet, so we can just skip repaint requests.
-    if (!m_client_state.back_bitmap)
+    if (!m_client_state.back_bitmap.bitmap)
         return;
-    client().async_paint(m_client_state.back_bitmap->rect().translated(horizontal_scrollbar().value(), vertical_scrollbar().value()), m_client_state.back_bitmap_id);
+    // Don't request a repaint until pending paint requests have finished.
+    if (m_client_state.back_bitmap.pending_paints) {
+        m_client_state.got_repaint_requests_while_painting = true;
+        return;
+    }
+    m_client_state.back_bitmap.pending_paints++;
+    client().async_paint(m_client_state.back_bitmap.bitmap->rect().translated(horizontal_scrollbar().value(), vertical_scrollbar().value()), m_client_state.back_bitmap.id);
 }
 
 WebContentClient& OutOfProcessWebView::client()
@@ -391,14 +428,81 @@ void OutOfProcessWebView::get_source()
     client().async_get_source();
 }
 
-void OutOfProcessWebView::js_console_initialize()
+void OutOfProcessWebView::inspect_dom_tree()
 {
-    client().async_js_console_initialize();
+    client().async_inspect_dom_tree();
+}
+
+Optional<OutOfProcessWebView::DOMNodeProperties> OutOfProcessWebView::inspect_dom_node(i32 node_id)
+{
+    auto response = client().inspect_dom_node(node_id);
+    if (!response.has_style())
+        return {};
+    return DOMNodeProperties {
+        .specified_values_json = response.specified_style(),
+        .computed_values_json = response.computed_style(),
+        .custom_properties_json = response.custom_properties()
+    };
+}
+
+void OutOfProcessWebView::clear_inspected_dom_node()
+{
+    client().inspect_dom_node(0);
+}
+
+i32 OutOfProcessWebView::get_hovered_node_id()
+{
+    return client().get_hovered_node_id();
 }
 
 void OutOfProcessWebView::js_console_input(const String& js_source)
 {
     client().async_js_console_input(js_source);
+}
+
+void OutOfProcessWebView::js_console_request_messages(i32 start_index)
+{
+    client().async_js_console_request_messages(start_index);
+}
+
+void OutOfProcessWebView::run_javascript(StringView js_source)
+{
+    client().async_run_javascript(js_source);
+}
+
+String OutOfProcessWebView::selected_text()
+{
+    return client().get_selected_text();
+}
+
+void OutOfProcessWebView::select_all()
+{
+    client().async_select_all();
+}
+
+String OutOfProcessWebView::dump_layout_tree()
+{
+    return client().dump_layout_tree();
+}
+
+void OutOfProcessWebView::set_content_filters(Vector<String> filters)
+{
+    client().async_set_content_filters(filters);
+}
+
+void OutOfProcessWebView::set_preferred_color_scheme(Web::CSS::PreferredColorScheme color_scheme)
+{
+    client().async_set_preferred_color_scheme(color_scheme);
+}
+
+void OutOfProcessWebView::focusin_event(GUI::FocusEvent&)
+{
+    client().async_set_has_focus(true);
+}
+
+void OutOfProcessWebView::focusout_event(GUI::FocusEvent&)
+{
+    client().async_set_has_focus(false);
 }
 
 }

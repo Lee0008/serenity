@@ -1,34 +1,38 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2022, Luke Wilde <lukew@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/ScopeGuard.h>
-#include <AK/StringBuilder.h>
 #include <LibJS/AST.h>
 #include <LibJS/Interpreter.h>
+#include <LibJS/Runtime/AbstractOperations.h>
+#include <LibJS/Runtime/ECMAScriptFunctionObject.h>
+#include <LibJS/Runtime/FunctionEnvironment.h>
+#include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibJS/Runtime/GlobalObject.h>
-#include <LibJS/Runtime/LexicalEnvironment.h>
-#include <LibJS/Runtime/Object.h>
 #include <LibJS/Runtime/Reference.h>
-#include <LibJS/Runtime/ScriptFunction.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
 
-NonnullOwnPtr<Interpreter> Interpreter::create_with_existing_global_object(GlobalObject& global_object)
+NonnullOwnPtr<Interpreter> Interpreter::create_with_existing_realm(Realm& realm)
 {
+    auto& global_object = realm.global_object();
     DeferGC defer_gc(global_object.heap());
     auto interpreter = adopt_own(*new Interpreter(global_object.vm()));
-    interpreter->m_global_object = make_handle(static_cast<Object*>(&global_object));
+    interpreter->m_global_object = make_handle(&global_object);
+    interpreter->m_realm = make_handle(&realm);
     return interpreter;
 }
 
 Interpreter::Interpreter(VM& vm)
     : m_vm(vm)
+    , m_global_execution_context(vm.heap())
 {
 }
 
@@ -36,35 +40,111 @@ Interpreter::~Interpreter()
 {
 }
 
-void Interpreter::run(GlobalObject& global_object, const Program& program)
+// 16.1.6 ScriptEvaluation ( scriptRecord ), https://tc39.es/ecma262/#sec-runtime-semantics-scriptevaluation
+ThrowCompletionOr<Value> Interpreter::run(Script& script_record)
 {
     auto& vm = this->vm();
-    VERIFY(!vm.exception());
 
     VM::InterpreterExecutionScope scope(*this);
 
-    vm.set_last_value(Badge<Interpreter> {}, {});
+    // 1. Let globalEnv be scriptRecord.[[Realm]].[[GlobalEnv]].
+    auto& global_environment = script_record.realm().global_environment();
 
-    CallFrame global_call_frame;
-    global_call_frame.current_node = &program;
-    global_call_frame.this_value = &global_object;
-    static FlyString global_execution_context_name = "(global execution context)";
-    global_call_frame.function_name = global_execution_context_name;
-    global_call_frame.scope = &global_object;
-    VERIFY(!vm.exception());
-    global_call_frame.is_strict_mode = program.is_strict_mode();
-    vm.push_call_frame(global_call_frame, global_object);
-    VERIFY(!vm.exception());
-    auto value = program.execute(*this, global_object);
-    vm.set_last_value(Badge<Interpreter> {}, value.value_or(js_undefined()));
+    // NOTE: This isn't in the spec but we require it.
+    auto& global_object = script_record.realm().global_object();
 
-    vm.pop_call_frame();
+    // 2. Let scriptContext be a new ECMAScript code execution context.
+    ExecutionContext script_context(vm.heap());
+
+    // 3. Set the Function of scriptContext to null. (This was done in the construction of script_context)
+
+    // 4. Set the Realm of scriptContext to scriptRecord.[[Realm]].
+    script_context.realm = &script_record.realm();
+
+    // 5. Set the ScriptOrModule of scriptContext to scriptRecord.
+    script_context.script_or_module = script_record.make_weak_ptr();
+
+    // 6. Set the VariableEnvironment of scriptContext to globalEnv.
+    script_context.variable_environment = &global_environment;
+
+    // 7. Set the LexicalEnvironment of scriptContext to globalEnv.
+    script_context.lexical_environment = &global_environment;
+
+    // 8. Set the PrivateEnvironment of scriptContext to null.
+
+    // NOTE: This isn't in the spec, but we require it.
+    script_context.is_strict_mode = script_record.parse_node().is_strict_mode();
+
+    // FIXME: 9. Suspend the currently running execution context.
+
+    // 10. Push scriptContext onto the execution context stack; scriptContext is now the running execution context.
+    vm.push_execution_context(script_context, global_object);
+
+    // 11. Let scriptBody be scriptRecord.[[ECMAScriptCode]].
+    auto& script_body = script_record.parse_node();
+
+    // 12. Let result be GlobalDeclarationInstantiation(scriptBody, globalEnv).
+    auto instantiation_result = script_body.global_declaration_instantiation(*this, global_object, global_environment);
+    Completion result = instantiation_result.is_throw_completion() ? instantiation_result.throw_completion() : normal_completion({});
+
+    // 13. If result.[[Type]] is normal, then
+    if (result.type() == Completion::Type::Normal) {
+        // a. Set result to the result of evaluating scriptBody.
+        result = script_body.execute(*this, global_object);
+    }
+
+    // 14. If result.[[Type]] is normal and result.[[Value]] is empty, then
+    if (result.type() == Completion::Type::Normal && !result.value().has_value()) {
+        // a. Set result to NormalCompletion(undefined).
+        result = normal_completion(js_undefined());
+    }
+
+    // FIXME: 15. Suspend scriptContext and remove it from the execution context stack.
+    vm.pop_execution_context();
+
+    // 16. Assert: The execution context stack is not empty.
+    VERIFY(!vm.execution_context_stack().is_empty());
+
+    // FIXME: 17. Resume the context that is now on the top of the execution context stack as the running execution context.
 
     // At this point we may have already run any queued promise jobs via on_call_stack_emptied,
     // in which case this is a no-op.
+    // FIXME: These three should be moved out of Interpreter::run and give the host an option to run these, as it's up to the host when these get run.
+    //        https://tc39.es/ecma262/#sec-jobs for jobs and https://tc39.es/ecma262/#_ref_3508 for ClearKeptObjects
+    //        finish_execution_generation is particularly an issue for LibWeb, as the HTML spec wants to run it specifically after performing a microtask checkpoint.
+    //        The promise and registry cleanup queues don't cause LibWeb an issue, as LibWeb overrides the hooks that push onto these queues.
     vm.run_queued_promise_jobs();
 
+    vm.run_queued_finalization_registry_cleanup_jobs();
+
     vm.finish_execution_generation();
+
+    // 18. Return Completion(result).
+    if (result.is_abrupt()) {
+        VERIFY(result.type() == Completion::Type::Throw);
+        return result.release_error();
+    }
+
+    VERIFY(result.value().has_value());
+    return *result.value();
+}
+
+ThrowCompletionOr<Value> Interpreter::run(SourceTextModule& module)
+{
+    // FIXME: This is not a entry point as defined in the spec, but is convenient.
+    //        To avoid work we use link_and_eval_module however that can already be
+    //        dangerous if the vm loaded other modules.
+    auto& vm = this->vm();
+
+    VM::InterpreterExecutionScope scope(*this);
+
+    TRY(vm.link_and_eval_module({}, module));
+
+    vm.run_queued_promise_jobs();
+
+    vm.run_queued_finalization_registry_cleanup_jobs();
+
+    return js_undefined();
 }
 
 GlobalObject& Interpreter::global_object()
@@ -77,124 +157,14 @@ const GlobalObject& Interpreter::global_object() const
     return static_cast<const GlobalObject&>(*m_global_object.cell());
 }
 
-void Interpreter::enter_scope(const ScopeNode& scope_node, ScopeType scope_type, GlobalObject& global_object)
+Realm& Interpreter::realm()
 {
-    ScopeGuard guard([&] {
-        for (auto& declaration : scope_node.functions()) {
-            auto* function = ScriptFunction::create(global_object, declaration.name(), declaration.body(), declaration.parameters(), declaration.function_length(), current_scope(), declaration.kind(), declaration.is_strict_mode());
-            vm().set_variable(declaration.name(), function, global_object);
-        }
-    });
-
-    if (scope_type == ScopeType::Function) {
-        push_scope({ scope_type, scope_node, false });
-        for (auto& declaration : scope_node.functions())
-            current_scope()->put_to_scope(declaration.name(), { js_undefined(), DeclarationKind::Var });
-        return;
-    }
-
-    HashMap<FlyString, Variable> scope_variables_with_declaration_kind;
-    scope_variables_with_declaration_kind.ensure_capacity(16);
-
-    bool is_program_node = is<Program>(scope_node);
-
-    for (auto& declaration : scope_node.variables()) {
-        for (auto& declarator : declaration.declarations()) {
-            if (is_program_node && declaration.declaration_kind() == DeclarationKind::Var) {
-                declarator.target().visit(
-                    [&](const NonnullRefPtr<Identifier>& id) {
-                        global_object.put(id->string(), js_undefined());
-                    },
-                    [&](const NonnullRefPtr<BindingPattern>& binding) {
-                        binding->for_each_assigned_name([&](const auto& name) {
-                            global_object.put(name, js_undefined());
-                        });
-                    });
-                if (exception())
-                    return;
-            } else {
-                declarator.target().visit(
-                    [&](const NonnullRefPtr<Identifier>& id) {
-                        scope_variables_with_declaration_kind.set(id->string(), { js_undefined(), declaration.declaration_kind() });
-                    },
-                    [&](const NonnullRefPtr<BindingPattern>& binding) {
-                        binding->for_each_assigned_name([&](const auto& name) {
-                            scope_variables_with_declaration_kind.set(name, { js_undefined(), declaration.declaration_kind() });
-                        });
-                    });
-            }
-        }
-    }
-
-    bool pushed_lexical_environment = false;
-
-    if (!scope_variables_with_declaration_kind.is_empty()) {
-        auto* block_lexical_environment = heap().allocate<LexicalEnvironment>(global_object, move(scope_variables_with_declaration_kind), current_scope());
-        vm().call_frame().scope = block_lexical_environment;
-        pushed_lexical_environment = true;
-    }
-
-    push_scope({ scope_type, scope_node, pushed_lexical_environment });
+    return static_cast<Realm&>(*m_realm.cell());
 }
 
-void Interpreter::exit_scope(const ScopeNode& scope_node)
+const Realm& Interpreter::realm() const
 {
-    while (!m_scope_stack.is_empty()) {
-        auto popped_scope = m_scope_stack.take_last();
-        if (popped_scope.pushed_environment)
-            vm().call_frame().scope = vm().call_frame().scope->parent();
-        if (popped_scope.scope_node.ptr() == &scope_node)
-            break;
-    }
-
-    // If we unwind all the way, just reset m_unwind_until so that future "return" doesn't break.
-    if (m_scope_stack.is_empty())
-        vm().stop_unwind();
-}
-
-void Interpreter::push_scope(ScopeFrame frame)
-{
-    m_scope_stack.append(move(frame));
-}
-
-Value Interpreter::execute_statement(GlobalObject& global_object, const Statement& statement, ScopeType scope_type)
-{
-    if (!is<ScopeNode>(statement))
-        return statement.execute(*this, global_object);
-
-    auto& block = static_cast<const ScopeNode&>(statement);
-    enter_scope(block, scope_type, global_object);
-
-    Value last_value;
-    for (auto& node : block.children()) {
-        auto value = node.execute(*this, global_object);
-        if (!value.is_empty())
-            last_value = value;
-        if (vm().should_unwind()) {
-            if (!block.label().is_null() && vm().should_unwind_until(ScopeType::Breakable, block.label()))
-                vm().stop_unwind();
-            break;
-        }
-    }
-
-    if (scope_type == ScopeType::Function) {
-        bool did_return = vm().unwind_until() == ScopeType::Function;
-        if (!did_return)
-            last_value = js_undefined();
-    }
-
-    if (vm().unwind_until() == scope_type)
-        vm().stop_unwind();
-
-    exit_scope(block);
-
-    return last_value;
-}
-
-LexicalEnvironment* Interpreter::current_environment()
-{
-    VERIFY(is<LexicalEnvironment>(vm().call_frame().scope));
-    return static_cast<LexicalEnvironment*>(vm().call_frame().scope);
+    return static_cast<const Realm&>(*m_realm.cell());
 }
 
 }

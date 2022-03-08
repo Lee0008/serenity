@@ -26,7 +26,7 @@ struct Option {
 static const Vector<Option> options = {
     { "Power off computer", { "/bin/shutdown", "--now", nullptr }, true, true },
     { "Reboot", { "/bin/reboot", nullptr }, true, false },
-    { "Log out", {}, false, false },
+    { "Log out", { "/bin/logout", nullptr }, true, false },
 };
 
 Vector<char const*> ShutdownDialog::show()
@@ -56,18 +56,18 @@ ShutdownDialog::ShutdownDialog()
     auto& left_container = content_container.add<GUI::Widget>();
     left_container.set_fixed_width(60);
     left_container.set_layout<GUI::VerticalBoxLayout>();
-    left_container.layout()->set_margins({ 0, 12, 0, 0 });
+    left_container.layout()->set_margins({ 12, 0, 0 });
 
     auto& icon_wrapper = left_container.add<GUI::Widget>();
     icon_wrapper.set_fixed_size(32, 48);
     icon_wrapper.set_layout<GUI::VerticalBoxLayout>();
 
     auto& icon_image = icon_wrapper.add<GUI::ImageWidget>();
-    icon_image.set_bitmap(Gfx::Bitmap::load_from_file("/res/icons/32x32/shutdown.png"));
+    icon_image.set_bitmap(Gfx::Bitmap::try_load_from_file("/res/icons/32x32/shutdown.png").release_value_but_fixme_should_propagate_errors());
 
     auto& right_container = content_container.add<GUI::Widget>();
     right_container.set_layout<GUI::VerticalBoxLayout>();
-    right_container.layout()->set_margins({ 0, 12, 12, 8 });
+    right_container.layout()->set_margins({ 12, 12, 8, 0 });
 
     auto& label = right_container.add<GUI::Label>("What would you like to do?");
     label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
@@ -112,7 +112,7 @@ ShutdownDialog::ShutdownDialog()
     center_on_screen();
     set_resizable(false);
     set_title("Exit SerenityOS");
-    set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/power.png"));
+    set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/power.png").release_value_but_fixme_should_propagate_errors());
 
     // Request WindowServer to re-update us on the current theme as we might've not been alive for the last notification.
     refresh_system_theme();

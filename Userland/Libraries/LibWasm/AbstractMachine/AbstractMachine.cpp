@@ -8,6 +8,7 @@
 #include <LibWasm/AbstractMachine/BytecodeInterpreter.h>
 #include <LibWasm/AbstractMachine/Configuration.h>
 #include <LibWasm/AbstractMachine/Interpreter.h>
+#include <LibWasm/AbstractMachine/Validator.h>
 #include <LibWasm/Types.h>
 
 namespace Wasm {
@@ -42,7 +43,11 @@ Optional<TableAddress> Store::allocate(TableType const& type)
 Optional<MemoryAddress> Store::allocate(MemoryType const& type)
 {
     MemoryAddress address { m_memories.size() };
-    m_memories.empend(MemoryInstance { type });
+    auto instance = MemoryInstance::create(type);
+    if (instance.is_error())
+        return {};
+
+    m_memories.append(instance.release_value());
     return address;
 }
 
@@ -50,6 +55,13 @@ Optional<GlobalAddress> Store::allocate(GlobalType const& type, Value value)
 {
     GlobalAddress address { m_globals.size() };
     m_globals.append(GlobalInstance { move(value), type.is_mutable() });
+    return address;
+}
+
+Optional<DataAddress> Store::allocate_data(Vector<u8> initializer)
+{
+    DataAddress address { m_datas.size() };
+    m_datas.append(DataInstance { move(initializer) });
     return address;
 }
 
@@ -100,8 +112,37 @@ ElementInstance* Store::get(ElementAddress address)
     return &m_elements[value];
 }
 
+DataInstance* Store::get(DataAddress address)
+{
+    auto value = address.value();
+    if (m_datas.size() <= value)
+        return nullptr;
+    return &m_datas[value];
+}
+
+ErrorOr<void, ValidationError> AbstractMachine::validate(Module& module)
+{
+    if (module.validation_status() != Module::ValidationStatus::Unchecked) {
+        if (module.validation_status() == Module::ValidationStatus::Valid)
+            return {};
+
+        return ValidationError { module.validation_error() };
+    }
+
+    auto result = Validator {}.validate(module);
+    if (result.is_error()) {
+        module.set_validation_error(result.error().error_string);
+        return result.release_error();
+    }
+
+    return {};
+}
+
 InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<ExternValue> externs)
 {
+    if (auto result = validate(const_cast<Module&>(module)); result.is_error())
+        return InstantiationError { String::formatted("Validation failed: {}", result.error()) };
+
     auto main_module_instance_pointer = make<ModuleInstance>();
     auto& main_module_instance = *main_module_instance_pointer;
     Optional<InstantiationResult> instantiation_result;
@@ -109,8 +150,6 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
     module.for_each_section_of_type<TypeSection>([&](TypeSection const& section) {
         main_module_instance.types() = section.types();
     });
-
-    // FIXME: Validate stuff
 
     Vector<Value> global_values;
     Vector<Vector<Reference>> elements;
@@ -128,6 +167,8 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
     module.for_each_section_of_type<GlobalSection>([&](auto& global_section) {
         for (auto& entry : global_section.entries()) {
             Configuration config { m_store };
+            if (m_should_limit_instruction_count)
+                config.enable_instruction_count_limit();
             config.set_frame(Frame {
                 auxiliary_instance,
                 Vector<Value> {},
@@ -136,7 +177,7 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
             });
             auto result = config.execute(interpreter);
             if (result.is_trap())
-                instantiation_result = InstantiationError { "Global value construction trapped" };
+                instantiation_result = InstantiationError { String::formatted("Global value construction trapped: {}", result.trap().reason) };
             else
                 global_values.append(result.values().first());
         }
@@ -153,6 +194,8 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
             Vector<Reference> references;
             for (auto& entry : segment.init) {
                 Configuration config { m_store };
+                if (m_should_limit_instruction_count)
+                    config.enable_instruction_count_limit();
                 config.set_frame(Frame {
                     main_module_instance,
                     Vector<Value> {},
@@ -161,7 +204,7 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
                 });
                 auto result = config.execute(interpreter);
                 if (result.is_trap()) {
-                    instantiation_result = InstantiationError { "Element construction trapped" };
+                    instantiation_result = InstantiationError { String::formatted("Element construction trapped: {}", result.trap().reason) };
                     return IterationDecision::Continue;
                 }
 
@@ -204,6 +247,8 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
                 return IterationDecision::Break;
             }
             Configuration config { m_store };
+            if (m_should_limit_instruction_count)
+                config.enable_instruction_count_limit();
             config.set_frame(Frame {
                 main_module_instance,
                 Vector<Value> {},
@@ -212,7 +257,7 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
             });
             auto result = config.execute(interpreter);
             if (result.is_trap()) {
-                instantiation_result = InstantiationError { "Element section initialisation trapped" };
+                instantiation_result = InstantiationError { String::formatted("Element section initialisation trapped: {}", result.trap().reason) };
                 return IterationDecision::Break;
             }
             auto d = result.values().first().to<i32>();
@@ -262,6 +307,8 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
             segment.value().visit(
                 [&](DataSection::Data::Active const& data) {
                     Configuration config { m_store };
+                    if (m_should_limit_instruction_count)
+                        config.enable_instruction_count_limit();
                     config.set_frame(Frame {
                         main_module_instance,
                         Vector<Value> {},
@@ -270,32 +317,54 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
                     });
                     auto result = config.execute(interpreter);
                     if (result.is_trap()) {
-                        instantiation_result = InstantiationError { "Data section initialisation trapped" };
+                        instantiation_result = InstantiationError { String::formatted("Data section initialisation trapped: {}", result.trap().reason) };
                         return;
                     }
                     size_t offset = 0;
                     result.values().first().value().visit(
                         [&](auto const& value) { offset = value; },
-                        [&](Reference const&) { instantiation_result = InstantiationError { "Data segment offset returned a reference" }; });
+                        [&](Reference const&) { instantiation_result = InstantiationError { "Data segment offset returned a reference"sv }; });
                     if (instantiation_result.has_value() && instantiation_result->is_error())
                         return;
                     if (main_module_instance.memories().size() <= data.index.value()) {
-                        instantiation_result = InstantiationError { String::formatted("Data segment referenced out-of-bounds memory ({}) of max {} entries", data.index.value(), main_module_instance.memories().size()) };
+                        instantiation_result = InstantiationError {
+                            String::formatted("Data segment referenced out-of-bounds memory ({}) of max {} entries",
+                                data.index.value(), main_module_instance.memories().size())
+                        };
                         return;
                     }
+                    auto maybe_data_address = m_store.allocate_data(data.init);
+                    if (!maybe_data_address.has_value()) {
+                        instantiation_result = InstantiationError { "Failed to allocate a data instance for an active data segment"sv };
+                        return;
+                    }
+                    main_module_instance.datas().append(*maybe_data_address);
+
+                    if (data.init.is_empty())
+                        return;
                     auto address = main_module_instance.memories()[data.index.value()];
                     if (auto instance = m_store.get(address)) {
-                        if (instance->type().limits().max().value_or(data.init.size() + offset + 1) <= data.init.size() + offset) {
-                            instantiation_result = InstantiationError { String::formatted("Data segment attempted to write to out-of-bounds memory ({}) of max {} bytes", data.init.size() + offset, instance->type().limits().max().value()) };
-                            return;
+                        if (auto max = instance->type().limits().max(); max.has_value()) {
+                            if (*max < data.init.size() + offset) {
+                                instantiation_result = InstantiationError {
+                                    String::formatted("Data segment attempted to write to out-of-bounds memory ({}) of max {} bytes",
+                                        data.init.size() + offset, instance->type().limits().max().value())
+                                };
+                                return;
+                            }
                         }
                         if (instance->size() < data.init.size() + offset)
                             instance->grow(data.init.size() + offset - instance->size());
                         instance->data().overwrite(offset, data.init.data(), data.init.size());
                     }
                 },
-                [&](DataSection::Data::Passive const&) {
-                    // FIXME: What do we do here?
+                [&](DataSection::Data::Passive const& passive) {
+                    auto maybe_data_address = m_store.allocate_data(passive.init);
+                    if (!maybe_data_address.has_value()) {
+                        instantiation_result = InstantiationError { "Failed to allocate a data instance for a passive data segment"sv };
+                        return;
+                    }
+                    main_module_instance.datas().append(*maybe_data_address);
                 });
         }
     });
@@ -363,7 +432,7 @@ Optional<InstantiationError> AbstractMachine::allocate_all_initial_phase(Module 
     });
     module.for_each_section_of_type<ExportSection>([&](ExportSection const& section) {
         for (auto& entry : section.entries()) {
-            Variant<FunctionAddress, TableAddress, MemoryAddress, GlobalAddress, Empty> address { Empty {} };
+            Variant<FunctionAddress, TableAddress, MemoryAddress, GlobalAddress, Empty> address {};
             entry.description().visit(
                 [&](FunctionIndex const& index) {
                     if (module_instance.functions().size() > index.value())
@@ -429,6 +498,8 @@ Result AbstractMachine::invoke(FunctionAddress address, Vector<Value> arguments)
 Result AbstractMachine::invoke(Interpreter& interpreter, FunctionAddress address, Vector<Value> arguments)
 {
     Configuration configuration { m_store };
+    if (m_should_limit_instruction_count)
+        configuration.enable_instruction_count_limit();
     return configuration.call(interpreter, address, move(arguments));
 }
 

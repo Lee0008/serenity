@@ -4,34 +4,67 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <bits/sighow.h>
+
+//
+// /!\ Read setjmp.h before modifying this file!
+//
+
 .global setjmp
 setjmp:
-    mov %rbx, (%rdi)
-    mov %rbp, 8(%rdi)
-    mov %r12, 16(%rdi)
-    mov %r13, 24(%rdi)
-    mov %r14, 32(%rdi)
-    mov %r15, 40(%rdi)
-    lea 8(%rsp), %rcx
-    mov %rcx, 48(%rdi)
-    mov (%rsp), %rcx
-    mov %rcx, 56(%rdi)
+    mov $0, %esi            // Set val argument to 0
+
+.global sigsetjmp
+sigsetjmp:
+    mov %esi, 64(%rdi)      // Store val into did_save_signal_mask
+    movl $0, 68(%rdi)       // Clear saved_signal_mask
+    test %esi, %esi
+    jz .Lsaveregs
+
+    push %rbp               // Prepare ABI-compliant call to sigprocmask
+    mov %rsp, %rbp
+    push %rdi
+    lea 68(%rdi), %rdx      // Set argument oldset
+    mov $0, %rsi            // Set argument set
+    mov $0, %rdi            // Set argument how
+    call sigprocmask@plt
+    pop %rdi
+    pop %rbp
+
+.Lsaveregs:
+    mov %rbx, (0 * 8)(%rdi) // Save registers
+    mov %r12, (1 * 8)(%rdi)
+    mov %r13, (2 * 8)(%rdi)
+    mov %r14, (3 * 8)(%rdi)
+    mov %r15, (4 * 8)(%rdi)
+    mov %rbp, (5 * 8)(%rdi)
+    mov %rsp, (6 * 8)(%rdi)
+    mov (%rsp), %rax        // Grab return address
+    mov %rax, (7 * 8)(%rdi)    
     xor %eax, %eax
     ret
 
 .global longjmp
 longjmp:
-    mov (%rdi), %rbx
-    mov 8(%rdi), %rbp
-    mov 16(%rdi), %r12
-    mov 24(%rdi), %r13
-    mov 32(%rdi), %r14
-    mov 40(%rdi), %r15
-    mov 48(%rdi), %rsp
+    mov %esi, %eax
+    test %eax, %eax
+    jnz  .Lnonzero
+    mov $1, %eax
 
-    test %rsi, %rsi
-    jnz .nonzero
-    mov 1, %rax
-.nonzero:
-    jmp *56(%rdi)
-
+.Lnonzero:
+    mov (0 * 8)(%rdi), %rbx // Restore registers
+    mov (1 * 8)(%rdi), %r12
+    mov (2 * 8)(%rdi), %r13
+    mov (3 * 8)(%rdi), %r14
+    mov (4 * 8)(%rdi), %r15
+    mov (5 * 8)(%rdi), %rbp
+    //
+    // Until this point, the stack is still from the caller.
+    //
+    mov (6 * 8)(%rdi), %rsp
+    mov (7 * 8)(%rdi), %rcx
+    mov %rcx, (%rsp)        // Patch return address
+    //
+    // From this point on, the former stack has been restored.
+    //
+    ret

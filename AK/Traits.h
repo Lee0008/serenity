@@ -6,8 +6,11 @@
 
 #pragma once
 
+#include <AK/Concepts.h>
 #include <AK/Forward.h>
 #include <AK/HashFunctions.h>
+#include <AK/StringHash.h>
+#include <string.h>
 
 namespace AK {
 
@@ -17,68 +20,43 @@ struct GenericTraits {
     using ConstPeekType = T;
     static constexpr bool is_trivial() { return false; }
     static constexpr bool equals(const T& a, const T& b) { return a == b; }
+    template<Concepts::HashCompatible<T> U>
+    static bool equals(U const& a, T const& b) { return a == b; }
 };
 
 template<typename T>
 struct Traits : public GenericTraits<T> {
 };
 
-template<>
-struct Traits<int> : public GenericTraits<int> {
+template<typename T>
+requires(IsIntegral<T>) struct Traits<T> : public GenericTraits<T> {
     static constexpr bool is_trivial() { return true; }
-    static unsigned hash(int i) { return int_hash(i); }
-};
-
-template<>
-struct Traits<char> : public GenericTraits<char> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(char c) { return int_hash(c); }
-};
-
-template<>
-struct Traits<i16> : public GenericTraits<i16> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(i16 i) { return int_hash(i); }
-};
-
-template<>
-struct Traits<i64> : public GenericTraits<i64> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(i64 i) { return u64_hash(i); }
-};
-
-template<>
-struct Traits<unsigned> : public GenericTraits<unsigned> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(unsigned u) { return int_hash(u); }
-};
-
-template<>
-struct Traits<u8> : public GenericTraits<u8> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(u8 u) { return int_hash(u); }
-};
-
-template<>
-struct Traits<u16> : public GenericTraits<u16> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(u16 u) { return int_hash(u); }
-};
-
-template<>
-struct Traits<u64> : public GenericTraits<u64> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(u64 u) { return u64_hash(u); }
+    static constexpr unsigned hash(T value)
+    {
+        if constexpr (sizeof(T) < 8)
+            return int_hash(value);
+        else
+            return u64_hash(value);
+    }
 };
 
 template<typename T>
-struct Traits<T*> : public GenericTraits<T*> {
-    static unsigned hash(const T* p)
-    {
-        return int_hash((unsigned)(__PTRDIFF_TYPE__)p);
-    }
+requires(IsPointer<T> && !Detail::IsPointerOfType<char, T>) struct Traits<T> : public GenericTraits<T> {
+    static unsigned hash(T p) { return ptr_hash((FlatPtr)p); }
     static constexpr bool is_trivial() { return true; }
-    static bool equals(const T* a, const T* b) { return a == b; }
+};
+
+template<Enum T>
+struct Traits<T> : public GenericTraits<T> {
+    static unsigned hash(T value) { return Traits<UnderlyingType<T>>::hash(to_underlying(value)); }
+    static constexpr bool is_trivial() { return Traits<UnderlyingType<T>>::is_trivial(); }
+};
+
+template<typename T>
+requires(Detail::IsPointerOfType<char, T>) struct Traits<T> : public GenericTraits<T> {
+    static unsigned hash(T const value) { return string_hash(value, strlen(value)); }
+    static constexpr bool equals(T const a, T const b) { return strcmp(a, b); }
+    static constexpr bool is_trivial() { return true; }
 };
 
 }

@@ -28,10 +28,12 @@ public:
     // NOTE: This is intended for the JS bindings.
     String mode() const { return m_closed ? "closed" : "open"; }
 
+    String inner_html() const;
+    ExceptionOr<void> set_inner_html(String const&);
+
 private:
     // ^Node
     virtual FlyString node_name() const override { return "#shadow-root"; }
-    virtual RefPtr<Layout::Node> create_layout_node() override;
 
     // NOTE: The specification doesn't seem to specify a default value for closed. Assuming false for now.
     bool m_closed { false };

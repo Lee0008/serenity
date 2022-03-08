@@ -141,14 +141,9 @@ JS_DEFINE_NATIVE_FUNCTION(TestRunnerGlobalObject::fuzzilli)
     if (!vm.argument_count())
         return JS::js_undefined();
 
-    auto operation = vm.argument(0).to_string(global_object);
-    if (vm.exception())
-        return {};
-
+    auto operation = TRY(vm.argument(0).to_string(global_object));
     if (operation == "FUZZILLI_CRASH") {
-        auto type = vm.argument(1).to_i32(global_object);
-        if (vm.exception())
-            return {};
+        auto type = TRY(vm.argument(1).to_i32(global_object));
         switch (type) {
         case 0:
             *((int*)0x41414141) = 0x1337;
@@ -164,9 +159,7 @@ JS_DEFINE_NATIVE_FUNCTION(TestRunnerGlobalObject::fuzzilli)
             fzliout = stdout;
         }
 
-        auto string = vm.argument(1).to_string(global_object);
-        if (vm.exception())
-            return {};
+        auto string = TRY(vm.argument(1).to_string(global_object));
         fprintf(fzliout, "%s\n", string.characters());
         fflush(fzliout);
     }
@@ -177,8 +170,8 @@ JS_DEFINE_NATIVE_FUNCTION(TestRunnerGlobalObject::fuzzilli)
 void TestRunnerGlobalObject::initialize_global_object()
 {
     Base::initialize_global_object();
-    define_property("global", this, JS::Attribute::Enumerable);
-    define_native_function("fuzzilli", fuzzilli, 2);
+    define_direct_property("global", this, JS::Attribute::Enumerable);
+    define_native_function("fuzzilli", fuzzilli, 2, JS::default_attributes);
 }
 
 int main(int, char**)
@@ -206,8 +199,7 @@ int main(int, char**)
         VERIFY(read(REPRL_CRFD, &script_size, 8) == 8);
         VERIFY(script_size < REPRL_MAX_DATA_SIZE);
         ByteBuffer data_buffer;
-        if (data_buffer.size() < script_size)
-            data_buffer.resize(script_size - data_buffer.size());
+        data_buffer.resize(script_size);
         VERIFY(data_buffer.size() >= script_size);
         memcpy(data_buffer.data(), reprl_input, script_size);
 
@@ -215,16 +207,13 @@ int main(int, char**)
 
         auto js = StringView(static_cast<const unsigned char*>(data_buffer.data()), script_size);
 
-        auto lexer = JS::Lexer(js);
-        auto parser = JS::Parser(lexer);
-        auto program = parser.parse_program();
-        if (parser.has_errors()) {
+        auto parse_result = JS::Script::parse(js, interpreter->realm());
+        if (parse_result.is_error()) {
             result = 1;
         } else {
-            interpreter->run(interpreter->global_object(), *program);
-            if (interpreter->exception()) {
+            auto completion = interpreter->run(parse_result.value());
+            if (completion.is_error()) {
                 result = 1;
-                vm->clear_exception();
             }
         }
 

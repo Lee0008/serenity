@@ -101,6 +101,7 @@ public:
 
     void add_key_code(KeyCode key, bool ctrl, bool shift, bool alt);
     Optional<TextRange> get_range(class VimEditingEngine& engine, bool normalize_for_position = false);
+    Optional<TextRange> get_repeat_range(class VimEditingEngine& engine, Unit, bool normalize_for_position = false);
     Optional<TextPosition> get_position(VimEditingEngine& engine, bool in_visual_mode = false);
     void reset();
 
@@ -165,8 +166,9 @@ private:
     YankType m_yank_type {};
     String m_yank_buffer {};
     void yank(YankType);
-    void yank(TextRange);
-    void put();
+    void yank(TextRange, YankType yank_type);
+    void put_before();
+    void put_after();
 
     TextPosition m_selection_start_position = {};
     void update_selection_on_cursor_move();
@@ -185,6 +187,8 @@ private:
     bool on_key_in_insert_mode(const KeyEvent& event);
     bool on_key_in_normal_mode(const KeyEvent& event);
     bool on_key_in_visual_mode(const KeyEvent& event);
+
+    virtual EngineType engine_type() const override { return EngineType::Vim; }
 };
 
 }

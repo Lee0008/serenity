@@ -5,23 +5,28 @@
  */
 
 #include <AK/PrintfImplementation.h>
+#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/ConsoleDevice.h>
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Devices/ConsoleDevice.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/PCISerialDevice.h>
-#include <Kernel/Graphics/Console/Console.h>
+#include <Kernel/Graphics/Console/BootFramebufferConsole.h>
 #include <Kernel/Graphics/GraphicsManagement.h>
-#include <Kernel/IO.h>
-#include <Kernel/Process.h>
-#include <Kernel/SpinLock.h>
+#include <Kernel/Locking/Spinlock.h>
 #include <Kernel/TTY/ConsoleManagement.h>
 #include <Kernel/kstdio.h>
 
 #include <LibC/stdarg.h>
 
+namespace Kernel {
+extern Atomic<Graphics::Console*> g_boot_console;
+}
+
 static bool serial_debug;
 // A recursive spinlock allows us to keep writing in the case where a
 // page fault happens in the middle of a dbgln(), etc
-static RecursiveSpinLock s_log_lock;
+static RecursiveSpinlock s_log_lock;
 
 void set_serial_debug(bool on_or_off)
 {
@@ -61,10 +66,7 @@ static void serial_putch(char ch)
 
     IO::out8(0x3F8, ch);
 
-    if (ch == '\r')
-        was_cr = true;
-    else
-        was_cr = false;
+    was_cr = ch == '\r';
 }
 
 static void critical_console_out(char ch)
@@ -78,6 +80,8 @@ static void critical_console_out(char ch)
     // especially when we want to avoid any memory allocations...
     if (GraphicsManagement::is_initialized() && GraphicsManagement::the().console()) {
         GraphicsManagement::the().console()->write(ch, true);
+    } else if (auto* boot_console = g_boot_console.load()) {
+        boot_console->write(ch, true);
     }
 }
 
@@ -88,13 +92,15 @@ static void console_out(char ch)
 
     // It would be bad to reach the assert in ConsoleDevice()::the() and do a stack overflow
 
-    if (ConsoleDevice::is_initialized()) {
-        ConsoleDevice::the().put_char(ch);
+    if (DeviceManagement::the().is_console_device_attached()) {
+        DeviceManagement::the().console_device().put_char(ch);
     } else {
         IO::out8(IO::BOCHS_DEBUG_PORT, ch);
     }
     if (ConsoleManagement::is_initialized()) {
         ConsoleManagement::the().debug_tty()->emit_char(ch);
+    } else if (auto* boot_console = g_boot_console.load()) {
+        boot_console->write(ch, true);
     }
 }
 
@@ -117,26 +123,24 @@ int sprintf(char* buffer, const char* fmt, ...)
     return ret;
 }
 
-static size_t __vsnprintf_space_remaining;
-ALWAYS_INLINE void sized_buffer_putch(char*& bufptr, char ch)
-{
-    if (__vsnprintf_space_remaining) {
-        *bufptr++ = ch;
-        --__vsnprintf_space_remaining;
-    }
-}
-
 int snprintf(char* buffer, size_t size, const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
+    size_t space_remaining = 0;
     if (size) {
-        __vsnprintf_space_remaining = size - 1;
+        space_remaining = size - 1;
     } else {
-        __vsnprintf_space_remaining = 0;
+        space_remaining = 0;
     }
+    auto sized_buffer_putch = [&](char*& bufptr, char ch) {
+        if (space_remaining) {
+            *bufptr++ = ch;
+            --space_remaining;
+        }
+    };
     int ret = printf_internal(sized_buffer_putch, buffer, fmt, ap);
-    if (__vsnprintf_space_remaining) {
+    if (space_remaining) {
         buffer[ret] = '\0';
     } else if (size > 0) {
         buffer[size - 1] = '\0';
@@ -145,7 +149,7 @@ int snprintf(char* buffer, size_t size, const char* fmt, ...)
     return ret;
 }
 
-static void debugger_out(char ch)
+static inline void internal_dbgputch(char ch)
 {
     if (serial_debug)
         serial_putch(ch);
@@ -156,16 +160,21 @@ extern "C" void dbgputstr(const char* characters, size_t length)
 {
     if (!characters)
         return;
-    ScopedSpinLock lock(s_log_lock);
+    SpinlockLocker lock(s_log_lock);
     for (size_t i = 0; i < length; ++i)
-        debugger_out(characters[i]);
+        internal_dbgputch(characters[i]);
+}
+
+void dbgputstr(StringView view)
+{
+    ::dbgputstr(view.characters_without_null_termination(), view.length());
 }
 
 extern "C" void kernelputstr(const char* characters, size_t length)
 {
     if (!characters)
         return;
-    ScopedSpinLock lock(s_log_lock);
+    SpinlockLocker lock(s_log_lock);
     for (size_t i = 0; i < length; ++i)
         console_out(characters[i]);
 }
@@ -174,7 +183,18 @@ extern "C" void kernelcriticalputstr(const char* characters, size_t length)
 {
     if (!characters)
         return;
-    ScopedSpinLock lock(s_log_lock);
+    SpinlockLocker lock(s_log_lock);
     for (size_t i = 0; i < length; ++i)
         critical_console_out(characters[i]);
+}
+
+extern "C" void kernelearlyputstr(const char* characters, size_t length)
+{
+    if (!characters)
+        return;
+    // NOTE: We do not lock the log lock here, as this function is called before this or any other processor was initialized, meaning:
+    //  A) The $gs base was not setup yet, so we cannot enter into critical sections, and as a result we cannot use SpinLocks
+    //  B) No other processors may try to print at the same time anyway
+    for (size_t i = 0; i < length; ++i)
+        internal_dbgputch(characters[i]);
 }

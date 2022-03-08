@@ -1,24 +1,34 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2021, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/StringBuilder.h>
 #include <LibMarkdown/List.h>
+#include <LibMarkdown/Paragraph.h>
+#include <LibMarkdown/Visitor.h>
 
 namespace Markdown {
 
-String List::render_to_html() const
+String List::render_to_html(bool) const
 {
     StringBuilder builder;
 
     const char* tag = m_is_ordered ? "ol" : "ul";
-    builder.appendff("<{}>", tag);
+    builder.appendff("<{}", tag);
+
+    if (m_start_number != 1)
+        builder.appendff(" start=\"{}\"", m_start_number);
+
+    builder.append(">\n");
 
     for (auto& item : m_items) {
         builder.append("<li>");
-        builder.append(item.render_to_html());
+        if (!m_is_tight || (item->blocks().size() != 0 && !dynamic_cast<Paragraph const*>(&(item->blocks()[0]))))
+            builder.append("\n");
+        builder.append(item->render_to_html(m_is_tight));
         builder.append("</li>\n");
     }
 
@@ -35,61 +45,71 @@ String List::render_for_terminal(size_t) const
     for (auto& item : m_items) {
         builder.append("  ");
         if (m_is_ordered)
-            builder.appendff("{}. ", ++i);
+            builder.appendff("{}.", ++i);
         else
-            builder.append("* ");
-        builder.append(item.render_for_terminal());
-        builder.append("\n");
+            builder.append("*");
+        builder.append(item->render_for_terminal());
     }
-    builder.append("\n");
 
     return builder.build();
 }
 
-OwnPtr<List> List::parse(Vector<StringView>::ConstIterator& lines)
+RecursionDecision List::walk(Visitor& visitor) const
 {
-    Vector<Text> items;
-    bool is_ordered = false;
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    for (auto const& block : m_items) {
+        rd = block->walk(visitor);
+        if (rd == RecursionDecision::Break)
+            return rd;
+    }
+
+    return RecursionDecision::Continue;
+}
+
+OwnPtr<List> List::parse(LineIterator& lines)
+{
+    Vector<OwnPtr<ContainerBlock>> items;
 
     bool first = true;
-    size_t offset = 0;
-    StringBuilder item_builder;
-    auto flush_item_if_needed = [&] {
-        if (first)
-            return true;
+    bool is_ordered = false;
 
-        auto text = Text::parse(item_builder.string_view());
-        if (!text.has_value())
-            return false;
+    bool is_tight = true;
+    bool has_trailing_blank_lines = false;
+    size_t start_number = 1;
 
-        items.append(move(text.value()));
+    while (!lines.is_end()) {
 
-        item_builder.clear();
-        return true;
-    };
+        size_t offset = 0;
 
-    while (true) {
-        if (lines.is_end())
-            break;
-        const StringView& line = *lines;
-        if (line.is_empty())
-            break;
+        StringView line = *lines;
 
         bool appears_unordered = false;
-        if (line.length() > 2) {
-            if (line[1] == ' ' && (line[0] == '*' || line[0] == '-')) {
+
+        while (offset < line.length() && line[offset] == ' ')
+            ++offset;
+
+        if (offset + 2 <= line.length()) {
+            if (line[offset + 1] == ' ' && (line[offset] == '*' || line[offset] == '-' || line[offset] == '+')) {
                 appears_unordered = true;
-                offset = 2;
+                offset++;
             }
         }
 
         bool appears_ordered = false;
-        for (size_t i = 0; i < 10 && i < line.length(); i++) {
+        for (size_t i = offset; i < 10 && i < line.length(); i++) {
             char ch = line[i];
             if ('0' <= ch && ch <= '9')
                 continue;
             if (ch == '.' || ch == ')')
                 if (i + 1 < line.length() && line[i + 1] == ' ') {
+                    auto maybe_start_number = line.substring_view(offset, i - offset).to_uint<size_t>();
+                    if (!maybe_start_number.has_value())
+                        break;
+                    if (first)
+                        start_number = maybe_start_number.value();
                     appears_ordered = true;
                     offset = i + 1;
                 }
@@ -97,40 +117,37 @@ OwnPtr<List> List::parse(Vector<StringView>::ConstIterator& lines)
         }
 
         VERIFY(!(appears_unordered && appears_ordered));
-
-        if (appears_unordered || appears_ordered) {
-            if (first)
-                is_ordered = appears_ordered;
-            else if (is_ordered != appears_ordered)
-                return {};
-
-            if (!flush_item_if_needed())
-                return {};
-
-            while (offset + 1 < line.length() && line[offset + 1] == ' ')
-                offset++;
-
-        } else {
+        if (!appears_unordered && !appears_ordered) {
             if (first)
                 return {};
-            for (size_t i = 0; i < offset; i++) {
-                if (line[i] != ' ')
-                    return {};
-            }
+
+            break;
         }
 
+        while (offset < line.length() && line[offset] == ' ')
+            offset++;
+
+        if (first) {
+            is_ordered = appears_ordered;
+        } else if (appears_ordered != is_ordered) {
+            break;
+        }
+
+        is_tight = is_tight && !has_trailing_blank_lines;
+
+        lines.push_context(LineIterator::Context::list_item(offset));
+
+        auto list_item = ContainerBlock::parse(lines);
+        is_tight = is_tight && !list_item->has_blank_lines();
+        has_trailing_blank_lines = has_trailing_blank_lines || list_item->has_trailing_blank_lines();
+        items.append(move(list_item));
+
+        lines.pop_context();
+
         first = false;
-        if (!item_builder.is_empty())
-            item_builder.append(' ');
-        VERIFY(offset <= line.length());
-        item_builder.append(line.substring_view(offset, line.length() - offset));
-        ++lines;
-        offset = 0;
     }
 
-    if (!flush_item_if_needed() || first)
-        return {};
-    return make<List>(move(items), is_ordered);
+    return make<List>(move(items), is_ordered, is_tight, start_number);
 }
 
 }

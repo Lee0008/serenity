@@ -1,8 +1,7 @@
 @GUI::Widget {
     name: "browser"
     fill_with_background_color: true
-
-    layout: @GUI::VerticalBoxLayout
+    layout: @GUI::VerticalBoxLayout {}
 
     @GUI::HorizontalSeparator {
         name: "top_line"
@@ -12,7 +11,7 @@
 
     @GUI::TabWidget {
         name: "tab_widget"
-        container_padding: 0
+        container_margins: [0]
         uniform_tabs: true
         text_alignment: "CenterLeft"
     }

@@ -1,3 +1,8 @@
+serenity_component(
+    WebServer
+    TARGETS WebServer
+)
+
 set(SOURCES
     Client.cpp
     Configuration.cpp
@@ -5,4 +10,4 @@ set(SOURCES
 )
 
 serenity_bin(WebServer)
-target_link_libraries(WebServer LibCore LibHTTP)
+target_link_libraries(WebServer LibCore LibHTTP LibMain)

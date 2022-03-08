@@ -1,4 +1,5 @@
 set(AK_TEST_SOURCES
+    TestFixedPoint.cpp
     TestAllOf.cpp
     TestAnyOf.cpp
     TestArray.cpp
@@ -9,6 +10,7 @@ set(AK_TEST_SOURCES
     TestBinarySearch.cpp
     TestBitCast.cpp
     TestBitmap.cpp
+    TestBuiltinWrappers.cpp
     TestByteBuffer.cpp
     TestCharacterTypes.cpp
     TestChecked.cpp
@@ -16,11 +18,13 @@ set(AK_TEST_SOURCES
     TestCircularDuplexStream.cpp
     TestCircularQueue.cpp
     TestComplex.cpp
+    TestDisjointChunks.cpp
     TestDistinctNumeric.cpp
     TestDoublyLinkedList.cpp
     TestEndian.cpp
     TestEnumBits.cpp
     TestFind.cpp
+    TestFixedArray.cpp
     TestFormat.cpp
     TestGenericLexer.cpp
     TestHashFunctions.cpp
@@ -29,6 +33,7 @@ set(AK_TEST_SOURCES
     TestHex.cpp
     TestIPv4Address.cpp
     TestIndexSequence.cpp
+    TestIntegerMath.cpp
     TestIntrusiveList.cpp
     TestIntrusiveRedBlackTree.cpp
     TestJSON.cpp
@@ -50,6 +55,7 @@ set(AK_TEST_SOURCES
     TestSourceLocation.cpp
     TestSpan.cpp
     TestStack.cpp
+    TestStdLibExtras.cpp
     TestString.cpp
     TestStringUtils.cpp
     TestStringView.cpp
@@ -60,15 +66,13 @@ set(AK_TEST_SOURCES
     TestTypedTransfer.cpp
     TestUFixedBigInt.cpp
     TestURL.cpp
+    TestUtf16.cpp
     TestUtf8.cpp
     TestVariant.cpp
     TestVector.cpp
     TestWeakPtr.cpp
 )
 
-foreach(source ${AK_TEST_SOURCES})
-    serenity_test(${source} AK)
+foreach(source IN LISTS AK_TEST_SOURCES)
+    serenity_test("${source}" AK)
 endforeach()
-
-get_filename_component(TEST_FRM_RESOLVED ./test.frm REALPATH)
-install(FILES ${TEST_FRM_RESOLVED} DESTINATION usr/Tests/AK)

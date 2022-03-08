@@ -8,13 +8,13 @@
 
 #include <Kernel/DoubleBuffer.h>
 #include <Kernel/FileSystem/File.h>
-#include <Kernel/Lock.h>
+#include <Kernel/Locking/Mutex.h>
 #include <Kernel/UnixTypes.h>
 #include <Kernel/WaitQueue.h>
 
 namespace Kernel {
 
-class FileDescription;
+class OpenFileDescription;
 
 class FIFO final : public File {
 public:
@@ -24,41 +24,44 @@ public:
         Writer
     };
 
-    static NonnullRefPtr<FIFO> create(uid_t);
+    static ErrorOr<NonnullRefPtr<FIFO>> try_create(UserID);
     virtual ~FIFO() override;
 
-    uid_t uid() const { return m_uid; }
+    UserID uid() const { return m_uid; }
 
-    KResultOr<NonnullRefPtr<FileDescription>> open_direction(Direction);
-    KResultOr<NonnullRefPtr<FileDescription>> open_direction_blocking(Direction);
+    ErrorOr<NonnullRefPtr<OpenFileDescription>> open_direction(Direction);
+    ErrorOr<NonnullRefPtr<OpenFileDescription>> open_direction_blocking(Direction);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverloaded-virtual"
     void attach(Direction);
     void detach(Direction);
+#pragma GCC diagnostic pop
 
 private:
     // ^File
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual KResult stat(::stat&) const override;
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
-    virtual String absolute_path(const FileDescription&) const override;
-    virtual const char* class_name() const override { return "FIFO"; }
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual ErrorOr<struct stat> stat() const override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
+    virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
+    virtual StringView class_name() const override { return "FIFO"sv; }
     virtual bool is_fifo() const override { return true; }
 
-    explicit FIFO(uid_t);
+    explicit FIFO(UserID, NonnullOwnPtr<DoubleBuffer> buffer);
 
     unsigned m_writers { 0 };
     unsigned m_readers { 0 };
-    DoubleBuffer m_buffer;
+    NonnullOwnPtr<DoubleBuffer> m_buffer;
 
-    uid_t m_uid { 0 };
+    UserID m_uid { 0 };
 
     int m_fifo_id { 0 };
 
     WaitQueue m_read_open_queue;
     WaitQueue m_write_open_queue;
-    Lock m_open_lock;
+    Mutex m_open_lock;
 };
 
 }

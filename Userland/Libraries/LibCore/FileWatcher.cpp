@@ -7,21 +7,15 @@
 
 #include "FileWatcher.h"
 #include <AK/Debug.h>
-#include <AK/Function.h>
 #include <AK/LexicalPath.h>
-#include <AK/Noncopyable.h>
 #include <AK/NonnullRefPtr.h>
-#include <AK/RefCounted.h>
-#include <AK/Result.h>
 #include <AK/String.h>
 #include <Kernel/API/InodeWatcherEvent.h>
 #include <Kernel/API/InodeWatcherFlags.h>
-#include <LibCore/DirIterator.h>
 #include <LibCore/Notifier.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 namespace Core {
@@ -74,13 +68,7 @@ static Optional<FileWatcherEvent> get_event_from_fd(int fd, HashMap<unsigned, St
     // We trust that the kernel only sends the name when appropriate.
     if (event->name_length > 0) {
         String child_name { event->name, event->name_length - 1 };
-        auto lexical_path = LexicalPath::join(path, child_name);
-        if (!lexical_path.is_valid()) {
-            dbgln_if(FILE_WATCHER_DEBUG, "get_event_from_fd: Reading from wd {}: Invalid child name '{}'", fd, child_name);
-            return {};
-        }
-
-        result.event_path = lexical_path.string();
+        result.event_path = LexicalPath::join(path, child_name).string();
     } else {
         result.event_path = path;
     }
@@ -89,23 +77,19 @@ static Optional<FileWatcherEvent> get_event_from_fd(int fd, HashMap<unsigned, St
     return result;
 }
 
-Result<bool, String> FileWatcherBase::add_watch(String path, FileWatcherEvent::Type event_mask)
+static String canonicalize_path(String path)
 {
-    LexicalPath lexical_path;
-    if (path.length() > 0 && path[0] == '/') {
-        lexical_path = LexicalPath { path };
-    } else {
-        char* buf = getcwd(nullptr, 0);
-        lexical_path = LexicalPath::join(String(buf), path);
-        free(buf);
-    }
+    if (!path.is_empty() && path[0] == '/')
+        return LexicalPath::canonicalized_path(move(path));
+    char* cwd = getcwd(nullptr, 0);
+    VERIFY(cwd);
+    return LexicalPath::join(cwd, move(path)).string();
+}
 
-    if (!lexical_path.is_valid()) {
-        dbgln_if(FILE_WATCHER_DEBUG, "add_watch: path '{}' invalid", path);
-        return false;
-    }
+ErrorOr<bool> FileWatcherBase::add_watch(String path, FileWatcherEvent::Type event_mask)
+{
+    String canonical_path = canonicalize_path(move(path));
 
-    auto const& canonical_path = lexical_path.string();
     if (m_path_to_wd.find(canonical_path) != m_path_to_wd.end()) {
         dbgln_if(FILE_WATCHER_DEBUG, "add_watch: path '{}' is already being watched", canonical_path);
         return false;
@@ -125,7 +109,7 @@ Result<bool, String> FileWatcherBase::add_watch(String path, FileWatcherEvent::T
 
     int wd = inode_watcher_add_watch(m_watcher_fd, canonical_path.characters(), canonical_path.length(), static_cast<unsigned>(kernel_mask));
     if (wd < 0)
-        return String::formatted("Could not watch file '{}' : {}", canonical_path, strerror(errno));
+        return Error::from_errno(errno);
 
     m_path_to_wd.set(canonical_path, wd);
     m_wd_to_path.set(wd, canonical_path);
@@ -134,33 +118,18 @@ Result<bool, String> FileWatcherBase::add_watch(String path, FileWatcherEvent::T
     return true;
 }
 
-Result<bool, String> FileWatcherBase::remove_watch(String path)
+ErrorOr<bool> FileWatcherBase::remove_watch(String path)
 {
-    LexicalPath lexical_path;
-    if (path.length() > 0 && path[0] == '/') {
-        lexical_path = LexicalPath { path };
-    } else {
-        char* buf = getcwd(nullptr, 0);
-        lexical_path = LexicalPath::join(String(buf), path);
-        free(buf);
-    }
+    String canonical_path = canonicalize_path(move(path));
 
-    if (!lexical_path.is_valid()) {
-        dbgln_if(FILE_WATCHER_DEBUG, "remove_watch: path '{}' invalid", path);
-        return false;
-    }
-
-    auto const& canonical_path = lexical_path.string();
     auto it = m_path_to_wd.find(canonical_path);
     if (it == m_path_to_wd.end()) {
         dbgln_if(FILE_WATCHER_DEBUG, "remove_watch: path '{}' is not being watched", canonical_path);
         return false;
     }
 
-    int rc = inode_watcher_remove_watch(m_watcher_fd, it->value);
-    if (rc < 0) {
-        return String::formatted("Could not stop watching file '{}' : {}", path, strerror(errno));
-    }
+    if (inode_watcher_remove_watch(m_watcher_fd, it->value) < 0)
+        return Error::from_errno(errno);
 
     m_path_to_wd.remove(it);
     m_wd_to_path.remove(it->value);
@@ -200,12 +169,11 @@ Optional<FileWatcherEvent> BlockingFileWatcher::wait_for_event()
     return event;
 }
 
-Result<NonnullRefPtr<FileWatcher>, String> FileWatcher::create(InodeWatcherFlags flags)
+ErrorOr<NonnullRefPtr<FileWatcher>> FileWatcher::create(InodeWatcherFlags flags)
 {
     auto watcher_fd = create_inode_watcher(static_cast<unsigned>(flags | InodeWatcherFlags::CloseOnExec));
-    if (watcher_fd < 0) {
-        return String::formatted("FileWatcher: Could not create InodeWatcher: {}", strerror(errno));
-    }
+    if (watcher_fd < 0)
+        return Error::from_errno(errno);
 
     auto notifier = Notifier::construct(watcher_fd, Notifier::Event::Read);
     return adopt_ref(*new FileWatcher(watcher_fd, move(notifier)));

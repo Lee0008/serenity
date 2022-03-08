@@ -9,6 +9,7 @@
 #include <AK/FlyString.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
+#include <AK/Vector.h>
 #include <cstring>
 
 TEST_CASE(construct_empty)
@@ -39,9 +40,13 @@ TEST_CASE(construct_contents)
     EXPECT(test_string != "ABCDEFG");
 }
 
+TEST_CASE(equal)
+{
+    EXPECT_NE(String::empty(), String {});
+}
+
 TEST_CASE(compare)
 {
-    String test_string = "ABCDEF";
     EXPECT("a" < String("b"));
     EXPECT(!("a" > String("b")));
     EXPECT("b" > String("a"));
@@ -50,6 +55,20 @@ TEST_CASE(compare)
     EXPECT(!("a" >= String("b")));
     EXPECT("a" <= String("a"));
     EXPECT(!("b" <= String("a")));
+
+    EXPECT(String("a") > String());
+    EXPECT(!(String() > String("a")));
+    EXPECT(String() < String("a"));
+    EXPECT(!(String("a") < String()));
+    EXPECT(String("a") >= String());
+    EXPECT(!(String() >= String("a")));
+    EXPECT(String() <= String("a"));
+    EXPECT(!(String("a") <= String()));
+
+    EXPECT(!(String() > String()));
+    EXPECT(!(String() < String()));
+    EXPECT(String() >= String());
+    EXPECT(String() <= String());
 }
 
 TEST_CASE(index_access)
@@ -146,25 +165,21 @@ TEST_CASE(flystring)
 TEST_CASE(replace)
 {
     String test_string = "Well, hello Friends!";
-    u32 replacements = test_string.replace("Friends", "Testers");
-    EXPECT(replacements == 1);
+
+    test_string = test_string.replace("Friends", "Testers");
     EXPECT(test_string == "Well, hello Testers!");
 
-    replacements = test_string.replace("ell", "e're", true);
-    EXPECT(replacements == 2);
+    test_string = test_string.replace("ell", "e're", true);
     EXPECT(test_string == "We're, he'reo Testers!");
 
-    replacements = test_string.replace("!", " :^)");
-    EXPECT(replacements == 1);
+    test_string = test_string.replace("!", " :^)");
     EXPECT(test_string == "We're, he'reo Testers :^)");
 
     test_string = String("111._.111._.111");
-    replacements = test_string.replace("111", "|||", true);
-    EXPECT(replacements == 3);
+    test_string = test_string.replace("111", "|||", true);
     EXPECT(test_string == "|||._.|||._.|||");
 
-    replacements = test_string.replace("|||", "111");
-    EXPECT(replacements == 1);
+    test_string = test_string.replace("|||", "111");
     EXPECT(test_string == "111._.|||._.|||");
 }
 
@@ -270,4 +285,45 @@ TEST_CASE(find)
     EXPECT_EQ(a.find('b'), Optional<size_t> { 3 });
     EXPECT_EQ(a.find('b', 4), Optional<size_t> { 6 });
     EXPECT_EQ(a.find('b', 9), Optional<size_t> {});
+}
+
+TEST_CASE(find_with_empty_needle)
+{
+    String string = "";
+    EXPECT_EQ(string.find(""sv), 0u);
+    EXPECT_EQ(string.find_all(""sv), (Vector<size_t> { 0u }));
+
+    string = "abc";
+    EXPECT_EQ(string.find(""sv), 0u);
+    EXPECT_EQ(string.find_all(""sv), (Vector<size_t> { 0u, 1u, 2u, 3u }));
+}
+
+TEST_CASE(bijective_base)
+{
+    EXPECT_EQ(String::bijective_base_from(0), "A");
+    EXPECT_EQ(String::bijective_base_from(25), "Z");
+    EXPECT_EQ(String::bijective_base_from(26), "AA");
+    EXPECT_EQ(String::bijective_base_from(52), "BA");
+    EXPECT_EQ(String::bijective_base_from(704), "ABC");
+}
+
+TEST_CASE(roman_numerals)
+{
+    auto zero = String::roman_number_from(0);
+    EXPECT_EQ(zero, "");
+
+    auto one = String::roman_number_from(1);
+    EXPECT_EQ(one, "I");
+
+    auto nine = String::roman_number_from(9);
+    EXPECT_EQ(nine, "IX");
+
+    auto fourty_eight = String::roman_number_from(48);
+    EXPECT_EQ(fourty_eight, "XLVIII");
+
+    auto one_thousand_nine_hundred_ninety_eight = String::roman_number_from(1998);
+    EXPECT_EQ(one_thousand_nine_hundred_ninety_eight, "MCMXCVIII");
+
+    auto four_thousand = String::roman_number_from(4000);
+    EXPECT_EQ(four_thousand, "4000");
 }

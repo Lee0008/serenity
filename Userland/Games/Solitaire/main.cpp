@@ -1,12 +1,14 @@
 /*
  * Copyright (c) 2020, Till Mayer <till.mayer@web.de>
+ * Copyright (c) 2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Game.h"
 #include <Games/Solitaire/SolitaireGML.h>
-#include <LibCore/ConfigFile.h>
+#include <LibConfig/Client.h>
+#include <LibCore/System.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/ActionGroup.h>
@@ -17,53 +19,39 @@
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Statusbar.h>
 #include <LibGUI/Window.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    auto app = GUI::Application::construct(argc, argv);
-    auto app_icon = GUI::Icon::default_icon("app-solitaire");
-    auto config = Core::ConfigFile::get_for_app("Solitaire");
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath unix"));
 
-    if (pledge("stdio recvfd sendfd rpath wpath cpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    auto app = TRY(GUI::Application::try_create(arguments));
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-solitaire"));
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    Config::pledge_domain("Solitaire");
 
-    if (unveil(config->filename().characters(), "crw") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
 
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_title("Solitaire");
 
-    auto mode = static_cast<Solitaire::Mode>(config->read_num_entry("Settings", "Mode", static_cast<int>(Solitaire::Mode::SingleCardDraw)));
+    auto mode = static_cast<Solitaire::Mode>(Config::read_i32("Solitaire", "Settings", "Mode", static_cast<int>(Solitaire::Mode::SingleCardDraw)));
 
     auto update_mode = [&](Solitaire::Mode new_mode) {
         mode = new_mode;
-        config->write_num_entry("Settings", "Mode", static_cast<int>(mode));
-        if (!config->sync())
-            GUI::MessageBox::show(window, "Configuration could not be saved", "Error", GUI::MessageBox::Type::Error);
+        Config::write_i32("Solitaire", "Settings", "Mode", static_cast<int>(mode));
     };
 
     auto high_score = [&]() {
         switch (mode) {
         case Solitaire::Mode::SingleCardDraw:
-            return static_cast<u32>(config->read_num_entry("HighScores", "SingleCardDraw", 0));
+            return static_cast<u32>(Config::read_i32("Solitaire", "HighScores", "SingleCardDraw", 0));
         case Solitaire::Mode::ThreeCardDraw:
-            return static_cast<u32>(config->read_num_entry("HighScores", "ThreeCardDraw", 0));
+            return static_cast<u32>(Config::read_i32("Solitaire", "HighScores", "ThreeCardDraw", 0));
         default:
             VERIFY_NOT_REACHED();
         }
@@ -72,29 +60,26 @@ int main(int argc, char** argv)
     auto update_high_score = [&](u32 new_high_score) {
         switch (mode) {
         case Solitaire::Mode::SingleCardDraw:
-            config->write_num_entry("HighScores", "SingleCardDraw", static_cast<int>(new_high_score));
+            Config::write_i32("Solitaire", "HighScores", "SingleCardDraw", static_cast<int>(new_high_score));
             break;
         case Solitaire::Mode::ThreeCardDraw:
-            config->write_num_entry("HighScores", "ThreeCardDraw", static_cast<int>(new_high_score));
+            Config::write_i32("Solitaire", "HighScores", "ThreeCardDraw", static_cast<int>(new_high_score));
             break;
         default:
             VERIFY_NOT_REACHED();
         }
-
-        if (!config->sync())
-            GUI::MessageBox::show(window, "Configuration could not be saved", "Error", GUI::MessageBox::Type::Error);
     };
 
     if (mode >= Solitaire::Mode::__Count)
         update_mode(Solitaire::Mode::SingleCardDraw);
 
-    auto& widget = window->set_main_widget<GUI::Widget>();
-    widget.load_from_gml(solitaire_gml);
+    auto widget = TRY(window->try_set_main_widget<GUI::Widget>());
+    widget->load_from_gml(solitaire_gml);
 
-    auto& game = *widget.find_descendant_of_type_named<Solitaire::Game>("game");
+    auto& game = *widget->find_descendant_of_type_named<Solitaire::Game>("game");
     game.set_focus(true);
 
-    auto& statusbar = *widget.find_descendant_of_type_named<GUI::Statusbar>("statusbar");
+    auto& statusbar = *widget->find_descendant_of_type_named<GUI::Statusbar>("statusbar");
     statusbar.set_text(0, "Score: 0");
     statusbar.set_text(1, String::formatted("High Score: {}", high_score()));
     statusbar.set_text(2, "Time: 00:00:00");
@@ -150,6 +135,24 @@ int main(int argc, char** argv)
         statusbar.set_text(2, "Timer starts after your first move");
     };
 
+    window->on_close_request = [&]() {
+        auto game_in_progress = timer->is_active();
+        if (game_in_progress) {
+            auto result = GUI::MessageBox::show(window,
+                "A game is still in progress, are you sure you would like to quit?",
+                "Game in progress",
+                GUI::MessageBox::Type::Warning,
+                GUI::MessageBox::InputType::YesNo);
+
+            if (result == GUI::MessageBox::ExecYes)
+                return GUI::Window::CloseRequestDecision::Close;
+            else
+                return GUI::Window::CloseRequestDecision::StayOpen;
+        }
+
+        return GUI::Window::CloseRequestDecision::Close;
+    };
+
     GUI::ActionGroup draw_setting_actions;
     draw_setting_actions.set_exclusive(true);
 
@@ -171,30 +174,39 @@ int main(int argc, char** argv)
     three_card_draw_action->set_status_tip("Draw three cards at a time");
     draw_setting_actions.add_action(three_card_draw_action);
 
-    auto menubar = GUI::Menubar::construct();
-    auto& game_menu = menubar->add_menu("&Game");
+    game.set_auto_collect(Config::read_bool("Solitaire", "Settings", "AutoCollect", false));
+    auto toggle_auto_collect_action = GUI::Action::create_checkable("Auto-&Collect", [&](auto& action) {
+        auto checked = action.is_checked();
+        game.set_auto_collect(checked);
+        Config::write_bool("Solitaire", "Settings", "AutoCollect", checked);
+    });
+    toggle_auto_collect_action->set_checked(game.is_auto_collecting());
+    toggle_auto_collect_action->set_status_tip("Auto-collect to foundation piles");
 
-    game_menu.add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
+    auto game_menu = TRY(window->try_add_menu("&Game"));
+
+    TRY(game_menu->try_add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
         game.setup(mode);
-    }));
-    game_menu.add_separator();
+    })));
+    TRY(game_menu->try_add_separator());
     auto undo_action = GUI::CommonActions::make_undo_action([&](auto&) {
         game.perform_undo();
     });
     undo_action->set_enabled(false);
-    game_menu.add_action(undo_action);
-    game_menu.add_separator();
-    game_menu.add_action(single_card_draw_action);
-    game_menu.add_action(three_card_draw_action);
-    game_menu.add_separator();
-    game_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
+    TRY(game_menu->try_add_action(undo_action));
+    TRY(game_menu->try_add_separator());
+    TRY(game_menu->try_add_action(single_card_draw_action));
+    TRY(game_menu->try_add_action(three_card_draw_action));
+    TRY(game_menu->try_add_separator());
+    TRY(game_menu->try_add_action(toggle_auto_collect_action));
+    TRY(game_menu->try_add_separator());
+    TRY(game_menu->try_add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); })));
 
-    auto& help_menu = menubar->add_menu("&Help");
-    help_menu.add_action(GUI::CommonActions::make_about_action("Solitaire", app_icon, window));
+    auto help_menu = TRY(window->try_add_menu("&Help"));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_about_action("Solitaire", app_icon, window)));
 
     window->set_resizable(false);
     window->resize(Solitaire::Game::width, Solitaire::Game::height + statusbar.max_height());
-    window->set_menubar(move(menubar));
     window->set_icon(app_icon.bitmap_for_size(16));
     window->show();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2022, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,23 +8,34 @@
 
 #include <AK/Types.h>
 #include <LibWeb/Forward.h>
+#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/FormattingContext.h>
 
 namespace Web::Layout {
 
 class InlineFormattingContext final : public FormattingContext {
 public:
-    InlineFormattingContext(Box& containing_block, FormattingContext* parent);
+    InlineFormattingContext(FormattingState&, BlockContainer const& containing_block, BlockFormattingContext& parent);
     ~InlineFormattingContext();
 
-    Box& containing_block() { return context_box(); }
-    const Box& containing_block() const { return context_box(); }
+    BlockFormattingContext& parent();
+    BlockFormattingContext const& parent() const;
 
-    virtual void run(Box&, LayoutMode) override;
+    BlockContainer const& containing_block() const { return static_cast<BlockContainer const&>(context_box()); }
 
-    float available_width_at_line(size_t line_index) const;
+    virtual void run(Box const&, LayoutMode) override;
 
-    void dimension_box_on_line(Box&, LayoutMode);
+    void dimension_box_on_line(Box const&, LayoutMode);
+
+    struct AvailableSpaceForLineInfo {
+        float left { 0 };
+        float right { 0 };
+    };
+
+    AvailableSpaceForLineInfo available_space_for_line(float y) const;
+
+private:
+    void generate_line_boxes(LayoutMode);
 };
 
 }

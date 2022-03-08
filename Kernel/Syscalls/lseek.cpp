@@ -4,26 +4,21 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/FileSystem/FileDescription.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$lseek(int fd, Userspace<off_t*> userspace_offset, int whence)
+ErrorOr<FlatPtr> Process::sys$lseek(int fd, Userspace<off_t*> userspace_offset, int whence)
 {
-    REQUIRE_PROMISE(stdio);
-    auto description = file_description(fd);
-    if (!description)
-        return EBADF;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    TRY(require_promise(Pledge::stdio));
+    auto description = TRY(open_file_description(fd));
     off_t offset;
-    if (!copy_from_user(&offset, userspace_offset))
-        return EFAULT;
-    auto seek_result = description->seek(offset, whence);
-    if (seek_result.is_error())
-        return seek_result.error();
-    if (!copy_to_user(userspace_offset, &seek_result.value()))
-        return EFAULT;
-    return KSuccess;
+    TRY(copy_from_user(&offset, userspace_offset));
+    auto seek_result = TRY(description->seek(offset, whence));
+    TRY(copy_to_user(userspace_offset, &seek_result));
+    return 0;
 }
 
 }

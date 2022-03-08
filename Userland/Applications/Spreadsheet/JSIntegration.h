@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +8,7 @@
 
 #include "Forward.h"
 #include <LibJS/Forward.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/GlobalObject.h>
 
 namespace Spreadsheet {
@@ -24,10 +25,11 @@ class SheetGlobalObject final : public JS::GlobalObject {
 public:
     SheetGlobalObject(Sheet&);
 
-    virtual ~SheetGlobalObject() override;
+    virtual ~SheetGlobalObject() override = default;
 
-    virtual JS::Value get(const JS::PropertyName&, JS::Value receiver = {}, bool without_side_effects = false) const override;
-    virtual bool put(const JS::PropertyName&, JS::Value value, JS::Value receiver = {}) override;
+    virtual JS::ThrowCompletionOr<bool> internal_has_property(JS::PropertyKey const& name) const override;
+    virtual JS::ThrowCompletionOr<JS::Value> internal_get(JS::PropertyKey const&, JS::Value receiver) const override;
+    virtual JS::ThrowCompletionOr<bool> internal_set(JS::PropertyKey const&, JS::Value value, JS::Value receiver) override;
     virtual void initialize_global_object() override;
 
     JS_DECLARE_NATIVE_FUNCTION(get_real_cell_contents);
@@ -36,6 +38,7 @@ public:
     JS_DECLARE_NATIVE_FUNCTION(current_cell_position);
     JS_DECLARE_NATIVE_FUNCTION(column_index);
     JS_DECLARE_NATIVE_FUNCTION(column_arithmetic);
+    JS_DECLARE_NATIVE_FUNCTION(get_column_bound);
 
 private:
     virtual void visit_edges(Visitor&) override;
@@ -46,9 +49,9 @@ class WorkbookObject final : public JS::Object {
     JS_OBJECT(WorkbookObject, JS::Object);
 
 public:
-    WorkbookObject(Workbook&);
+    WorkbookObject(Workbook&, JS::GlobalObject&);
 
-    virtual ~WorkbookObject() override;
+    virtual ~WorkbookObject() override = default;
 
     virtual void initialize(JS::GlobalObject&) override;
 

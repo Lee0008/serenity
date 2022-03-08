@@ -1,8 +1,14 @@
+serenity_component(
+    NotificationServer
+    REQUIRED
+    TARGETS NotificationServer
+)
+
 compile_ipc(NotificationServer.ipc NotificationServerEndpoint.h)
 compile_ipc(NotificationClient.ipc NotificationClientEndpoint.h)
 
 set(SOURCES
-    ClientConnection.cpp
+    ConnectionFromClient.cpp
     main.cpp
     NotificationWindow.cpp
     NotificationServerEndpoint.h
@@ -10,4 +16,4 @@ set(SOURCES
 )
 
 serenity_bin(NotificationServer)
-target_link_libraries(NotificationServer LibGUI LibIPC)
+target_link_libraries(NotificationServer LibGUI LibIPC LibMain)

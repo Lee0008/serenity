@@ -6,10 +6,9 @@
 
 #pragma once
 
-#include <AK/HashTable.h>
-#include <AK/String.h>
+#include <AK/IntrusiveList.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/RegisterState.h>
 
 namespace Kernel {
 
@@ -27,7 +26,9 @@ public:
     {
         VERIFY(!m_registered);
     }
-    virtual void handle_interrupt(const RegisterState& regs) = 0;
+    // Note: this method returns boolean value, to indicate if the handler handled
+    // the interrupt or not. This is useful for shared handlers mostly.
+    virtual bool handle_interrupt(const RegisterState& regs) = 0;
 
     void will_be_destroyed();
     bool is_registered() const { return m_registered; }
@@ -43,8 +44,8 @@ public:
     virtual bool is_sharing_with_others() const = 0;
 
     virtual HandlerType type() const = 0;
-    virtual const char* purpose() const = 0;
-    virtual const char* controller() const = 0;
+    virtual StringView purpose() const = 0;
+    virtual StringView controller() const = 0;
 
     virtual bool eoi() = 0;
     ALWAYS_INLINE void increment_invoking_counter()
@@ -63,5 +64,10 @@ private:
     u8 m_interrupt_number { 0 };
     bool m_disable_remap { false };
     bool m_registered { false };
+
+    IntrusiveListNode<GenericInterruptHandler> m_list_node;
+
+public:
+    using List = IntrusiveList<&GenericInterruptHandler::m_list_node>;
 };
 }

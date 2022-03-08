@@ -1,3 +1,8 @@
+serenity_component(
+    TelnetServer
+    TARGETS TelnetServer
+)
+
 set(SOURCES
     Client.cpp
     main.cpp
@@ -5,4 +10,4 @@ set(SOURCES
 )
 
 serenity_bin(TelnetServer)
-target_link_libraries(TelnetServer LibCore)
+target_link_libraries(TelnetServer LibCore LibMain)

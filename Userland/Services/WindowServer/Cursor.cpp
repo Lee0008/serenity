@@ -6,103 +6,20 @@
 
 #include <AK/LexicalPath.h>
 #include <WindowServer/Cursor.h>
+#include <WindowServer/Screen.h>
 #include <WindowServer/WindowManager.h>
 
 namespace WindowServer {
 
-CursorParams CursorParams::parse_from_filename(const StringView& cursor_path, const Gfx::IntPoint& default_hotspot)
+Cursor::Cursor(NonnullRefPtr<Gfx::Bitmap>&& bitmap, int scale_factor, Gfx::CursorParams const& cursor_params)
+    : m_params(cursor_params.constrained(*bitmap))
+    , m_rect(bitmap->rect())
 {
-    LexicalPath path(cursor_path);
-    if (!path.is_valid()) {
-        dbgln("Cannot parse invalid cursor path, use default cursor params");
-        return { default_hotspot };
-    }
-    auto file_title = path.title();
-    auto last_dot_in_title = StringView(file_title).find_last_of('.');
-    if (!last_dot_in_title.has_value() || last_dot_in_title.value() == 0) {
-        // No encoded params in filename. Not an error, we'll just use defaults
-        return { default_hotspot };
-    }
-    auto params_str = file_title.substring_view(last_dot_in_title.value() + 1);
-
-    CursorParams params(default_hotspot);
-    bool in_display_scale_part = false;
-    for (size_t i = 0; i + 1 < params_str.length() && !in_display_scale_part;) {
-        auto property = params_str[i++];
-
-        auto value = [&]() -> Optional<size_t> {
-            size_t k = i;
-            while (k < params_str.length()) {
-                auto ch = params_str[k];
-                if (ch < '0' || ch > '9')
-                    break;
-                k++;
-            }
-            if (k == i)
-                return {};
-            auto parsed_number = params_str.substring_view(i, k - i).to_uint();
-            if (!parsed_number.has_value())
-                return {};
-            i = k;
-            return parsed_number.value();
-        }();
-        if (!value.has_value()) {
-            dbgln("Failed to parse value for property '{}' from parsed cursor path: {}", property, cursor_path);
-            return { default_hotspot };
-        }
-        switch (property) {
-        case 'x':
-            params.m_hotspot.set_x(value.value());
-            params.m_have_hotspot = true;
-            break;
-        case 'y':
-            params.m_hotspot.set_y(value.value());
-            params.m_have_hotspot = true;
-            break;
-        case 'f':
-            if (value.value() > 1)
-                params.m_frames = value.value();
-            break;
-        case 't':
-            if (value.value() >= 100 && value.value() <= 1000)
-                params.m_frame_ms = value.value();
-            else
-                dbgln("Cursor frame rate outside of valid range (100-1000ms)");
-            break;
-        case '-':
-            in_display_scale_part = true;
-            break;
-        default:
-            dbgln("Ignore unknown property '{}' with value {} parsed from cursor path: {}", property, value.value(), cursor_path);
-            return { default_hotspot };
-        }
-    }
-    return params;
+    m_bitmaps.set(scale_factor, move(bitmap));
+    update_rect_if_animated();
 }
 
-CursorParams CursorParams::constrained(const Gfx::Bitmap& bitmap) const
-{
-    CursorParams params(*this);
-    auto rect = bitmap.rect();
-    if (params.m_frames > 1) {
-        if (rect.width() % params.m_frames == 0) {
-            rect.set_width(rect.width() / (int)params.m_frames);
-        } else {
-            dbgln("Cannot divide cursor dimensions {} into {} frames", rect, params.m_frames);
-            params.m_frames = 1;
-        }
-    }
-    if (params.m_have_hotspot)
-        params.m_hotspot = params.m_hotspot.constrained(rect);
-    else
-        params.m_hotspot = rect.center();
-    return params;
-}
-
-Cursor::Cursor(NonnullRefPtr<Gfx::Bitmap>&& bitmap, const CursorParams& cursor_params)
-    : m_bitmap(move(bitmap))
-    , m_params(cursor_params.constrained(*m_bitmap))
-    , m_rect(m_bitmap->rect())
+void Cursor::update_rect_if_animated()
 {
     if (m_params.frames() > 1) {
         VERIFY(m_rect.width() % m_params.frames() == 0);
@@ -110,20 +27,49 @@ Cursor::Cursor(NonnullRefPtr<Gfx::Bitmap>&& bitmap, const CursorParams& cursor_p
     }
 }
 
-Cursor::~Cursor()
-{
-}
-
-NonnullRefPtr<Cursor> Cursor::create(NonnullRefPtr<Gfx::Bitmap>&& bitmap)
+NonnullRefPtr<Cursor> Cursor::create(NonnullRefPtr<Gfx::Bitmap>&& bitmap, int scale_factor)
 {
     auto hotspot = bitmap->rect().center();
-    return adopt_ref(*new Cursor(move(bitmap), CursorParams(hotspot)));
+    return adopt_ref(*new Cursor(move(bitmap), scale_factor, Gfx::CursorParams(hotspot)));
 }
 
-NonnullRefPtr<Cursor> Cursor::create(NonnullRefPtr<Gfx::Bitmap>&& bitmap, const StringView& filename)
+RefPtr<Cursor> Cursor::create(StringView filename, StringView default_filename)
 {
-    auto default_hotspot = bitmap->rect().center();
-    return adopt_ref(*new Cursor(move(bitmap), CursorParams::parse_from_filename(filename, default_hotspot)));
+    auto cursor = adopt_ref(*new Cursor());
+    if (cursor->load(filename, default_filename))
+        return cursor;
+    return {};
+}
+
+bool Cursor::load(StringView filename, StringView default_filename)
+{
+    bool did_load_any = false;
+
+    auto load_bitmap = [&](StringView path, int scale_factor) {
+        auto bitmap_or_error = Gfx::Bitmap::try_load_from_file(path, scale_factor);
+        if (bitmap_or_error.is_error())
+            return;
+        did_load_any = true;
+        m_bitmaps.set(scale_factor, bitmap_or_error.release_value());
+    };
+
+    Screen::for_each_scale_factor_in_use([&](int scale_factor) {
+        load_bitmap(filename, scale_factor);
+        return IterationDecision::Continue;
+    });
+    if (!did_load_any) {
+        Screen::for_each_scale_factor_in_use([&](int scale_factor) {
+            load_bitmap(default_filename, scale_factor);
+            return IterationDecision::Continue;
+        });
+    }
+    if (did_load_any) {
+        auto& bitmap = this->bitmap(1);
+        m_rect = bitmap.rect();
+        m_params = Gfx::CursorParams::parse_from_filename(filename, m_rect.center()).constrained(bitmap);
+        update_rect_if_animated();
+    }
+    return did_load_any;
 }
 
 RefPtr<Cursor> Cursor::create(Gfx::StandardCursor standard_cursor)
@@ -163,6 +109,10 @@ RefPtr<Cursor> Cursor::create(Gfx::StandardCursor standard_cursor)
         return WindowManager::the().wait_cursor();
     case Gfx::StandardCursor::Disallowed:
         return WindowManager::the().disallowed_cursor();
+    case Gfx::StandardCursor::Eyedropper:
+        return WindowManager::the().eyedropper_cursor();
+    case Gfx::StandardCursor::Zoom:
+        return WindowManager::the().zoom_cursor();
     default:
         VERIFY_NOT_REACHED();
     }

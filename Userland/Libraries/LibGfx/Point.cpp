@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -13,19 +13,26 @@
 namespace Gfx {
 
 template<typename T>
-void Point<T>::constrain(const Rect<T>& rect)
+void Point<T>::constrain(Rect<T> const& rect)
 {
-    if (x() < rect.left()) {
-        set_x(rect.left());
-    } else if (x() > rect.right()) {
-        set_x(rect.right());
-    }
+    m_x = AK::clamp<T>(x(), rect.left(), rect.right());
+    m_y = AK::clamp<T>(y(), rect.top(), rect.bottom());
+}
 
-    if (y() < rect.top()) {
-        set_y(rect.top());
-    } else if (y() > rect.bottom()) {
-        set_y(rect.bottom());
+template<typename T>
+[[nodiscard]] Point<T> Point<T>::end_point_for_aspect_ratio(Point<T> const& previous_end_point, float aspect_ratio) const
+{
+    VERIFY(aspect_ratio > 0);
+    const T x_sign = previous_end_point.x() >= x() ? 1 : -1;
+    const T y_sign = previous_end_point.y() >= y() ? 1 : -1;
+    T dx = AK::abs(previous_end_point.x() - x());
+    T dy = AK::abs(previous_end_point.y() - y());
+    if (dx > dy) {
+        dy = (T)((float)dx / aspect_ratio);
+    } else {
+        dx = (T)((float)dy * aspect_ratio);
     }
+    return { x() + x_sign * dx, y() + y_sign * dy };
 }
 
 template<>
@@ -44,22 +51,20 @@ String FloatPoint::to_string() const
 
 namespace IPC {
 
-bool encode(Encoder& encoder, const Gfx::IntPoint& point)
+bool encode(Encoder& encoder, Gfx::IntPoint const& point)
 {
     encoder << point.x() << point.y();
     return true;
 }
 
-bool decode(Decoder& decoder, Gfx::IntPoint& point)
+ErrorOr<void> decode(Decoder& decoder, Gfx::IntPoint& point)
 {
     int x = 0;
     int y = 0;
-    if (!decoder.decode(x))
-        return false;
-    if (!decoder.decode(y))
-        return false;
+    TRY(decoder.decode(x));
+    TRY(decoder.decode(y));
     point = { x, y };
-    return true;
+    return {};
 }
 
 }

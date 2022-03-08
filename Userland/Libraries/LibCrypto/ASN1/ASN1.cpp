@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/GenericLexer.h>
 #include <LibCrypto/ASN1/ASN1.h>
 
 namespace Crypto::ASN1 {
@@ -72,7 +73,7 @@ String type_name(Type type)
     return "InvalidType";
 }
 
-Optional<Core::DateTime> parse_utc_time(const StringView& time)
+Optional<Core::DateTime> parse_utc_time(StringView time)
 {
     // YYMMDDhhmm[ss]Z or YYMMDDhhmm[ss](+|-)hhmm
     GenericLexer lexer(time);
@@ -119,7 +120,7 @@ Optional<Core::DateTime> parse_utc_time(const StringView& time)
     return Core::DateTime::create(full_year, month.value(), day.value(), hour.value(), minute.value(), full_seconds);
 }
 
-Optional<Core::DateTime> parse_generalized_time(const StringView& time)
+Optional<Core::DateTime> parse_generalized_time(StringView time)
 {
     // YYYYMMDDhh[mm[ss[.fff]]] or YYYYMMDDhh[mm[ss[.fff]]]Z or YYYYMMDDhh[mm[ss[.fff]]](+|-)hhmm
     GenericLexer lexer(time);
@@ -182,7 +183,7 @@ done_parsing:;
     if (offset_hours.has_value() || offset_minutes.has_value())
         dbgln("FIXME: Implement GeneralizedTime with offset!");
 
-    // Unceremonially drop the milliseconds on the floor.
+    // Unceremoniously drop the milliseconds on the floor.
     return Core::DateTime::create(year.value(), month.value(), day.value(), hour.value(), minute.value_or(0), seconds.value_or(0));
 }
 

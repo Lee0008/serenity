@@ -12,9 +12,9 @@ if [ "$#" -eq "1" ]; then
             '*.h' \
             ':!:Base' \
             ':!:Kernel/FileSystem/ext2_fs.h' \
-            ':!:Userland/Libraries/LibC/syslog.h' \
             ':!:Userland/DevTools/HackStudio/LanguageServers/Cpp/Tests/*' \
-            ':!:Userland/Libraries/LibCpp/Tests/*'
+            ':!:Userland/Libraries/LibCpp/Tests/parser/*' \
+            ':!:Userland/Libraries/LibCpp/Tests/preprocessor/*'
     )
 else
     files=()
@@ -31,17 +31,17 @@ if (( ${#files[@]} )); then
         CLANG_FORMAT=clang-format-11
     elif command -v clang-format >/dev/null 2>&1 ; then
         CLANG_FORMAT=clang-format
-        if ! "${CLANG_FORMAT}" --version | grep -qF ' 11.' ; then
-            echo "You are using '$("${CLANG_FORMAT}" --version)', which appears to not be clang-format 11."
+        if ! "${CLANG_FORMAT}" --version | awk '{ if (substr($NF, 1, index($NF, ".") - 1) < 11) exit 1; }'; then
+            echo "You are using '$("${CLANG_FORMAT}" --version)', which appears to not be clang-format 11 or later."
             echo "It is very likely that the resulting changes are not what you wanted."
         fi
     else
         echo "clang-format-11 is not available, but C or C++ files need linting! Either skip this script, or install clang-format-11."
-        echo "(If you install a package 'clang-format', please make sure it's version 11.)"
+        echo "(If you install a package 'clang-format', please make sure it's version 11 or later.)"
         exit 1
     fi
 
-    if [ "$#" -gt "0" ] && [ "x--overwrite-inplace" = "x$1" ] ; then
+    if [ "$#" -gt "0" ] && [ "--overwrite-inplace" = "$1" ] ; then
         true # The only way to run this script.
     else
         # Note that this branch also covers --help, -h, -help, -?, etc.

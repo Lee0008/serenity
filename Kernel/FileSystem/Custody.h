@@ -6,31 +6,30 @@
 
 #pragma once
 
-#include <AK/RefCounted.h>
+#include <AK/Error.h>
+#include <AK/IntrusiveList.h>
 #include <AK/RefPtr.h>
-#include <AK/String.h>
 #include <Kernel/Forward.h>
-#include <Kernel/Heap/SlabAllocator.h>
-#include <Kernel/KResult.h>
 #include <Kernel/KString.h>
+#include <Kernel/Library/ListedRefCounted.h>
+#include <Kernel/Locking/MutexProtected.h>
 
 namespace Kernel {
 
 // FIXME: Custody needs some locking.
 
-class Custody : public RefCounted<Custody> {
-    MAKE_SLAB_ALLOCATED(Custody)
+class Custody : public ListedRefCounted<Custody, LockType::Mutex> {
 public:
-    static KResultOr<NonnullRefPtr<Custody>> try_create(Custody* parent, StringView name, Inode&, int mount_flags);
+    static ErrorOr<NonnullRefPtr<Custody>> try_create(Custody* parent, StringView name, Inode&, int mount_flags);
 
     ~Custody();
 
     Custody* parent() { return m_parent.ptr(); }
-    const Custody* parent() const { return m_parent.ptr(); }
+    Custody const* parent() const { return m_parent.ptr(); }
     Inode& inode() { return *m_inode; }
-    const Inode& inode() const { return *m_inode; }
+    Inode const& inode() const { return *m_inode; }
     StringView name() const { return m_name->view(); }
-    String absolute_path() const;
+    ErrorOr<NonnullOwnPtr<KString>> try_serialize_absolute_path() const;
 
     int mount_flags() const { return m_mount_flags; }
     bool is_readonly() const;
@@ -42,6 +41,12 @@ private:
     NonnullOwnPtr<KString> m_name;
     NonnullRefPtr<Inode> m_inode;
     int m_mount_flags { 0 };
+
+    mutable IntrusiveListNode<Custody> m_all_custodies_list_node;
+
+public:
+    using AllCustodiesList = IntrusiveList<&Custody::m_all_custodies_list_node>;
+    static MutexProtected<Custody::AllCustodiesList>& all_instances();
 };
 
 }

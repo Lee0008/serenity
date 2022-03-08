@@ -3,12 +3,6 @@ test("length is 1", () => {
 });
 
 describe("errors", () => {
-    test("requires at least one argument", () => {
-        expect(() => {
-            [].find();
-        }).toThrowWithMessage(TypeError, "Array.prototype.find() requires at least one argument");
-    });
-
     test("callback must be a function", () => {
         expect(() => {
             [].find(undefined);
@@ -62,4 +56,14 @@ describe("normal behavior", () => {
         ).toBeUndefined();
         expect(callbackCalled).toBe(2);
     });
+});
+
+test("is unscopable", () => {
+    expect(Array.prototype[Symbol.unscopables].find).toBeTrue();
+    const array = [];
+    with (array) {
+        expect(() => {
+            find;
+        }).toThrowWithMessage(ReferenceError, "'find' is not defined");
+    }
 });

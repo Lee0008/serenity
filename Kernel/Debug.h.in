@@ -1,10 +1,19 @@
 /*
  * Copyright (c) 2021, Paul Scharnofske
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
+
+#ifndef AC97_DEBUG
+#cmakedefine01 AC97_DEBUG
+#endif
+
+#ifndef AHCI_DEBUG
+#cmakedefine01 AHCI_DEBUG
+#endif
 
 #ifndef ACPI_DEBUG
 #cmakedefine01 ACPI_DEBUG
@@ -70,12 +79,12 @@
 #cmakedefine01 EXT2_DEBUG
 #endif
 
-#ifndef FRAMEBUFFER_DEVICE_DEBUG
-#cmakedefine01 FRAMEBUFFER_DEVICE_DEBUG
-#endif
-
 #ifndef EXT2_VERY_DEBUG
 #cmakedefine01 EXT2_VERY_DEBUG
+#endif
+
+#ifndef FRAMEBUFFER_DEVICE_DEBUG
+#cmakedefine01 FRAMEBUFFER_DEVICE_DEBUG
 #endif
 
 #ifndef FILEDESCRIPTION_DEBUG
@@ -118,12 +127,20 @@
 #cmakedefine01 INTERRUPT_DEBUG
 #endif
 
+#ifndef IO_DEBUG
+#cmakedefine01 IO_DEBUG
+#endif
+
 #ifndef IOAPIC_DEBUG
 #cmakedefine01 IOAPIC_DEBUG
 #endif
 
-#ifndef IO_DEBUG
-#cmakedefine01 IO_DEBUG
+#ifndef ISO9660_DEBUG
+#cmakedefine01 ISO9660_DEBUG
+#endif
+
+#ifndef ISO9660_VERY_DEBUG
+#cmakedefine01 ISO9660_VERY_DEBUG
 #endif
 
 #ifndef IPV4_DEBUG
@@ -158,8 +175,20 @@
 #cmakedefine01 LOCK_DEBUG
 #endif
 
+#ifndef LOCK_IN_CRITICAL_DEBUG
+#cmakedefine01 LOCK_IN_CRITICAL_DEBUG
+#endif
+
+#ifndef LOCK_RANK_ENFORCEMENT
+#cmakedefine01 LOCK_RANK_ENFORCEMENT
+#endif
+
 #ifndef LOCK_RESTORE_DEBUG
 #cmakedefine01 LOCK_RESTORE_DEBUG
+#endif
+
+#ifndef LOCK_SHARED_UPGRADE_DEBUG
+#cmakedefine01 LOCK_SHARED_UPGRADE_DEBUG
 #endif
 
 #ifndef LOCK_TRACE_DEBUG
@@ -190,6 +219,10 @@
 #cmakedefine01 NETWORK_TASK_DEBUG
 #endif
 
+#ifndef NVME_DEBUG
+#cmakedefine01 NVME_DEBUG
+#endif
+
 #ifndef OFFD_DEBUG
 #cmakedefine01 OFFD_DEBUG
 #endif
@@ -200,10 +233,6 @@
 
 #ifndef PATA_DEBUG
 #cmakedefine01 PATA_DEBUG
-#endif
-
-#ifndef AHCI_DEBUG
-#cmakedefine01 AHCI_DEBUG
 #endif
 
 #ifndef PCI_DEBUG

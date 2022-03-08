@@ -4,33 +4,22 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "ClientConnection.h"
-#include <AK/LexicalPath.h>
+#include "ConnectionFromClient.h"
 #include <LibCore/EventLoop.h>
-#include <LibCore/File.h>
 #include <LibCore/LocalServer.h>
-#include <LibIPC/ClientConnection.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <LibCore/System.h>
+#include <LibIPC/SingleServer.h>
+#include <LibMain/Main.h>
 
-int main(int, char**)
+ErrorOr<int> serenity_main(Main::Arguments)
 {
     Core::EventLoop event_loop;
-    if (pledge("stdio unix rpath recvfd", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio unix rpath recvfd"));
 
-    auto socket = Core::LocalSocket::take_over_accepted_socket_from_system_server();
-    IPC::new_client_connection<LanguageServers::Shell::ClientConnection>(socket.release_nonnull(), 1);
-    if (pledge("stdio rpath recvfd", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-    if (unveil("/etc/passwd", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    auto client = TRY(IPC::take_over_accepted_client_from_system_server<LanguageServers::Shell::ConnectionFromClient>());
+
+    TRY(Core::System::pledge("stdio rpath recvfd"));
+    TRY(Core::System::unveil("/etc/passwd", "r"));
 
     return event_loop.exec();
 }

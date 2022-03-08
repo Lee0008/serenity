@@ -11,7 +11,7 @@
 
 namespace Keyboard {
 
-Optional<CharacterMapData> CharacterMapFile::load_from_file(const String& filename)
+ErrorOr<CharacterMapData> CharacterMapFile::load_from_file(const String& filename)
 {
     auto path = filename;
     if (!path.ends_with(".json")) {
@@ -22,20 +22,10 @@ Optional<CharacterMapData> CharacterMapFile::load_from_file(const String& filena
         path = full_path.to_string();
     }
 
-    auto file = Core::File::construct(path);
-    file->open(Core::OpenMode::ReadOnly);
-    if (!file->is_open()) {
-        dbgln("Failed to open {}: {}", path, file->error_string());
-        return {};
-    }
-
+    auto file = TRY(Core::File::open(path, Core::OpenMode::ReadOnly));
     auto file_contents = file->read_all();
-    auto json_result = JsonValue::from_string(file_contents);
-    if (!json_result.has_value()) {
-        dbgln("Failed to load character map from file {}", path);
-        return {};
-    }
-    auto json = json_result.value().as_object();
+    auto json_result = TRY(JsonValue::from_string(file_contents));
+    const auto& json = json_result.as_object();
 
     Vector<u32> map = read_map(json, "map");
     Vector<u32> shift_map = read_map(json, "shift_map");
@@ -74,14 +64,14 @@ Vector<u32> CharacterMapFile::read_map(const JsonObject& json, const String& nam
     buffer.resize(CHAR_MAP_SIZE);
 
     auto map_arr = json.get(name).as_array();
-    for (int i = 0; i < map_arr.size(); i++) {
+    for (size_t i = 0; i < map_arr.size(); i++) {
         auto key_value = map_arr.at(i).as_string();
         if (key_value.length() == 0) {
             buffer[i] = 0;
         } else if (key_value.length() == 1) {
             buffer[i] = key_value.characters()[0];
         } else {
-            Utf8View m_utf8_view(key_value.characters());
+            Utf8View m_utf8_view(key_value);
             buffer[i] = *m_utf8_view.begin();
         }
     }

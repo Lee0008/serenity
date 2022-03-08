@@ -1,10 +1,11 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "ParsedCookie.h"
+#include <AK/Function.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Vector.h>
 #include <LibIPC/Decoder.h>
@@ -161,8 +162,6 @@ void on_max_age_attribute(ParsedCookie& parsed_cookie, StringView attribute_valu
 
     // Let delta-seconds be the attribute-value converted to an integer.
     if (auto delta_seconds = attribute_value.to_int(); delta_seconds.has_value()) {
-        Core::DateTime expiry_time;
-
         if (*delta_seconds <= 0) {
             // If delta-seconds is less than or equal to zero (0), let expiry-time be the earliest representable date and time.
             parsed_cookie.expiry_time_from_max_age_attribute = Core::DateTime::from_timestamp(0);
@@ -233,7 +232,7 @@ Optional<Core::DateTime> parse_date_time(StringView date_string)
     unsigned year = 0;
 
     auto to_uint = [](StringView token, unsigned& result) {
-        if (!all_of(token.begin(), token.end(), isdigit))
+        if (!all_of(token, isdigit))
             return false;
 
         if (auto converted = token.to_uint(); converted.has_value()) {
@@ -282,12 +281,12 @@ Optional<Core::DateTime> parse_date_time(StringView date_string)
         return to_uint(token, year);
     };
 
-    auto is_delimeter = [](char ch) {
+    Function<bool(char)> is_delimiter = [](char ch) {
         return ch == 0x09 || (ch >= 0x20 && ch <= 0x2f) || (ch >= 0x3b && ch <= 0x40) || (ch >= 0x5b && ch <= 0x60) || (ch >= 0x7b && ch <= 0x7e);
     };
 
     // 1. Using the grammar below, divide the cookie-date into date-tokens.
-    Vector<StringView> date_tokens = date_string.split_view_if(is_delimeter);
+    Vector<StringView> date_tokens = date_string.split_view_if(is_delimiter);
 
     // 2. Process each date-token sequentially in the order the date-tokens appear in the cookie-date.
     bool found_time = false;
@@ -349,24 +348,15 @@ bool IPC::encode(IPC::Encoder& encoder, const Web::Cookie::ParsedCookie& cookie)
     return true;
 }
 
-bool IPC::decode(IPC::Decoder& decoder, Web::Cookie::ParsedCookie& cookie)
+ErrorOr<void> IPC::decode(IPC::Decoder& decoder, Web::Cookie::ParsedCookie& cookie)
 {
-    if (!decoder.decode(cookie.name))
-        return false;
-    if (!decoder.decode(cookie.value))
-        return false;
-    if (!decoder.decode(cookie.expiry_time_from_expires_attribute))
-        return false;
-    if (!decoder.decode(cookie.expiry_time_from_max_age_attribute))
-        return false;
-    if (!decoder.decode(cookie.domain))
-        return false;
-    if (!decoder.decode(cookie.path))
-        return false;
-    if (!decoder.decode(cookie.secure_attribute_present))
-        return false;
-    if (!decoder.decode(cookie.http_only_attribute_present))
-        return false;
-
-    return true;
+    TRY(decoder.decode(cookie.name));
+    TRY(decoder.decode(cookie.value));
+    TRY(decoder.decode(cookie.expiry_time_from_expires_attribute));
+    TRY(decoder.decode(cookie.expiry_time_from_max_age_attribute));
+    TRY(decoder.decode(cookie.domain));
+    TRY(decoder.decode(cookie.path));
+    TRY(decoder.decode(cookie.secure_attribute_present));
+    TRY(decoder.decode(cookie.http_only_attribute_present));
+    return {};
 }

@@ -13,22 +13,32 @@
 
 namespace Protocol {
 class RequestClient;
+class Request;
 }
 
 namespace Web {
 
-constexpr auto default_user_agent = "Mozilla/4.0 (SerenityOS; x86) LibWeb+LibJS (Not KHTML, nor Gecko) LibWeb";
+#if ARCH(I386)
+#    define CPU_STRING "x86"
+#else
+#    define CPU_STRING "x86_64"
+#endif
+
+constexpr auto default_user_agent = "Mozilla/4.0 (SerenityOS; " CPU_STRING ") LibWeb+LibJS (Not KHTML, nor Gecko) LibWeb";
 
 class ResourceLoader : public Core::Object {
-    C_OBJECT(ResourceLoader)
+    C_OBJECT_ABSTRACT(ResourceLoader)
 public:
     static ResourceLoader& the();
 
-    RefPtr<Resource> load_resource(Resource::Type, const LoadRequest&);
+    RefPtr<Resource> load_resource(Resource::Type, LoadRequest&);
 
-    void load(const LoadRequest&, Function<void(ReadonlyBytes, const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers, Optional<u32> status_code)> success_callback, Function<void(const String&, Optional<u32> status_code)> error_callback = nullptr);
-    void load(const URL&, Function<void(ReadonlyBytes, const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers, Optional<u32> status_code)> success_callback, Function<void(const String&, Optional<u32> status_code)> error_callback = nullptr);
-    void load_sync(const LoadRequest&, Function<void(ReadonlyBytes, const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers, Optional<u32> status_code)> success_callback, Function<void(const String&, Optional<u32> status_code)> error_callback = nullptr);
+    void load(LoadRequest&, Function<void(ReadonlyBytes, const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers, Optional<u32> status_code)> success_callback, Function<void(const String&, Optional<u32> status_code)> error_callback = nullptr);
+    void load(const AK::URL&, Function<void(ReadonlyBytes, const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers, Optional<u32> status_code)> success_callback, Function<void(const String&, Optional<u32> status_code)> error_callback = nullptr);
+    void load_sync(LoadRequest&, Function<void(ReadonlyBytes, const HashMap<String, String, CaseInsensitiveStringTraits>& response_headers, Optional<u32> status_code)> success_callback, Function<void(const String&, Optional<u32> status_code)> error_callback = nullptr);
+
+    void prefetch_dns(AK::URL const&);
+    void preconnect(AK::URL const&);
 
     Function<void()> on_load_counter_change;
 
@@ -42,11 +52,14 @@ public:
     void clear_cache();
 
 private:
-    ResourceLoader();
+    ResourceLoader(NonnullRefPtr<Protocol::RequestClient> protocol_client);
+    static ErrorOr<NonnullRefPtr<ResourceLoader>> try_create();
+
     static bool is_port_blocked(int port);
 
     int m_pending_loads { 0 };
 
+    HashTable<NonnullRefPtr<Protocol::Request>> m_active_requests;
     RefPtr<Protocol::RequestClient> m_protocol_client;
     String m_user_agent;
 };

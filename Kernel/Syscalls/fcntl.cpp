@@ -5,35 +5,34 @@
  */
 
 #include <Kernel/Debug.h>
-#include <Kernel/FileSystem/FileDescription.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$fcntl(int fd, int cmd, u32 arg)
+ErrorOr<FlatPtr> Process::sys$fcntl(int fd, int cmd, u32 arg)
 {
-    REQUIRE_PROMISE(stdio);
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
+    TRY(require_promise(Pledge::stdio));
     dbgln_if(IO_DEBUG, "sys$fcntl: fd={}, cmd={}, arg={}", fd, cmd, arg);
-    auto description = file_description(fd);
-    if (!description)
-        return EBADF;
-    // NOTE: The FD flags are not shared between FileDescription objects.
+    auto description = TRY(open_file_description(fd));
+    // NOTE: The FD flags are not shared between OpenFileDescription objects.
     //       This means that dup() doesn't copy the FD_CLOEXEC flag!
     switch (cmd) {
     case F_DUPFD: {
         int arg_fd = (int)arg;
         if (arg_fd < 0)
             return EINVAL;
-        int new_fd = alloc_fd(arg_fd);
-        if (new_fd < 0)
-            return new_fd;
-        m_fds[new_fd].set(*description);
-        return new_fd;
+        return m_fds.with_exclusive([&](auto& fds) -> ErrorOr<FlatPtr> {
+            auto fd_allocation = TRY(fds.allocate(arg_fd));
+            fds[fd_allocation.fd].set(*description);
+            return fd_allocation.fd;
+        });
     }
     case F_GETFD:
-        return m_fds[fd].flags();
+        return m_fds.with_exclusive([fd](auto& fds) { return fds[fd].flags(); });
     case F_SETFD:
-        m_fds[fd].set_flags(arg);
+        m_fds.with_exclusive([fd, arg](auto& fds) { fds[fd].set_flags(arg); });
         break;
     case F_GETFL:
         return description->file_flags();
@@ -42,6 +41,12 @@ KResultOr<int> Process::sys$fcntl(int fd, int cmd, u32 arg)
         break;
     case F_ISTTY:
         return description->is_tty();
+    case F_GETLK:
+        TRY(description->get_flock(Userspace<flock*>(arg)));
+        return 0;
+    case F_SETLK:
+        TRY(description->apply_flock(Process::current(), Userspace<const flock*>(arg)));
+        return 0;
     default:
         return EINVAL;
     }

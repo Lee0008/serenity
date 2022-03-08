@@ -74,9 +74,32 @@ Date:   Mon Jan 20 22:12:04 2020 +0100
 Kernel: Add a basic implementation of unveil()
 ```
 
-### syscall call-from verification
+### Readonly atexit
 
-[syscall call-from verification](https://marc.info/?l=openbsd-tech&m=157488907117170&w=2) is
+[Readonly atexit](https://isopenbsdsecu.re/mitigations/atexit_hardening/) is a mitigation originating from OpenBSD.
+Thanks to it, an attacker can no longer use the atexit region to escalate from arbitrary-write to code-execution.
+
+It was first added in the following [commit](https://github.com/SerenityOS/serenity/commit/553361d83f7bc6499dc4821eff9b23a6549bd99c),
+and was later [improved](https://github.com/SerenityOS/serenity/commit/fb003d71c2becf0b3ea148aad08642e5a7ea35bc)
+to incur no additional cost during program initialization and finalization:
+
+```
+commit 553361d83f7bc6499dc4821eff9b23a6549bd99c
+Author: Andreas Kling <kling@serenityos.org>
+Date:   Sat Jan 30 10:34:41 2021 +0100
+
+LibC: Protect the atexit() handler list when not writing to it
+
+Remap the list of atexit handlers as read-only while we're not actively
+writing to it. This prevents an attacker from using a memory write
+primitive to gain code execution via the atexit list.
+
+This is based on a technique used in OpenBSD. :^)
+```
+
+### Syscall call-from verification
+
+[Syscall call-from verification](https://marc.info/?l=openbsd-tech&m=157488907117170&w=2) is
 a mitigation which originated from OpenBSD.
 In short the kernel checks that all syscalls originate
 from the address of the system's libc. This makes attacks
@@ -237,8 +260,57 @@ Date:   Fri Jan 1 15:27:42 2021 -0800
 
 Build + LibC: Enable -fstack-protector-strong in user space
 ```
+### Protected Kernel Process Data
+
+The kernel applies a exploit mitigation technique where vulnerable data
+related to the state of a process is separated out into it's own region
+in memory which is always remmaped as read-only after it's initialized
+or updated. This means that an attacker needs more than an arbitrary
+kernel write primitive to be able to elevate a process to root for example.
+
+It was first enabled in the following [commit](https://github.com/SerenityOS/serenity/commit/cbcf891040e9921ff628fdda668c9738f358a178):
+```
+commit cbcf891040e9921ff628fdda668c9738f358a178
+Author: Andreas Kling <kling@serenityos.org>
+Date:   Wed Mar 10 19:59:46 2021 +0100
+
+Kernel: Move select Process members into protected memory
+```
+
+### -fzero-call-used-regs
+
+GCC-11 added a new option `-fzero-call-used-regs` which causes the
+compiler to zero function arguments before return of a function. The
+goal being to reduce the possible attack surface by disarming ROP
+gadgets that might be potentially useful to attackers, and reducing
+the risk of information leaks via stale register data.
+
+It was first enabled when compiling the Kernel in the following [commit](https://github.com/SerenityOS/serenity/commit/204d5ff8f86547a8b100cf26a958aaabf49211f2):
+
+```
+commit 204d5ff8f86547a8b100cf26a958aaabf49211f2
+Author: Brian Gianforcaro <bgianf@serenityos.org>
+Date:   Fri Jul 23 00:42:54 2021 -0700
+
+Kernel: Reduce useful ROP gadgets by zeroing used function registers
+```
+
+### Linking with "separate-code"
+
+The linker is passed the `separate-code` option, so it won't combine read-only data
+and executable code. This reduces the total amount of executable pages in the system.
+
+It was first enabled in the following [commit](https://github.com/SerenityOS/serenity/commit/fac0bbe739154abb416526bdc983487c05ba0c81):
+
+```
+commit fac0bbe739154abb416526bdc983487c05ba0c81
+Author: Andreas Kling <kling@serenityos.org>
+Date:   Tue Aug 31 16:08:11 2021 +0200
+
+Build: Pass "-z separate-code" to linker
+```
 
 ## See also
 
-* [`unveil`(2)](../man2/unveil.md)
-* [`pledge`(2)](../man2/pledge.md)
+* [`unveil`(2)](help://man/2/unveil)
+* [`pledge`(2)](help://man/2/pledge)

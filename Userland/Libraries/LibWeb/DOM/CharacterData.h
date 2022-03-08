@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/String.h>
+#include <LibWeb/DOM/ChildNode.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/NonDocumentTypeChildNode.h>
 
@@ -14,6 +15,7 @@ namespace Web::DOM {
 
 class CharacterData
     : public Node
+    , public ChildNode<CharacterData>
     , public NonDocumentTypeChildNode<CharacterData> {
 public:
     using WrapperType = Bindings::CharacterDataWrapper;
@@ -24,8 +26,6 @@ public:
     void set_data(String);
 
     unsigned length() const { return m_data.length(); }
-
-    virtual String text_content() const override { return m_data; }
 
 protected:
     explicit CharacterData(Document&, NodeType, const String&);

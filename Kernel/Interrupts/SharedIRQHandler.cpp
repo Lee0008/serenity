@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/Arch/x86/CPU.h>
 #include <Kernel/Assertions.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Interrupts/IRQHandler.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
 #include <Kernel/Interrupts/PIC.h>
 #include <Kernel/Interrupts/SharedIRQHandler.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
@@ -24,13 +24,13 @@ UNMAP_AFTER_INIT void SharedIRQHandler::initialize(u8 interrupt_number)
 void SharedIRQHandler::register_handler(GenericInterruptHandler& handler)
 {
     dbgln_if(INTERRUPT_DEBUG, "Interrupt Handler registered @ Shared Interrupt Handler {}", interrupt_number());
-    m_handlers.set(&handler);
+    m_handlers.append(handler);
     enable_interrupt_vector();
 }
 void SharedIRQHandler::unregister_handler(GenericInterruptHandler& handler)
 {
     dbgln_if(INTERRUPT_DEBUG, "Interrupt Handler unregistered @ Shared Interrupt Handler {}", interrupt_number());
-    m_handlers.remove(&handler);
+    m_handlers.remove(handler);
     if (m_handlers.is_empty())
         disable_interrupt_vector();
 }
@@ -40,6 +40,13 @@ bool SharedIRQHandler::eoi()
     dbgln_if(INTERRUPT_DEBUG, "EOI IRQ {}", interrupt_number());
     m_responsible_irq_controller->eoi(*this);
     return true;
+}
+
+void SharedIRQHandler::enumerate_handlers(Function<void(GenericInterruptHandler&)>& callback)
+{
+    for (auto& handler : m_handlers) {
+        callback(handler);
+    }
 }
 
 SharedIRQHandler::SharedIRQHandler(u8 irq)
@@ -55,24 +62,26 @@ SharedIRQHandler::~SharedIRQHandler()
     disable_interrupt_vector();
 }
 
-void SharedIRQHandler::handle_interrupt(const RegisterState& regs)
+bool SharedIRQHandler::handle_interrupt(const RegisterState& regs)
 {
     VERIFY_INTERRUPTS_DISABLED();
 
     if constexpr (INTERRUPT_DEBUG) {
         dbgln("Interrupt @ {}", interrupt_number());
-        dbgln("Interrupt Handlers registered - {}", m_handlers.size());
+        dbgln("Interrupt Handlers registered - {}", m_handlers.size_slow());
     }
-
     int i = 0;
-    for (auto* handler : m_handlers) {
+    bool was_handled = false;
+    for (auto& handler : m_handlers) {
         dbgln_if(INTERRUPT_DEBUG, "Going for Interrupt Handling @ {}, Shared Interrupt {}", i, interrupt_number());
-        VERIFY(handler != nullptr);
-        handler->increment_invoking_counter();
-        handler->handle_interrupt(regs);
+        if (handler.handle_interrupt(regs)) {
+            handler.increment_invoking_counter();
+            was_handled = true;
+        }
         dbgln_if(INTERRUPT_DEBUG, "Going for Interrupt Handling @ {}, Shared Interrupt {} - End", i, interrupt_number());
         i++;
     }
+    return was_handled;
 }
 
 void SharedIRQHandler::enable_interrupt_vector()

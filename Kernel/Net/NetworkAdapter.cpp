@@ -4,22 +4,18 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/HashTable.h>
-#include <AK/Singleton.h>
-#include <AK/StringBuilder.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Heap/kmalloc.h>
-#include <Kernel/Lock.h>
 #include <Kernel/Net/EtherType.h>
-#include <Kernel/Net/LoopbackAdapter.h>
 #include <Kernel/Net/NetworkAdapter.h>
 #include <Kernel/Net/NetworkingManagement.h>
 #include <Kernel/Process.h>
-#include <Kernel/Random.h>
 #include <Kernel/StdLib.h>
 
 namespace Kernel {
 
-NetworkAdapter::NetworkAdapter()
+NetworkAdapter::NetworkAdapter(NonnullOwnPtr<KString> interface_name)
+    : m_name(move(interface_name))
 {
 }
 
@@ -37,8 +33,12 @@ void NetworkAdapter::send_packet(ReadonlyBytes packet)
 void NetworkAdapter::send(const MACAddress& destination, const ARPPacket& packet)
 {
     size_t size_in_bytes = sizeof(EthernetFrameHeader) + sizeof(ARPPacket);
-    auto buffer = NetworkByteBuffer::create_zeroed(size_in_bytes);
-    auto* eth = (EthernetFrameHeader*)buffer.data();
+    auto buffer_result = NetworkByteBuffer::create_zeroed(size_in_bytes);
+    if (buffer_result.is_error()) {
+        dbgln("Dropping ARP packet targeted at {} as there is not enough memory to buffer it", packet.target_hardware_address().to_string());
+        return;
+    }
+    auto* eth = (EthernetFrameHeader*)buffer_result.value().data();
     eth->set_source(mac_address());
     eth->set_destination(destination);
     eth->set_ether_type(EtherType::ARP);
@@ -46,21 +46,22 @@ void NetworkAdapter::send(const MACAddress& destination, const ARPPacket& packet
     send_packet({ (const u8*)eth, size_in_bytes });
 }
 
-void NetworkAdapter::fill_in_ipv4_header(PacketWithTimestamp& packet, IPv4Address const& source_ipv4, MACAddress const& destination_mac, IPv4Address const& destination_ipv4, IPv4Protocol protocol, size_t payload_size, u8 ttl)
+void NetworkAdapter::fill_in_ipv4_header(PacketWithTimestamp& packet, IPv4Address const& source_ipv4, MACAddress const& destination_mac, IPv4Address const& destination_ipv4, IPv4Protocol protocol, size_t payload_size, u8 type_of_service, u8 ttl)
 {
     size_t ipv4_packet_size = sizeof(IPv4Packet) + payload_size;
     VERIFY(ipv4_packet_size <= mtu());
 
     size_t ethernet_frame_size = ipv4_payload_offset() + payload_size;
-    VERIFY(packet.buffer.size() == ethernet_frame_size);
-    memset(packet.buffer.data(), 0, ipv4_payload_offset());
-    auto& eth = *(EthernetFrameHeader*)packet.buffer.data();
+    VERIFY(packet.buffer->size() == ethernet_frame_size);
+    memset(packet.buffer->data(), 0, ipv4_payload_offset());
+    auto& eth = *(EthernetFrameHeader*)packet.buffer->data();
     eth.set_source(mac_address());
     eth.set_destination(destination_mac);
     eth.set_ether_type(EtherType::IPv4);
     auto& ipv4 = *(IPv4Packet*)eth.payload();
     ipv4.set_version(4);
     ipv4.set_internet_header_length(5);
+    ipv4.set_dscp_and_ecn(type_of_service);
     ipv4.set_source(source_ipv4);
     ipv4.set_destination(destination_ipv4);
     ipv4.set_protocol((u8)protocol);
@@ -87,7 +88,7 @@ void NetworkAdapter::did_receive(ReadonlyBytes payload)
         return;
     }
 
-    memcpy(packet->buffer.data(), payload.data(), payload.size());
+    memcpy(packet->buffer->data(), payload.data(), payload.size());
 
     m_packet_queue.append(*packet);
     m_packet_queue_size++;
@@ -105,9 +106,9 @@ size_t NetworkAdapter::dequeue_packet(u8* buffer, size_t buffer_size, Time& pack
     m_packet_queue_size--;
     packet_timestamp = packet_with_timestamp->timestamp;
     auto& packet_buffer = packet_with_timestamp->buffer;
-    size_t packet_size = packet_buffer.size();
+    size_t packet_size = packet_buffer->size();
     VERIFY(packet_size <= buffer_size);
-    memcpy(buffer, packet_buffer.data(), packet_size);
+    memcpy(buffer, packet_buffer->data(), packet_size);
     release_packet_buffer(*packet_with_timestamp);
     return packet_size;
 }
@@ -116,26 +117,31 @@ RefPtr<PacketWithTimestamp> NetworkAdapter::acquire_packet_buffer(size_t size)
 {
     InterruptDisabler disabler;
     if (m_unused_packets.is_empty()) {
-        auto buffer = KBuffer::create_with_size(size, Region::Access::Read | Region::Access::Write, "Packet Buffer", AllocationStrategy::AllocateNow);
-        auto packet = adopt_ref_if_nonnull(new PacketWithTimestamp { move(buffer), kgettimeofday() });
+        auto buffer_or_error = KBuffer::try_create_with_size(size, Memory::Region::Access::ReadWrite, "Packet Buffer", AllocationStrategy::AllocateNow);
+        if (buffer_or_error.is_error())
+            return {};
+        auto buffer = buffer_or_error.release_value();
+        auto packet = adopt_ref_if_nonnull(new (nothrow) PacketWithTimestamp { move(buffer), kgettimeofday() });
         if (!packet)
-            return nullptr;
-        packet->buffer.set_size(size);
+            return {};
+        packet->buffer->set_size(size);
         return packet;
     }
 
     auto packet = m_unused_packets.take_first();
-    if (packet->buffer.capacity() >= size) {
+    if (packet->buffer->capacity() >= size) {
         packet->timestamp = kgettimeofday();
-        packet->buffer.set_size(size);
+        packet->buffer->set_size(size);
         return packet;
     }
 
-    auto buffer = KBuffer::create_with_size(size, Region::Access::Read | Region::Access::Write, "Packet Buffer", AllocationStrategy::AllocateNow);
-    packet = adopt_ref_if_nonnull(new PacketWithTimestamp { move(buffer), kgettimeofday() });
+    auto buffer_or_error = KBuffer::try_create_with_size(size, Memory::Region::Access::ReadWrite, "Packet Buffer", AllocationStrategy::AllocateNow);
+    if (buffer_or_error.is_error())
+        return {};
+    packet = adopt_ref_if_nonnull(new (nothrow) PacketWithTimestamp { buffer_or_error.release_value(), kgettimeofday() });
     if (!packet)
-        return nullptr;
-    packet->buffer.set_size(size);
+        return {};
+    packet->buffer->set_size(size);
     return packet;
 }
 
@@ -160,18 +166,4 @@ void NetworkAdapter::set_ipv4_gateway(const IPv4Address& gateway)
     m_ipv4_gateway = gateway;
 }
 
-void NetworkAdapter::set_interface_name(const PCI::Address& pci_address)
-{
-    // Note: This stands for e - "Ethernet", p - "Port" as for PCI bus, "s" for slot as for PCI slot
-    auto name = String::formatted("ep{}s{}", pci_address.bus(), pci_address.device());
-    VERIFY(!NetworkingManagement::the().lookup_by_name(name));
-    m_name = move(name);
-}
-
-void NetworkAdapter::set_loopback_name()
-{
-    auto name = String("loop");
-    VERIFY(!NetworkingManagement::the().lookup_by_name(name));
-    m_name = move(name);
-}
 }

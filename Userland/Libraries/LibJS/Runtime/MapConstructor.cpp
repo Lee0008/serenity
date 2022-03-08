@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/IteratorOperations.h>
@@ -13,7 +14,7 @@
 namespace JS {
 
 MapConstructor::MapConstructor(GlobalObject& global_object)
-    : NativeFunction(vm().names.Map, *global_object.function_prototype())
+    : NativeFunction(vm().names.Map.as_string(), *global_object.function_prototype())
 {
 }
 
@@ -23,11 +24,11 @@ void MapConstructor::initialize(GlobalObject& global_object)
     NativeFunction::initialize(global_object);
 
     // 24.1.2.1 Map.prototype, https://tc39.es/ecma262/#sec-map.prototype
-    define_property(vm.names.prototype, global_object.map_prototype(), 0);
+    define_direct_property(vm.names.prototype, global_object.map_prototype(), 0);
 
-    define_property(vm.names.length, Value(0), Attribute::Configurable);
+    define_native_accessor(*vm.well_known_symbol_species(), symbol_species_getter, {}, Attribute::Configurable);
 
-    define_native_accessor(vm.well_known_symbol_species(), symbol_species_getter, {}, Attribute::Configurable);
+    define_direct_property(vm.names.length, Value(0), Attribute::Configurable);
 }
 
 MapConstructor::~MapConstructor()
@@ -35,53 +36,43 @@ MapConstructor::~MapConstructor()
 }
 
 // 24.1.1.1 Map ( [ iterable ] ), https://tc39.es/ecma262/#sec-map-iterable
-Value MapConstructor::call()
+ThrowCompletionOr<Value> MapConstructor::call()
 {
     auto& vm = this->vm();
-    vm.throw_exception<TypeError>(global_object(), ErrorType::ConstructorWithoutNew, vm.names.Map);
-    return {};
+    return vm.throw_completion<TypeError>(global_object(), ErrorType::ConstructorWithoutNew, vm.names.Map);
 }
 
 // 24.1.1.1 Map ( [ iterable ] ), https://tc39.es/ecma262/#sec-map-iterable
-Value MapConstructor::construct(Function&)
+ThrowCompletionOr<Object*> MapConstructor::construct(FunctionObject& new_target)
 {
     auto& vm = this->vm();
+    auto& global_object = this->global_object();
 
-    // FIXME: Use OrdinaryCreateFromConstructor(newTarget, "%Map.prototype%")
-    auto* map = Map::create(global_object());
+    auto* map = TRY(ordinary_create_from_constructor<Map>(global_object, new_target, &GlobalObject::map_prototype));
+
     if (vm.argument(0).is_nullish())
         return map;
 
-    auto adder = map->get(vm.names.set);
-    if (vm.exception())
+    auto adder = TRY(map->get(vm.names.set));
+    if (!adder.is_function())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAFunction, "'set' property of Map");
+
+    (void)TRY(get_iterator_values(global_object, vm.argument(0), [&](Value iterator_value) -> Optional<Completion> {
+        if (!iterator_value.is_object())
+            return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObject, String::formatted("Iterator value {}", iterator_value.to_string_without_side_effects()));
+
+        auto key = TRY(iterator_value.as_object().get(0));
+        auto value = TRY(iterator_value.as_object().get(1));
+        TRY(JS::call(global_object, adder.as_function(), map, key, value));
+
         return {};
-    if (!adder.is_function()) {
-        vm.throw_exception<TypeError>(global_object(), ErrorType::NotAFunction, "'set' property of Map");
-        return {};
-    }
-    get_iterator_values(global_object(), vm.argument(0), [&](Value iterator_value) {
-        if (vm.exception())
-            return IterationDecision::Break;
-        if (!iterator_value.is_object()) {
-            vm.throw_exception<TypeError>(global_object(), ErrorType::NotAnObject, String::formatted("Iterator value {}", iterator_value.to_string_without_side_effects()));
-            return IterationDecision::Break;
-        }
-        auto key = iterator_value.as_object().get(0).value_or(js_undefined());
-        if (vm.exception())
-            return IterationDecision::Break;
-        auto value = iterator_value.as_object().get(1).value_or(js_undefined());
-        if (vm.exception())
-            return IterationDecision::Break;
-        (void)vm.call(adder.as_function(), Value(map), key, value);
-        return vm.exception() ? IterationDecision::Break : IterationDecision::Continue;
-    });
-    if (vm.exception())
-        return {};
+    }));
+
     return map;
 }
 
 // 24.1.2.2 get Map [ @@species ], https://tc39.es/ecma262/#sec-get-map-@@species
-JS_DEFINE_NATIVE_GETTER(MapConstructor::symbol_species_getter)
+JS_DEFINE_NATIVE_FUNCTION(MapConstructor::symbol_species_getter)
 {
     return vm.this_value(global_object);
 }

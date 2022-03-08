@@ -17,10 +17,10 @@
 
 extern "C" {
 
-extern u32 __stack_chk_guard;
-u32 __stack_chk_guard = (u32)0xc6c7c8c9;
+extern size_t __stack_chk_guard;
+__attribute__((used)) size_t __stack_chk_guard = (size_t)0xc6c7c8c9;
 
-[[noreturn]] void __stack_chk_fail()
+__attribute__((noreturn)) void __stack_chk_fail()
 {
     dbgln("Error: USERSPACE({}) Stack protector failure, stack smashing detected!", getpid());
     if (__stdio_is_initialized)
@@ -28,7 +28,7 @@ u32 __stack_chk_guard = (u32)0xc6c7c8c9;
     abort();
 }
 
-[[noreturn]] void __stack_chk_fail_local()
+__attribute__((noreturn)) void __stack_chk_fail_local()
 {
     __stack_chk_fail();
 }

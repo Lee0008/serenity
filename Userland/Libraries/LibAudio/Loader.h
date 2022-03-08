@@ -6,71 +6,81 @@
 
 #pragma once
 
-#include <AK/ByteBuffer.h>
+#include <AK/NonnullOwnPtr.h>
+#include <AK/NonnullRefPtr.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
+#include <AK/Result.h>
+#include <AK/Span.h>
 #include <AK/StringView.h>
+#include <AK/Try.h>
 #include <LibAudio/Buffer.h>
+#include <LibAudio/LoaderError.h>
 #include <LibCore/File.h>
 
 namespace Audio {
+
+static const String empty_string = "";
+static String no_plugin_error = "No loader plugin available";
+
+using LoaderSamples = Result<NonnullRefPtr<Buffer>, LoaderError>;
+using MaybeLoaderError = Result<void, LoaderError>;
 
 class LoaderPlugin {
 public:
     virtual ~LoaderPlugin() { }
 
-    virtual bool sniff() = 0;
+    virtual MaybeLoaderError initialize() = 0;
 
-    virtual bool has_error() { return false; }
-    virtual const char* error_string() { return ""; }
+    virtual LoaderSamples get_more_samples(size_t max_bytes_to_read_from_input = 128 * KiB) = 0;
 
-    virtual RefPtr<Buffer> get_more_samples(size_t max_bytes_to_read_from_input = 128 * KiB) = 0;
+    virtual MaybeLoaderError reset() = 0;
 
-    virtual void reset() = 0;
+    virtual MaybeLoaderError seek(const int sample_index) = 0;
 
-    virtual void seek(const int sample_index) = 0;
-
+    // total_samples() and loaded_samples() should be independent
+    // of the number of channels.
+    //
+    // For example, with a three-second-long, stereo, 44.1KHz audio file:
+    //    num_channels() should return 2
+    //    sample_rate() should return 44100 (each channel is sampled at this rate)
+    //    total_samples() should return 132300 (sample_rate * three seconds)
     virtual int loaded_samples() = 0;
     virtual int total_samples() = 0;
     virtual u32 sample_rate() = 0;
     virtual u16 num_channels() = 0;
+
+    // Human-readable name of the file format, of the form <full abbreviation> (.<ending>)
+    virtual String format_name() = 0;
     virtual PcmSampleFormat pcm_format() = 0;
     virtual RefPtr<Core::File> file() = 0;
 };
 
 class Loader : public RefCounted<Loader> {
 public:
-    static NonnullRefPtr<Loader> create(const StringView& path) { return adopt_ref(*new Loader(path)); }
-    static NonnullRefPtr<Loader> create(const ByteBuffer& buffer) { return adopt_ref(*new Loader(buffer)); }
+    static Result<NonnullRefPtr<Loader>, LoaderError> create(StringView path) { return adopt_ref(*new Loader(TRY(try_create(path)))); }
+    static Result<NonnullRefPtr<Loader>, LoaderError> create(Bytes& buffer) { return adopt_ref(*new Loader(TRY(try_create(buffer)))); }
 
-    bool has_error() const { return m_plugin ? m_plugin->has_error() : true; }
-    const char* error_string() const { return m_plugin ? m_plugin->error_string() : "No loader plugin available"; }
+    LoaderSamples get_more_samples(size_t max_bytes_to_read_from_input = 128 * KiB) const { return m_plugin->get_more_samples(max_bytes_to_read_from_input); }
 
-    RefPtr<Buffer> get_more_samples(size_t max_bytes_to_read_from_input = 128 * KiB) const { return m_plugin ? m_plugin->get_more_samples(max_bytes_to_read_from_input) : nullptr; }
+    MaybeLoaderError reset() const { return m_plugin->reset(); }
+    MaybeLoaderError seek(const int position) const { return m_plugin->seek(position); }
 
-    void reset() const
-    {
-        if (m_plugin)
-            m_plugin->reset();
-    }
-    void seek(const int position) const
-    {
-        if (m_plugin)
-            m_plugin->seek(position);
-    }
-
-    int loaded_samples() const { return m_plugin ? m_plugin->loaded_samples() : 0; }
-    int total_samples() const { return m_plugin ? m_plugin->total_samples() : 0; }
-    u32 sample_rate() const { return m_plugin ? m_plugin->sample_rate() : 0; }
-    u16 num_channels() const { return m_plugin ? m_plugin->num_channels() : 0; }
-    u16 bits_per_sample() const { return m_plugin ? pcm_bits_per_sample(m_plugin->pcm_format()) : 0; }
-    RefPtr<Core::File> file() const { return m_plugin ? m_plugin->file() : nullptr; }
+    int loaded_samples() const { return m_plugin->loaded_samples(); }
+    int total_samples() const { return m_plugin->total_samples(); }
+    u32 sample_rate() const { return m_plugin->sample_rate(); }
+    u16 num_channels() const { return m_plugin->num_channels(); }
+    String format_name() const { return m_plugin->format_name(); }
+    u16 bits_per_sample() const { return pcm_bits_per_sample(m_plugin->pcm_format()); }
+    RefPtr<Core::File> file() const { return m_plugin->file(); }
 
 private:
-    Loader(const StringView& path);
-    Loader(const ByteBuffer& buffer);
+    static Result<NonnullOwnPtr<LoaderPlugin>, LoaderError> try_create(StringView path);
+    static Result<NonnullOwnPtr<LoaderPlugin>, LoaderError> try_create(Bytes& buffer);
 
-    mutable OwnPtr<LoaderPlugin> m_plugin;
+    explicit Loader(NonnullOwnPtr<LoaderPlugin>);
+
+    mutable NonnullOwnPtr<LoaderPlugin> m_plugin;
 };
 
 }

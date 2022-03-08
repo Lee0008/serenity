@@ -19,7 +19,16 @@ public:
     {
         for (auto* sibling = static_cast<NodeType*>(this)->previous_sibling(); sibling; sibling = sibling->previous_sibling()) {
             if (is<Element>(*sibling))
-                return downcast<Element>(sibling);
+                return verify_cast<Element>(sibling);
+        }
+        return nullptr;
+    }
+
+    Element* previous_element_in_pre_order()
+    {
+        for (auto* node = static_cast<NodeType*>(this)->previous_in_pre_order(); node; node = node->previous_in_pre_order()) {
+            if (is<Element>(*node))
+                return verify_cast<Element>(node);
         }
         return nullptr;
     }
@@ -28,7 +37,7 @@ public:
     {
         for (auto* sibling = static_cast<NodeType*>(this)->next_sibling(); sibling; sibling = sibling->next_sibling()) {
             if (is<Element>(*sibling))
-                return downcast<Element>(sibling);
+                return verify_cast<Element>(sibling);
         }
         return nullptr;
     }
@@ -37,17 +46,18 @@ public:
     {
         for (auto* node = static_cast<NodeType*>(this)->next_in_pre_order(); node; node = node->next_in_pre_order()) {
             if (is<Element>(*node))
-                return downcast<Element>(node);
+                return verify_cast<Element>(node);
         }
         return nullptr;
     }
 
     const Element* previous_element_sibling() const { return const_cast<NonDocumentTypeChildNode*>(this)->previous_element_sibling(); }
+    const Element* previous_element_in_pre_order() const { return const_cast<NonDocumentTypeChildNode*>(this)->previous_element_in_pre_order(); }
     const Element* next_element_sibling() const { return const_cast<NonDocumentTypeChildNode*>(this)->next_element_sibling(); }
     const Element* next_element_in_pre_order() const { return const_cast<NonDocumentTypeChildNode*>(this)->next_element_in_pre_order(); }
 
 protected:
-    NonDocumentTypeChildNode() { }
+    NonDocumentTypeChildNode() = default;
 };
 
 }

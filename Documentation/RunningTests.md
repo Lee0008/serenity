@@ -12,17 +12,13 @@ command used to initialize the build directory.
 For a full build, pass `-DBUILD_LAGOM=ON` to the CMake command.
 
 ```sh
-mkdir -p Build/lagom
-cd Build/lagom
-cmake ../.. -GNinja -DBUILD_LAGOM=ON
+cmake -GNinja -S Meta/CMake/Superbuild -B Build/superbuild-i686 -DBUILD_LAGOM=ON
 ```
 
 For a Lagom-only build, pass the Lagom directory to CMake. The `BUILD_LAGOM` CMake option is still required.
 
 ```sh
-mkdir BuildLagom
-cd BuildLagom
-cmake ../Meta/Lagom -GNinja -DBUILD_LAGOM=ON
+cmake -GNinja -S Meta/Lagom -B Build/lagom -DBUILD_LAGOM=ON
 ```
 
 In both cases, the tests can be run via ninja after doing a build. Note that `test-js` requires the `SERENITY_SOURCE_DIR` environment variable to be set
@@ -30,8 +26,9 @@ to the root of the serenity source tree when running on a non-SerenityOS host.
 
 ```sh
 # /path/to/serenity repository
-export SERENITY_SOURCE_DIR=${PWD}/..
-ninja && ninja test
+export SERENITY_SOURCE_DIR=${PWD}
+cd Build/lagom
+ninja test
 ```
 
 To see the stdout/stderr output of failing tests, the recommended way is to set the environment variable [`CTEST_OUTPUT_ON_FAILURE`](https://cmake.org/cmake/help/latest/manual/ctest.1.html#options) to 1.
@@ -50,16 +47,14 @@ classes of common C++ errors, including memory leaks, out of bounds access to st
 signed integer overflow. For more info on the sanitizers, check out the Address Sanitizer [wiki page](https://github.com/google/sanitizers/wiki),
 or the Undefined Sanitizer [documentation](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) from clang.
 
-Note that a sanitizer build will take significantly longer than a non-santizer build, and will mess with caches in tools such as `ccache`.
-The sanitizers can be enabled with the `-DENABLE_FOO_SANITIZER` set of flags. Sanitizers are only supported for Lagom tests, as SerenityOS support
-for gcc's `libsanitizer` is not yet implemented.
+Note that a sanitizer build will take significantly longer than a non-sanitizer build, and will mess with caches in tools such as `ccache`.
+The sanitizers can be enabled with the `-DENABLE_FOO_SANITIZER` set of flags. For the Serenity target, only the Undefined Sanitizers is supported.
 
 ```sh
-mkdir BuildLagom
-cd BuildLagom
-cmake ../Meta/Lagom -GNinja -DBUILD_LAGOM=ON -DENABLE_ADDRESS_SANITIZER=ON -DENABLE_UNDEFINED_SANITIZER=ON
+cmake -GNinja -S Meta/Lagom -B Build/lagom -DBUILD_LAGOM=ON -DENABLE_ADDRESS_SANITIZER=ON -DENABLE_UNDEFINED_SANITIZER=ON
+cd Build/lagom
 ninja
-CTEST_OUTPUT_ON_FAILURE=1 SERENITY_SOURCE_DIR=${PWD}/.. ninja test
+CTEST_OUTPUT_ON_FAILURE=1 SERENITY_SOURCE_DIR=${PWD}/../.. ninja test
 ```
 
 To ensure that Undefined Sanitizer errors fail the test, the `halt_on_error` flag should be set to 1 in the environment variable `UBSAN_OPTIONS`.
@@ -80,9 +75,9 @@ will run `shutdown -n` after running all the tests.
 For completeness, a basic on-target test run will need the SerenityOS image built and run via QEMU.
 
 ```sh
-mkdir Build/i686
+cmake -GNinja -S Meta/CMake/Superbuild -B Build/superbuild-i686
+cmake --build Build/superbuild-i686
 cd Build/i686
-cmake ../.. -GNinja
 ninja install && ninja image && ninja run
 ```
 
@@ -103,10 +98,10 @@ The system server entry looks as below:
 [TestRunner@ttyS0]
 Executable=/home/anon/tests/run-tests-and-shutdown.sh
 StdIO=/dev/ttyS0
-Environment=DO_SHUTDOWN_AFTER_TESTS=1 TERM=xterm PATH=/bin:/usr/bin:/usr/local/bin
+Environment=DO_SHUTDOWN_AFTER_TESTS=1 TERM=xterm PATH=/usr/local/bin:/usr/bin:/bin
 User=anon
 WorkingDirectory=/home/anon
-BootModes=self-test
+SystemModes=self-test
 ```
 
 `/dev/ttyS0` is used as stdio because that serial port is connected when qemu is run with `-display none` and
@@ -115,10 +110,11 @@ the serial debug output to `./debug.log` so that both stdout of the tests and th
 captured.
 
 To run with CI's TestRunner system server entry, SerenityOS needs booted in self-test mode. Running the following shell
-lines will boot SerenityOS in self-test mode, run tests, and exit.
+lines will boot SerenityOS in self-test mode, run tests, and exit. Note that CI also sets `panic=shutdown` to terminate qemu;
+the default value `halt` keeps qemu around, which allows you to inspect the state.
 
 ```sh
 export SERENITY_RUN=ci
-export SERENITY_KERNEL_CMDLINE="boot_mode=self-test"
+export SERENITY_KERNEL_CMDLINE="fbdev=off system_mode=self-test"
 ninja run
 ```

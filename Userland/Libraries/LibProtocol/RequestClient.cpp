@@ -10,9 +10,14 @@
 
 namespace Protocol {
 
-RequestClient::RequestClient()
-    : IPC::ServerConnection<RequestClientEndpoint, RequestServerEndpoint>(*this, "/tmp/portal/request")
+RequestClient::RequestClient(NonnullOwnPtr<Core::Stream::LocalSocket> socket)
+    : IPC::ConnectionToServer<RequestClientEndpoint, RequestServerEndpoint>(*this, move(socket))
 {
+}
+
+void RequestClient::ensure_connection(URL const& url, ::RequestServer::CacheLevel cache_level)
+{
+    async_ensure_connection(url, cache_level);
 }
 
 template<typename RequestHashMapTraits>
@@ -22,7 +27,11 @@ RefPtr<Request> RequestClient::start_request(String const& method, URL const& ur
     for (auto& it : request_headers)
         header_dictionary.add(it.key, it.value);
 
-    auto response = IPCProxy::start_request(method, url, header_dictionary, ByteBuffer::copy(request_body));
+    auto body_result = ByteBuffer::copy(request_body);
+    if (body_result.is_error())
+        return nullptr;
+
+    auto response = IPCProxy::start_request(method, url, header_dictionary, body_result.release_value());
     auto request_id = response.request_id();
     if (request_id < 0 || !response.response_fd().has_value())
         return nullptr;

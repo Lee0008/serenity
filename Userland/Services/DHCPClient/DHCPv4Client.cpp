@@ -10,6 +10,7 @@
 #include <AK/JsonObject.h>
 #include <AK/JsonParser.h>
 #include <AK/Random.h>
+#include <AK/Try.h>
 #include <LibCore/File.h>
 #include <LibCore/Timer.h>
 #include <stdio.h>
@@ -161,20 +162,16 @@ void DHCPv4Client::try_discover_ifs()
     }
 }
 
-Result<DHCPv4Client::Interfaces, String> DHCPv4Client::get_discoverable_interfaces()
+ErrorOr<DHCPv4Client::Interfaces> DHCPv4Client::get_discoverable_interfaces()
 {
-    auto file = Core::File::construct("/proc/net/adapters");
-    if (!file->open(Core::OpenMode::ReadOnly)) {
-        dbgln("Error: Failed to open /proc/net/adapters: {}", file->error_string());
-        return String { file->error_string() };
-    }
+    auto file = TRY(Core::File::open("/proc/net/adapters", Core::OpenMode::ReadOnly));
 
     auto file_contents = file->read_all();
     auto json = JsonValue::from_string(file_contents);
 
-    if (!json.has_value() || !json.value().is_array()) {
+    if (json.is_error() || !json.value().is_array()) {
         dbgln("Error: No network adapters available");
-        return String { "No network adapters available" };
+        return Error::from_string_literal("No network adapters available"sv);
     }
 
     Vector<InterfaceDescriptor> ifnames_to_immediately_discover, ifnames_to_attempt_later;
@@ -246,7 +243,7 @@ void DHCPv4Client::handle_ack(const DHCPv4Packet& packet, const ParsedDHCPv4Opti
     interface.current_ip_address = new_ip;
     auto lease_time = AK::convert_between_host_and_network_endian(options.get<u32>(DHCPOption::IPAddressLeaseTime).value_or(transaction->offered_lease_time));
     // set a timer for the duration of the lease, we shall renew if needed
-    Core::Timer::create_single_shot(
+    (void)Core::Timer::create_single_shot(
         lease_time * 1000,
         [this, transaction, interface = InterfaceDescriptor { interface }] {
             transaction->accepted_offer = false;
@@ -270,7 +267,7 @@ void DHCPv4Client::handle_nak(const DHCPv4Packet& packet, const ParsedDHCPv4Opti
     transaction->accepted_offer = false;
     transaction->has_ip = false;
     auto& iface = transaction->interface;
-    Core::Timer::create_single_shot(
+    (void)Core::Timer::create_single_shot(
         10000,
         [this, iface = InterfaceDescriptor { iface }] {
             dhcp_discover(iface);

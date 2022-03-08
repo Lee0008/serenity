@@ -20,6 +20,7 @@ namespace ELF {
 class DynamicObject : public RefCounted<DynamicObject> {
 public:
     static NonnullRefPtr<DynamicObject> create(const String& filename, VirtualAddress base_address, VirtualAddress dynamic_section_address);
+    static const char* name_for_dtag(ElfW(Sword) d_tag);
 
     ~DynamicObject();
     void dump() const;
@@ -38,7 +39,7 @@ public:
         {
         }
 
-        ~DynamicEntry() { }
+        ~DynamicEntry() = default;
 
         ElfW(Sword) tag() const { return m_dyn.d_tag; }
         ElfW(Addr) ptr() const { return m_dyn.d_un.d_ptr; }
@@ -60,13 +61,27 @@ public:
         StringView name() const { return m_dynamic.symbol_string_table_string(m_sym.st_name); }
         const char* raw_name() const { return m_dynamic.raw_symbol_string_table_string(m_sym.st_name); }
         unsigned section_index() const { return m_sym.st_shndx; }
-        unsigned value() const { return m_sym.st_value; }
-        unsigned size() const { return m_sym.st_size; }
+        FlatPtr value() const { return m_sym.st_value; }
+        size_t size() const { return m_sym.st_size; }
         unsigned index() const { return m_index; }
-        unsigned type() const { return ELF32_ST_TYPE(m_sym.st_info); }
+#if ARCH(I386)
+        unsigned type() const
+        {
+            return ELF32_ST_TYPE(m_sym.st_info);
+        }
         unsigned bind() const { return ELF32_ST_BIND(m_sym.st_info); }
+#else
+        unsigned type() const
+        {
+            return ELF64_ST_TYPE(m_sym.st_info);
+        }
+        unsigned bind() const { return ELF64_ST_BIND(m_sym.st_info); }
+#endif
 
-        bool is_undefined() const { return section_index() == 0; }
+        bool is_undefined() const
+        {
+            return section_index() == 0;
+        }
 
         VirtualAddress address() const
         {
@@ -84,7 +99,7 @@ public:
 
     class Section {
     public:
-        Section(const DynamicObject& dynamic, unsigned section_offset, unsigned section_size_bytes, unsigned entry_size, const StringView& name)
+        Section(const DynamicObject& dynamic, unsigned section_offset, unsigned section_size_bytes, unsigned entry_size, StringView name)
             : m_dynamic(dynamic)
             , m_section_offset(section_offset)
             , m_section_size_bytes(section_size_bytes)
@@ -119,8 +134,9 @@ public:
 
     class RelocationSection : public Section {
     public:
-        explicit RelocationSection(const Section& section)
+        explicit RelocationSection(const Section& section, bool addend_used)
             : Section(section.m_dynamic, section.m_section_offset, section.m_section_size_bytes, section.m_entry_size, section.m_name)
+            , m_addend_used(addend_used)
         {
         }
         unsigned relocation_count() const { return entry_count(); }
@@ -131,35 +147,62 @@ public:
         void for_each_relocation(F) const;
         template<VoidFunction<DynamicObject::Relocation&> F>
         void for_each_relocation(F func) const;
+
+    private:
+        const bool m_addend_used;
     };
 
     class Relocation {
     public:
-        Relocation(const DynamicObject& dynamic, const ElfW(Rel) & rel, unsigned offset_in_section)
+        Relocation(const DynamicObject& dynamic, const ElfW(Rela) & rel, unsigned offset_in_section, bool addend_used)
             : m_dynamic(dynamic)
             , m_rel(rel)
             , m_offset_in_section(offset_in_section)
+            , m_addend_used(addend_used)
         {
         }
 
-        ~Relocation() { }
+        ~Relocation() = default;
 
         unsigned offset_in_section() const { return m_offset_in_section; }
         unsigned offset() const { return m_rel.r_offset; }
-        unsigned type() const { return ELF32_R_TYPE(m_rel.r_info); }
+#if ARCH(I386)
+        unsigned type() const
+        {
+            return ELF32_R_TYPE(m_rel.r_info);
+        }
         unsigned symbol_index() const { return ELF32_R_SYM(m_rel.r_info); }
-        Symbol symbol() const { return m_dynamic.symbol(symbol_index()); }
+#else
+        unsigned type() const
+        {
+            return ELF64_R_TYPE(m_rel.r_info);
+        }
+        unsigned symbol_index() const { return ELF64_R_SYM(m_rel.r_info); }
+#endif
+        unsigned addend() const
+        {
+            VERIFY(m_addend_used);
+            return m_rel.r_addend;
+        }
+        bool addend_used() const { return m_addend_used; }
+
+        Symbol symbol() const
+        {
+            return m_dynamic.symbol(symbol_index());
+        }
         VirtualAddress address() const
         {
             if (m_dynamic.elf_is_dynamic())
                 return m_dynamic.base_address().offset(offset());
             return VirtualAddress { offset() };
         }
+        [[nodiscard]] DynamicObject const& dynamic_object() const { return m_dynamic; }
 
     private:
         const DynamicObject& m_dynamic;
-        const ElfW(Rel) & m_rel;
+        const ElfW(Rela) & m_rel;
         const unsigned m_offset_in_section;
+        const bool m_addend_used;
     };
 
     enum class HashType {
@@ -169,7 +212,7 @@ public:
 
     class HashSymbol {
     public:
-        HashSymbol(const StringView& name)
+        HashSymbol(StringView name)
             : m_name(name)
         {
         }
@@ -200,8 +243,8 @@ public:
         }
 
     private:
-        Optional<Symbol> lookup_sysv_symbol(const StringView& name, u32 hash_value) const;
-        Optional<Symbol> lookup_gnu_symbol(const StringView& name, u32 hash) const;
+        Optional<Symbol> lookup_sysv_symbol(StringView name, u32 hash_value) const;
+        Optional<Symbol> lookup_gnu_symbol(StringView name, u32 hash) const;
 
         HashType m_hash_type {};
     };
@@ -229,6 +272,7 @@ public:
 
     RelocationSection relocation_section() const;
     RelocationSection plt_relocation_section() const;
+    Section relr_relocation_section() const;
 
     bool should_process_origin() const { return m_dt_flags & DF_ORIGIN; }
     bool requires_symbolic_symbol_resolution() const { return m_dt_flags & DF_SYMBOLIC; }
@@ -269,6 +313,9 @@ public:
     template<VoidFunction<Symbol&> F>
     void for_each_symbol(F) const;
 
+    template<typename F>
+    void for_each_relr_relocation(F) const;
+
     struct SymbolLookupResult {
         FlatPtr value { 0 };
         size_t size { 0 };
@@ -277,7 +324,7 @@ public:
         const ELF::DynamicObject* dynamic_object { nullptr }; // The object in which the symbol is defined
     };
 
-    Optional<SymbolLookupResult> lookup_symbol(const StringView& name) const;
+    Optional<SymbolLookupResult> lookup_symbol(StringView name) const;
     Optional<SymbolLookupResult> lookup_symbol(const HashSymbol& symbol) const;
 
     // Will be called from _fixup_plt_entry, as part of the PLT trampoline
@@ -285,7 +332,7 @@ public:
 
     bool elf_is_dynamic() const { return m_is_elf_dynamic; }
 
-    void* symbol_for_name(const StringView& name);
+    void* symbol_for_name(StringView name);
 
 private:
     explicit DynamicObject(const String& filename, VirtualAddress base_address, VirtualAddress dynamic_section_address);
@@ -329,7 +376,11 @@ private:
     size_t m_number_of_relocations { 0 };
     size_t m_size_of_relocation_entry { 0 };
     size_t m_size_of_relocation_table { 0 };
+    bool m_addend_used { false };
     FlatPtr m_relocation_table_offset { 0 };
+    size_t m_size_of_relr_relocations_entry { 0 };
+    size_t m_size_of_relr_relocation_table { 0 };
+    FlatPtr m_relr_relocation_table_offset { 0 };
     bool m_is_elf_dynamic { false };
 
     // DT_FLAGS
@@ -366,6 +417,35 @@ inline void DynamicObject::RelocationSection::for_each_relocation(F func) const
         func(reloc);
         return IterationDecision::Continue;
     });
+}
+
+template<typename F>
+inline void DynamicObject::for_each_relr_relocation(F f) const
+{
+    auto section = relr_relocation_section();
+    if (section.entry_count() == 0)
+        return;
+
+    VERIFY(section.entry_size() == sizeof(FlatPtr));
+    VERIFY(section.size() >= section.entry_size() * section.entry_count());
+
+    auto* entries = reinterpret_cast<ElfW(Relr)*>(section.address().get());
+    auto base = base_address().get();
+    FlatPtr patch_addr = 0;
+    for (unsigned i = 0; i < section.entry_count(); ++i) {
+        if ((entries[i] & 1u) == 0) {
+            patch_addr = base + entries[i];
+            f(patch_addr);
+            patch_addr += sizeof(FlatPtr);
+        } else {
+            unsigned j = 0;
+            for (auto bitmap = entries[i]; (bitmap >>= 1u) != 0; ++j)
+                if (bitmap & 1u)
+                    f(patch_addr + j * sizeof(FlatPtr));
+
+            patch_addr += (8 * sizeof(FlatPtr) - 1) * sizeof(FlatPtr);
+        }
+    }
 }
 
 template<VoidFunction<DynamicObject::Symbol&> F>

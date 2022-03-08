@@ -14,7 +14,7 @@ namespace GUI {
     __TOKEN(Unknown)        \
     __TOKEN(Comment)        \
     __TOKEN(Whitespace)     \
-    __TOKEN(section)        \
+    __TOKEN(Section)        \
     __TOKEN(LeftBracket)    \
     __TOKEN(RightBracket)   \
     __TOKEN(Name)           \
@@ -52,7 +52,7 @@ struct IniToken {
 
 class IniLexer {
 public:
-    IniLexer(StringView const&);
+    IniLexer(StringView);
 
     Vector<IniToken> lex();
 
@@ -66,3 +66,5 @@ private:
 };
 
 }
+
+#undef FOR_EACH_TOKEN_TYPE

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,15 +13,7 @@
 #include <LibGfx/Path.h>
 #include <LibGfx/SystemTheme.h>
 
-GraphWidget::GraphWidget()
-{
-}
-
-GraphWidget::~GraphWidget()
-{
-}
-
-void GraphWidget::add_value(Vector<int, 1>&& value)
+void GraphWidget::add_value(Vector<u64, 1>&& value)
 {
     m_values.enqueue(move(value));
     update();

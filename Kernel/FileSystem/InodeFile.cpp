@@ -5,14 +5,14 @@
  */
 
 #include <AK/StringView.h>
-#include <Kernel/FileSystem/FileDescription.h>
+#include <Kernel/API/POSIX/errno.h>
 #include <Kernel/FileSystem/Inode.h>
 #include <Kernel/FileSystem/InodeFile.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/FileSystem/VirtualFileSystem.h>
+#include <Kernel/Memory/PrivateInodeVMObject.h>
+#include <Kernel/Memory/SharedInodeVMObject.h>
 #include <Kernel/Process.h>
-#include <Kernel/VM/PrivateInodeVMObject.h>
-#include <Kernel/VM/SharedInodeVMObject.h>
-#include <LibC/errno_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 
 namespace Kernel {
@@ -26,15 +26,12 @@ InodeFile::~InodeFile()
 {
 }
 
-KResultOr<size_t> InodeFile::read(FileDescription& description, u64 offset, UserOrKernelBuffer& buffer, size_t count)
+ErrorOr<size_t> InodeFile::read(OpenFileDescription& description, u64 offset, UserOrKernelBuffer& buffer, size_t count)
 {
     if (Checked<off_t>::addition_would_overflow(offset, count))
         return EOVERFLOW;
 
-    auto result = m_inode->read_bytes(offset, count, buffer, &description);
-    if (result.is_error())
-        return result.error();
-    auto nread = result.value();
+    auto nread = TRY(m_inode->read_bytes(offset, count, buffer, &description));
     if (nread > 0) {
         Thread::current()->did_file_read(nread);
         evaluate_block_conditions();
@@ -42,97 +39,91 @@ KResultOr<size_t> InodeFile::read(FileDescription& description, u64 offset, User
     return nread;
 }
 
-KResultOr<size_t> InodeFile::write(FileDescription& description, u64 offset, const UserOrKernelBuffer& data, size_t count)
+ErrorOr<size_t> InodeFile::write(OpenFileDescription& description, u64 offset, const UserOrKernelBuffer& data, size_t count)
 {
     if (Checked<off_t>::addition_would_overflow(offset, count))
         return EOVERFLOW;
 
-    auto result = m_inode->write_bytes(offset, count, data, &description);
-    if (result.is_error())
-        return result.error();
-
-    auto nwritten = result.value();
+    auto nwritten = TRY(m_inode->write_bytes(offset, count, data, &description));
     if (nwritten > 0) {
         auto mtime_result = m_inode->set_mtime(kgettimeofday().to_truncated_seconds());
         Thread::current()->did_file_write(nwritten);
         evaluate_block_conditions();
         if (mtime_result.is_error())
-            return mtime_result;
+            return mtime_result.release_error();
     }
     return nwritten;
 }
 
-int InodeFile::ioctl(FileDescription& description, unsigned request, FlatPtr arg)
+ErrorOr<void> InodeFile::ioctl(OpenFileDescription& description, unsigned request, Userspace<void*> arg)
 {
-    (void)description;
-
     switch (request) {
     case FIBMAP: {
-        if (!Process::current()->is_superuser())
-            return -EPERM;
+        if (!Process::current().is_superuser())
+            return EPERM;
 
+        auto user_block_number = static_ptr_cast<int*>(arg);
         int block_number = 0;
-        if (!copy_from_user(&block_number, (int*)arg))
-            return -EFAULT;
+        TRY(copy_from_user(&block_number, user_block_number));
 
         if (block_number < 0)
-            return -EINVAL;
+            return EINVAL;
 
-        auto block_address = inode().get_block_address(block_number);
-        if (block_address.is_error())
-            return block_address.error();
-
-        if (!copy_to_user((int*)arg, &block_address.value()))
-            return -EFAULT;
-
-        return 0;
+        auto block_address = TRY(inode().get_block_address(block_number));
+        return copy_to_user(user_block_number, &block_address);
+    }
+    case FIONREAD: {
+        int remaining_bytes = inode().size() - description.offset();
+        return copy_to_user(static_ptr_cast<int*>(arg), &remaining_bytes);
     }
     default:
-        return -EINVAL;
+        return EINVAL;
     }
 }
 
-KResultOr<Region*> InodeFile::mmap(Process& process, FileDescription& description, const Range& range, u64 offset, int prot, bool shared)
+ErrorOr<Memory::Region*> InodeFile::mmap(Process& process, OpenFileDescription& description, Memory::VirtualRange const& range, u64 offset, int prot, bool shared)
 {
     // FIXME: If PROT_EXEC, check that the underlying file system isn't mounted noexec.
-    RefPtr<InodeVMObject> vmobject;
+    RefPtr<Memory::InodeVMObject> vmobject;
     if (shared)
-        vmobject = SharedInodeVMObject::create_with_inode(inode());
+        vmobject = TRY(Memory::SharedInodeVMObject::try_create_with_inode(inode()));
     else
-        vmobject = PrivateInodeVMObject::create_with_inode(inode());
-    if (!vmobject)
-        return ENOMEM;
-    return process.space().allocate_region_with_vmobject(range, vmobject.release_nonnull(), offset, description.absolute_path(), prot, shared);
+        vmobject = TRY(Memory::PrivateInodeVMObject::try_create_with_inode(inode()));
+    auto path = TRY(description.pseudo_path());
+    return process.address_space().allocate_region_with_vmobject(range, vmobject.release_nonnull(), offset, path->view(), prot, shared);
 }
 
-String InodeFile::absolute_path(const FileDescription& description) const
+ErrorOr<NonnullOwnPtr<KString>> InodeFile::pseudo_path(const OpenFileDescription&) const
 {
+    // If it has an inode, then it has a path, and therefore the caller should have been able to get a custody at some point.
     VERIFY_NOT_REACHED();
-    VERIFY(description.custody());
-    return description.absolute_path();
 }
 
-KResult InodeFile::truncate(u64 size)
+ErrorOr<void> InodeFile::truncate(u64 size)
 {
-    if (auto result = m_inode->truncate(size); result.is_error())
-        return result;
-    if (auto result = m_inode->set_mtime(kgettimeofday().to_truncated_seconds()); result.is_error())
-        return result;
-    return KSuccess;
+    TRY(m_inode->truncate(size));
+    TRY(m_inode->set_mtime(kgettimeofday().to_truncated_seconds()));
+    return {};
 }
 
-KResult InodeFile::chown(FileDescription& description, uid_t uid, gid_t gid)
+ErrorOr<void> InodeFile::sync()
 {
-    VERIFY(description.inode() == m_inode);
-    VERIFY(description.custody());
-    return VFS::the().chown(*description.custody(), uid, gid);
+    m_inode->sync();
+    return {};
 }
 
-KResult InodeFile::chmod(FileDescription& description, mode_t mode)
+ErrorOr<void> InodeFile::chown(OpenFileDescription& description, UserID uid, GroupID gid)
 {
     VERIFY(description.inode() == m_inode);
     VERIFY(description.custody());
-    return VFS::the().chmod(*description.custody(), mode);
+    return VirtualFileSystem::the().chown(*description.custody(), uid, gid);
+}
+
+ErrorOr<void> InodeFile::chmod(OpenFileDescription& description, mode_t mode)
+{
+    VERIFY(description.inode() == m_inode);
+    VERIFY(description.custody());
+    return VirtualFileSystem::the().chmod(*description.custody(), mode);
 }
 
 }

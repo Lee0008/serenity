@@ -10,9 +10,9 @@
 #include <LibWeb/DOM/Position.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/DOM/Text.h>
-#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/HTML/BrowsingContext.h>
+#include <LibWeb/Layout/InitialContainingBlock.h>
 #include <LibWeb/Layout/LayoutPosition.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <LibWeb/Page/EditEventHandler.h>
 
 namespace Web {
@@ -33,14 +33,19 @@ void EditEventHandler::handle_delete_character_after(const DOM::Position& cursor
     builder.append(text.substring_view(cursor_position.offset() + code_point_length));
     node.set_data(builder.to_string());
 
-    m_frame.did_edit({});
+    // FIXME: When nodes are removed from the DOM, the associated layout nodes become stale and still
+    //        remain in the layout tree. This has to be fixed, this just causes everything to be recomputed
+    //        which really hurts performance.
+    m_browsing_context.active_document()->force_layout();
+
+    m_browsing_context.did_edit({});
 }
 
 // This method is quite convoluted but this is necessary to make editing feel intuitive.
 void EditEventHandler::handle_delete(DOM::Range& range)
 {
-    auto* start = downcast<DOM::Text>(range.start_container());
-    auto* end = downcast<DOM::Text>(range.end_container());
+    auto* start = verify_cast<DOM::Text>(range.start_container());
+    auto* end = verify_cast<DOM::Text>(range.end_container());
 
     if (start == end) {
         StringBuilder builder;
@@ -92,15 +97,15 @@ void EditEventHandler::handle_delete(DOM::Range& range)
     // FIXME: When nodes are removed from the DOM, the associated layout nodes become stale and still
     //        remain in the layout tree. This has to be fixed, this just causes everything to be recomputed
     //        which really hurts performance.
-    m_frame.document()->force_layout();
+    m_browsing_context.active_document()->force_layout();
 
-    m_frame.did_edit({});
+    m_browsing_context.did_edit({});
 }
 
 void EditEventHandler::handle_insert(DOM::Position position, u32 code_point)
 {
     if (is<DOM::Text>(*position.node())) {
-        auto& node = downcast<DOM::Text>(*position.node());
+        auto& node = verify_cast<DOM::Text>(*position.node());
 
         StringBuilder builder;
         builder.append(node.data().substring_view(0, position.offset()));
@@ -114,8 +119,8 @@ void EditEventHandler::handle_insert(DOM::Position position, u32 code_point)
     // FIXME: When nodes are removed from the DOM, the associated layout nodes become stale and still
     //        remain in the layout tree. This has to be fixed, this just causes everything to be recomputed
     //        which really hurts performance.
-    m_frame.document()->force_layout();
+    m_browsing_context.active_document()->force_layout();
 
-    m_frame.did_edit({});
+    m_browsing_context.did_edit({});
 }
 }

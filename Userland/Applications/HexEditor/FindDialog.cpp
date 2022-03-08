@@ -1,32 +1,34 @@
 /*
- * Copyright (c) 2021, the SerenityOS developers.
+ * Copyright (c) 2021-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "FindDialog.h"
+#include <AK/Array.h>
 #include <AK/Hex.h>
 #include <AK/String.h>
-#include <AK/Vector.h>
+#include <AK/StringView.h>
 #include <Applications/HexEditor/FindDialogGML.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
-#include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/RadioButton.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/Widget.h>
 
 struct Option {
-    String title;
+    StringView title;
     OptionId opt;
     bool enabled;
     bool default_action;
 };
 
-static const Vector<Option> options = {
-    { "ASCII String", OPTION_ASCII_STRING, true, true },
-    { "Hex value", OPTION_HEX_VALUE, true, false },
+static constexpr Array<Option, 2> options = {
+    {
+        { "ASCII String", OPTION_ASCII_STRING, true, true },
+        { "Hex value", OPTION_HEX_VALUE, true, false },
+    }
 };
 
 int FindDialog::show(GUI::Window* parent_window, String& out_text, ByteBuffer& out_buffer, bool& find_all)
@@ -77,10 +79,9 @@ Result<ByteBuffer, String> FindDialog::process_input(String text_value, OptionId
     }
 
     case OPTION_HEX_VALUE: {
-        text_value.replace(" ", "", true);
-        auto decoded = decode_hex(text_value.substring_view(0, text_value.length()));
-        if (!decoded.has_value())
-            return String("Input contains invalid hex values.");
+        auto decoded = decode_hex(text_value.replace(" ", "", true));
+        if (decoded.is_error())
+            return String::formatted("Input is invalid: {}", decoded.error().string_literal());
 
         return decoded.value();
     }
@@ -149,8 +150,4 @@ FindDialog::FindDialog()
     m_cancel_button->on_click = [this](auto) {
         done(ExecResult::ExecCancel);
     };
-}
-
-FindDialog::~FindDialog()
-{
 }

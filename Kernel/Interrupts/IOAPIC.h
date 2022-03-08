@@ -7,7 +7,7 @@
 #pragma once
 
 #include <Kernel/Interrupts/IRQController.h>
-#include <Kernel/VM/TypedMapping.h>
+#include <Kernel/Memory/TypedMapping.h>
 
 namespace Kernel {
 struct [[gnu::packed]] ioapic_mmio_regs {
@@ -50,8 +50,8 @@ public:
     virtual u16 get_isr() const override;
     virtual u16 get_irr() const override;
     virtual u32 gsi_base() const override { return m_gsi_base; }
-    virtual size_t interrupt_vectors_count() const { return m_redirection_entries_count; }
-    virtual const char* model() const override { return "IOAPIC"; };
+    virtual size_t interrupt_vectors_count() const override { return m_redirection_entries_count; }
+    virtual StringView model() const override { return "IOAPIC"sv; };
     virtual IRQControllerType type() const override { return IRQControllerType::i82093AA; }
 
 private:
@@ -78,7 +78,7 @@ private:
     void isa_identity_map(int index);
 
     PhysicalAddress m_address;
-    mutable TypedMapping<ioapic_mmio_regs> m_regs;
+    mutable Memory::TypedMapping<ioapic_mmio_regs> m_regs;
     u32 m_gsi_base;
     u8 m_id;
     u8 m_version;

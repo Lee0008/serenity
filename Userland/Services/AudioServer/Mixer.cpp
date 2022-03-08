@@ -1,38 +1,46 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "Mixer.h"
+#include "AK/Format.h"
 #include <AK/Array.h>
 #include <AK/MemoryStream.h>
 #include <AK/NumericLimits.h>
-#include <AudioServer/ClientConnection.h>
+#include <AudioServer/ConnectionFromClient.h>
 #include <AudioServer/Mixer.h>
+#include <LibCore/ConfigFile.h>
+#include <LibCore/Timer.h>
 #include <pthread.h>
-#include <strings.h>
+#include <stdlib.h>
+#include <sys/ioctl.h>
 
 namespace AudioServer {
 
-Mixer::Mixer()
-    : m_device(Core::File::construct("/dev/audio", this))
+u8 Mixer::m_zero_filled_buffer[4096];
+
+Mixer::Mixer(NonnullRefPtr<Core::ConfigFile> config)
+    // FIXME: Allow AudioServer to use other audio channels as well
+    : m_device(Core::File::construct("/dev/audio/0", this))
     , m_sound_thread(Threading::Thread::construct(
           [this] {
               mix();
               return 0;
           },
           "AudioServer[mixer]"))
+    , m_config(move(config))
 {
     if (!m_device->open(Core::OpenMode::WriteOnly)) {
         dbgln("Can't open audio device: {}", m_device->error_string());
         return;
     }
 
-    pthread_mutex_init(&m_pending_mutex, nullptr);
-    pthread_cond_init(&m_pending_cond, nullptr);
+    m_muted = m_config->read_bool_entry("Master", "Mute", false);
+    m_main_volume = static_cast<double>(m_config->read_num_entry("Master", "Volume", 100)) / 100.0;
 
-    m_zero_filled_buffer = (u8*)malloc(4096);
-    bzero(m_zero_filled_buffer, 4096);
     m_sound_thread->start();
 }
 
@@ -40,14 +48,17 @@ Mixer::~Mixer()
 {
 }
 
-NonnullRefPtr<BufferQueue> Mixer::create_queue(ClientConnection& client)
+NonnullRefPtr<ClientAudioStream> Mixer::create_queue(ConnectionFromClient& client)
 {
-    auto queue = adopt_ref(*new BufferQueue(client));
-    pthread_mutex_lock(&m_pending_mutex);
+    auto queue = adopt_ref(*new ClientAudioStream(client));
+    m_pending_mutex.lock();
+
     m_pending_mixing.append(*queue);
-    m_added_queue = true;
-    pthread_cond_signal(&m_pending_cond);
-    pthread_mutex_unlock(&m_pending_mutex);
+
+    m_pending_mutex.unlock();
+    // Signal the mixer thread to start back up, in case nobody was connected before.
+    m_mixing_necessary.signal();
+
     return queue;
 }
 
@@ -56,37 +67,47 @@ void Mixer::mix()
     decltype(m_pending_mixing) active_mix_queues;
 
     for (;;) {
-        if (active_mix_queues.is_empty() || m_added_queue) {
-            pthread_mutex_lock(&m_pending_mutex);
-            pthread_cond_wait(&m_pending_cond, &m_pending_mutex);
+        m_pending_mutex.lock();
+        // While we have nothing to mix, wait on the condition.
+        m_mixing_necessary.wait_while([this, &active_mix_queues]() { return m_pending_mixing.is_empty() && active_mix_queues.is_empty(); });
+        if (!m_pending_mixing.is_empty()) {
             active_mix_queues.extend(move(m_pending_mixing));
-            pthread_mutex_unlock(&m_pending_mutex);
-            m_added_queue = false;
+            m_pending_mixing.clear();
         }
+        m_pending_mutex.unlock();
 
         active_mix_queues.remove_all_matching([&](auto& entry) { return !entry->client(); });
 
-        Audio::Frame mixed_buffer[1024];
-        auto mixed_buffer_length = (int)(sizeof(mixed_buffer) / sizeof(Audio::Frame));
+        Audio::Sample mixed_buffer[1024];
+        auto mixed_buffer_length = (int)(sizeof(mixed_buffer) / sizeof(Audio::Sample));
 
+        m_main_volume.advance_time();
+
+        int active_queues = 0;
         // Mix the buffers together into the output
         for (auto& queue : active_mix_queues) {
             if (!queue->client()) {
                 queue->clear();
                 continue;
             }
+            ++active_queues;
+            queue->volume().advance_time();
 
             for (int i = 0; i < mixed_buffer_length; ++i) {
                 auto& mixed_sample = mixed_buffer[i];
-                Audio::Frame sample;
+                Audio::Sample sample;
                 if (!queue->get_next_sample(sample))
                     break;
+                if (queue->is_muted())
+                    continue;
+                sample.log_multiply(SAMPLE_HEADROOM);
+                sample.log_multiply(queue->volume());
                 mixed_sample += sample;
             }
         }
 
         if (m_muted) {
-            m_device->write(m_zero_filled_buffer, 4096);
+            m_device->write(m_zero_filled_buffer, sizeof(m_zero_filled_buffer));
         } else {
             Array<u8, 4096> buffer;
             OutputMemoryStream stream { buffer };
@@ -94,7 +115,11 @@ void Mixer::mix()
             for (int i = 0; i < mixed_buffer_length; ++i) {
                 auto& mixed_sample = mixed_buffer[i];
 
-                mixed_sample.scale(m_main_volume);
+                // Even though it's not realistic, the user expects no sound at 0%.
+                if (m_main_volume < 0.01)
+                    mixed_sample = Audio::Sample { 0 };
+                else
+                    mixed_sample.log_multiply(m_main_volume);
                 mixed_sample.clip();
 
                 LittleEndian<i16> out_sample;
@@ -112,16 +137,20 @@ void Mixer::mix()
     }
 }
 
-void Mixer::set_main_volume(int volume)
+void Mixer::set_main_volume(double volume)
 {
     if (volume < 0)
         m_main_volume = 0;
-    else if (volume > 200)
-        m_main_volume = 200;
+    else if (volume > 2)
+        m_main_volume = 2;
     else
         m_main_volume = volume;
-    ClientConnection::for_each([&](ClientConnection& client) {
-        client.did_change_main_mix_volume({}, m_main_volume);
+
+    m_config->write_num_entry("Master", "Volume", static_cast<int>(volume * 100));
+    request_setting_sync();
+
+    ConnectionFromClient::for_each([&](ConnectionFromClient& client) {
+        client.did_change_main_mix_volume({}, main_volume());
     });
 }
 
@@ -130,17 +159,52 @@ void Mixer::set_muted(bool muted)
     if (m_muted == muted)
         return;
     m_muted = muted;
-    ClientConnection::for_each([muted](ClientConnection& client) {
-        client.did_change_muted_state({}, muted);
+
+    m_config->write_bool_entry("Master", "Mute", m_muted);
+    request_setting_sync();
+
+    ConnectionFromClient::for_each([muted](ConnectionFromClient& client) {
+        client.did_change_main_mix_muted_state({}, muted);
     });
 }
 
-BufferQueue::BufferQueue(ClientConnection& client)
+int Mixer::audiodevice_set_sample_rate(u32 sample_rate)
+{
+    int code = ioctl(m_device->fd(), SOUNDCARD_IOCTL_SET_SAMPLE_RATE, sample_rate);
+    if (code != 0)
+        dbgln("Error while setting sample rate to {}: ioctl error: {}", sample_rate, strerror(errno));
+    return code;
+}
+
+u32 Mixer::audiodevice_get_sample_rate() const
+{
+    u32 sample_rate = 0;
+    int code = ioctl(m_device->fd(), SOUNDCARD_IOCTL_GET_SAMPLE_RATE, &sample_rate);
+    if (code != 0)
+        dbgln("Error while getting sample rate: ioctl error: {}", strerror(errno));
+    return sample_rate;
+}
+
+void Mixer::request_setting_sync()
+{
+    if (m_config_write_timer.is_null() || !m_config_write_timer->is_active()) {
+        m_config_write_timer = Core::Timer::create_single_shot(
+            AUDIO_CONFIG_WRITE_INTERVAL,
+            [this] {
+                if (auto result = m_config->sync(); result.is_error())
+                    dbgln("Failed to write audio mixer config: {}", result.error());
+            },
+            this);
+        m_config_write_timer->start();
+    }
+}
+
+ClientAudioStream::ClientAudioStream(ConnectionFromClient& client)
     : m_client(client)
 {
 }
 
-void BufferQueue::enqueue(NonnullRefPtr<Audio::Buffer>&& buffer)
+void ClientAudioStream::enqueue(NonnullRefPtr<Audio::Buffer>&& buffer)
 {
     m_remaining_samples += buffer->sample_count();
     m_queue.enqueue(move(buffer));

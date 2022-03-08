@@ -13,7 +13,6 @@
 #include <LibIPC/Decoder.h>
 #include <LibIPC/Encoder.h>
 #include <ctype.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 namespace Gfx {
@@ -28,9 +27,9 @@ String Color::to_string_without_alpha() const
     return String::formatted("#{:02x}{:02x}{:02x}", red(), green(), blue());
 }
 
-static Optional<Color> parse_rgb_color(const StringView& string)
+static Optional<Color> parse_rgb_color(StringView string)
 {
-    VERIFY(string.starts_with("rgb("));
+    VERIFY(string.starts_with("rgb(", CaseSensitivity::CaseInsensitive));
     VERIFY(string.ends_with(")"));
 
     auto substring = string.substring_view(4, string.length() - 5);
@@ -49,9 +48,9 @@ static Optional<Color> parse_rgb_color(const StringView& string)
     return Color(r, g, b);
 }
 
-static Optional<Color> parse_rgba_color(const StringView& string)
+static Optional<Color> parse_rgba_color(StringView string)
 {
-    VERIFY(string.starts_with("rgba("));
+    VERIFY(string.starts_with("rgba(", CaseSensitivity::CaseInsensitive));
     VERIFY(string.ends_with(")"));
 
     auto substring = string.substring_view(5, string.length() - 6);
@@ -73,18 +72,18 @@ static Optional<Color> parse_rgba_color(const StringView& string)
     return Color(r, g, b, a);
 }
 
-Optional<Color> Color::from_string(const StringView& string)
+Optional<Color> Color::from_string(StringView string)
 {
     if (string.is_empty())
         return {};
 
     struct ColorAndWebName {
-        constexpr ColorAndWebName(RGBA32 c, const char* n)
+        constexpr ColorAndWebName(ARGB32 c, char const* n)
             : color(c)
             , name(n)
         {
         }
-        RGBA32 color;
+        ARGB32 color;
         StringView name;
     };
 
@@ -245,15 +244,18 @@ Optional<Color> Color::from_string(const StringView& string)
         { 0x000000, nullptr }
     };
 
+    if (string.equals_ignoring_case("transparent"))
+        return Color::from_argb(0x00000000);
+
     for (size_t i = 0; !web_colors[i].name.is_null(); ++i) {
-        if (string == web_colors[i].name)
+        if (string.equals_ignoring_case(web_colors[i].name))
             return Color::from_rgb(web_colors[i].color);
     }
 
-    if (string.starts_with("rgb(") && string.ends_with(")"))
+    if (string.starts_with("rgb(", CaseSensitivity::CaseInsensitive) && string.ends_with(")"))
         return parse_rgb_color(string);
 
-    if (string.starts_with("rgba(") && string.ends_with(")"))
+    if (string.starts_with("rgba(", CaseSensitivity::CaseInsensitive) && string.ends_with(")"))
         return parse_rgba_color(string);
 
     if (string[0] != '#')
@@ -308,24 +310,47 @@ Optional<Color> Color::from_string(const StringView& string)
     return Color(r.value(), g.value(), b.value(), a.value());
 }
 
+Vector<Color> Color::shades(u32 steps, float max) const
+{
+    float shade = 1.f;
+    float step = max / steps;
+    Vector<Color> shades;
+    for (u32 i = 0; i < steps; i++) {
+        shade -= step;
+        shades.append(this->darkened(shade));
+    }
+    return shades;
 }
 
-bool IPC::encode(IPC::Encoder& encoder, const Color& color)
+Vector<Color> Color::tints(u32 steps, float max) const
+{
+    float shade = 1.f;
+    float step = max / steps;
+    Vector<Color> tints;
+    for (u32 i = 0; i < steps; i++) {
+        shade += step;
+        tints.append(this->lightened(shade));
+    }
+    return tints;
+}
+
+}
+
+bool IPC::encode(IPC::Encoder& encoder, Color const& color)
 {
     encoder << color.value();
     return true;
 }
 
-bool IPC::decode(IPC::Decoder& decoder, Color& color)
+ErrorOr<void> IPC::decode(IPC::Decoder& decoder, Color& color)
 {
-    u32 rgba = 0;
-    if (!decoder.decode(rgba))
-        return false;
-    color = Color::from_rgba(rgba);
-    return true;
+    u32 rgba;
+    TRY(decoder.decode(rgba));
+    color = Color::from_argb(rgba);
+    return {};
 }
 
-void AK::Formatter<Gfx::Color>::format(FormatBuilder& builder, const Gfx::Color& value)
+ErrorOr<void> AK::Formatter<Gfx::Color>::format(FormatBuilder& builder, Gfx::Color const& value)
 {
-    Formatter<StringView>::format(builder, value.to_string());
+    return Formatter<StringView>::format(builder, value.to_string());
 }

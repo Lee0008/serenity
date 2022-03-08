@@ -12,6 +12,7 @@
 #include <AK/TemporaryChange.h>
 #include <AK/Utf32View.h>
 #include <AK/Utf8View.h>
+#include <LibConfig/Client.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/MimeData.h>
 #include <LibDesktop/AppFile.h>
@@ -31,7 +32,6 @@
 #include <LibGfx/StylePainter.h>
 #include <ctype.h>
 #include <errno.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,10 +74,9 @@ void TerminalWidget::set_pty_master_fd(int fd)
     };
 }
 
-TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Core::ConfigFile> config)
+TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy)
     : m_terminal(*this)
     , m_automatic_size_policy(automatic_size_policy)
-    , m_config(move(config))
 {
     static_assert(sizeof(m_colors) == sizeof(xterm_colors));
     memcpy(m_colors, xterm_colors, sizeof(m_colors));
@@ -96,8 +95,7 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
         update();
     };
 
-    dbgln("Load config file from {}", m_config->filename());
-    m_cursor_blink_timer->set_interval(m_config->read_num_entry("Text",
+    m_cursor_blink_timer->set_interval(Config::read_i32("Terminal", "Text",
         "CursorBlinkInterval",
         500));
     m_cursor_blink_timer->on_timeout = [this] {
@@ -109,12 +107,12 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
     m_auto_scroll_timer->on_timeout = [this] {
         if (m_auto_scroll_direction != AutoScrollDirection::None) {
             int scroll_amount = m_auto_scroll_direction == AutoScrollDirection::Up ? -1 : 1;
-            m_scrollbar->set_value(m_scrollbar->value() + scroll_amount);
+            m_scrollbar->increase_slider_by(scroll_amount);
         }
     };
     m_auto_scroll_timer->start();
 
-    auto font_entry = m_config->read_entry("Text", "Font", "default");
+    auto font_entry = Config::read_string("Terminal", "Text", "Font", "default");
     if (font_entry == "default")
         set_font(Gfx::FontDatabase::default_fixed_width_font());
     else
@@ -122,14 +120,14 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
 
     m_line_height = font().glyph_height() + m_line_spacing;
 
-    m_terminal.set_size(m_config->read_num_entry("Window", "Width", 80), m_config->read_num_entry("Window", "Height", 25));
+    m_terminal.set_size(Config::read_i32("Terminal", "Window", "Width", 80), Config::read_i32("Terminal", "Window", "Height", 25));
 
-    m_copy_action = GUI::Action::create("&Copy", { Mod_Ctrl | Mod_Shift, Key_C }, Gfx::Bitmap::load_from_file("/res/icons/16x16/edit-copy.png"), [this](auto&) {
+    m_copy_action = GUI::Action::create("&Copy", { Mod_Ctrl | Mod_Shift, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         copy();
     });
     m_copy_action->set_swallow_key_event_when_disabled(true);
 
-    m_paste_action = GUI::Action::create("&Paste", { Mod_Ctrl | Mod_Shift, Key_V }, Gfx::Bitmap::load_from_file("/res/icons/16x16/paste.png"), [this](auto&) {
+    m_paste_action = GUI::Action::create("&Paste", { Mod_Ctrl | Mod_Shift, Key_V }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/paste.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         paste();
     });
     m_paste_action->set_swallow_key_event_when_disabled(true);
@@ -144,14 +142,10 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
     m_context_menu->add_separator();
     m_context_menu->add_action(clear_including_history_action());
 
-    GUI::Clipboard::the().on_change = [this](const String&) {
-        update_paste_action();
-    };
-
     update_copy_action();
     update_paste_action();
 
-    set_color_scheme(m_config->read_entry("Window", "ColorScheme", "Default"));
+    set_color_scheme(Config::read_string("Terminal", "Window", "ColorScheme", "Default"));
 }
 
 TerminalWidget::~TerminalWidget()
@@ -182,7 +176,7 @@ void TerminalWidget::set_logical_focus(bool focus)
         m_cursor_blink_state = true;
         m_cursor_blink_timer->start();
     }
-    m_auto_scroll_direction = AutoScrollDirection::None;
+    set_auto_scroll_direction(AutoScrollDirection::None);
     invalidate_cursor();
     update();
 }
@@ -221,11 +215,11 @@ void TerminalWidget::keydown_event(GUI::KeyEvent& event)
     m_cursor_blink_timer->start();
 
     if (event.key() == KeyCode::Key_PageUp && event.modifiers() == Mod_Shift) {
-        m_scrollbar->set_value(m_scrollbar->value() - m_terminal.rows());
+        m_scrollbar->decrease_slider_by(m_terminal.rows());
         return;
     }
     if (event.key() == KeyCode::Key_PageDown && event.modifiers() == Mod_Shift) {
-        m_scrollbar->set_value(m_scrollbar->value() + m_terminal.rows());
+        m_scrollbar->increase_slider_by(m_terminal.rows());
         return;
     }
     if (event.key() == KeyCode::Key_Alt) {
@@ -270,9 +264,6 @@ void TerminalWidget::paint_event(GUI::PaintEvent& event)
     auto visual_beep_active = m_visual_beep_timer->is_active();
 
     painter.add_clip_rect(event.rect());
-
-    Gfx::IntRect terminal_buffer_rect(frame_inner_rect().top_left(), { frame_inner_rect().width() - m_scrollbar->width(), frame_inner_rect().height() });
-    painter.add_clip_rect(terminal_buffer_rect);
 
     if (visual_beep_active)
         painter.clear_rect(frame_inner_rect(), terminal_color_to_rgb(VT::Color::named(VT::Color::ANSIColor::Red)));
@@ -338,6 +329,11 @@ void TerminalWidget::paint_event(GUI::PaintEvent& event)
             auto text_color = terminal_color_to_rgb(m_show_bold_text_as_bright ? text_color_before_bold_change.to_bright() : text_color_before_bold_change);
             if ((!visual_beep_active && !has_only_one_background_color) || should_reverse_fill_for_cursor_or_selection)
                 painter.clear_rect(cell_rect, terminal_color_to_rgb(should_reverse_fill_for_cursor_or_selection ? attribute.effective_foreground_color() : attribute.effective_background_color()));
+
+            if constexpr (TERMINAL_DEBUG) {
+                if (line.termination_column() == column)
+                    painter.clear_rect(cell_rect, Gfx::Color::Magenta);
+            }
 
             enum class UnderlineStyle {
                 None,
@@ -459,7 +455,7 @@ void TerminalWidget::set_window_progress(int value, int max)
     window()->set_progress((int)roundf(progress));
 }
 
-void TerminalWidget::set_window_title(const StringView& title)
+void TerminalWidget::set_window_title(StringView title)
 {
     if (!Utf8View(title).validate()) {
         dbgln("TerminalWidget: Attempted to set window title to invalid UTF-8 string");
@@ -549,6 +545,11 @@ void TerminalWidget::set_opacity(u8 new_opacity)
     update();
 }
 
+void TerminalWidget::set_show_scrollbar(bool show_scrollbar)
+{
+    m_scrollbar->set_visible(show_scrollbar);
+}
+
 bool TerminalWidget::has_selection() const
 {
     return m_selection.is_valid();
@@ -592,8 +593,9 @@ VT::Position TerminalWidget::buffer_position_at(const Gfx::IntPoint& position) c
         column = 0;
     if (row >= m_terminal.rows())
         row = m_terminal.rows() - 1;
-    if (column >= m_terminal.columns())
-        column = m_terminal.columns() - 1;
+    auto& line = m_terminal.line(row);
+    if (column >= (int)line.length())
+        column = line.length() - 1;
     row += m_scrollbar->value();
     return { row, column };
 }
@@ -649,7 +651,7 @@ static u32 to_lowercase_code_point(u32 code_point)
     return code_point;
 }
 
-VT::Range TerminalWidget::find_next(const StringView& needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
+VT::Range TerminalWidget::find_next(StringView needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
 {
     if (needle.is_empty())
         return {};
@@ -681,7 +683,7 @@ VT::Range TerminalWidget::find_next(const StringView& needle, const VT::Position
     return {};
 }
 
-VT::Range TerminalWidget::find_previous(const StringView& needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
+VT::Range TerminalWidget::find_previous(StringView needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
 {
     if (needle.is_empty())
         return {};
@@ -715,7 +717,7 @@ VT::Range TerminalWidget::find_previous(const StringView& needle, const VT::Posi
 
 void TerminalWidget::doubleclick_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         auto attribute = m_terminal.attribute_at(buffer_position_at(event.position()));
         if (!attribute.href_id.is_null()) {
             dbgln("Open hyperlinked URL: '{}'", attribute.href);
@@ -736,7 +738,7 @@ void TerminalWidget::doubleclick_event(GUI::MouseEvent& event)
             start_column = column;
         }
 
-        for (int column = position.column(); column < m_terminal.columns() && (line.code_point(column) == ' ') == want_whitespace; ++column) {
+        for (int column = position.column(); column < (int)line.length() && (line.code_point(column) == ' ') == want_whitespace; ++column) {
             end_column = column;
         }
 
@@ -752,13 +754,12 @@ void TerminalWidget::paste()
     if (m_ptm_fd == -1)
         return;
 
-    auto mime_type = GUI::Clipboard::the().mime_type();
+    auto [data, mime_type, _] = GUI::Clipboard::the().fetch_data_and_type();
     if (!mime_type.starts_with("text/"))
         return;
-    auto text = GUI::Clipboard::the().data();
-    if (text.is_empty())
+    if (data.is_empty())
         return;
-    send_non_user_input(text);
+    send_non_user_input(data);
 }
 
 void TerminalWidget::copy()
@@ -769,22 +770,27 @@ void TerminalWidget::copy()
 
 void TerminalWidget::mouseup_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         if (!m_active_href_id.is_null()) {
             m_active_href = {};
             m_active_href_id = {};
             update();
         }
-        m_auto_scroll_direction = AutoScrollDirection::None;
+
+        if (m_triple_click_timer.is_valid())
+            m_triple_click_timer.reset();
+
+        set_auto_scroll_direction(AutoScrollDirection::None);
     }
 }
 
 void TerminalWidget::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         m_left_mousedown_position = event.position();
+        m_left_mousedown_position_buffer = buffer_position_at(m_left_mousedown_position);
 
-        auto attribute = m_terminal.attribute_at(buffer_position_at(event.position()));
+        auto attribute = m_terminal.attribute_at(m_left_mousedown_position_buffer);
         if (!(event.modifiers() & Mod_Shift) && !attribute.href.is_empty()) {
             m_active_href = attribute.href;
             m_active_href_id = attribute.href_id;
@@ -798,10 +804,9 @@ void TerminalWidget::mousedown_event(GUI::MouseEvent& event)
             int start_column = 0;
             int end_column = m_terminal.columns() - 1;
 
-            auto position = buffer_position_at(event.position());
-            m_selection.set({ position.row(), start_column }, { position.row(), end_column });
+            m_selection.set({ m_left_mousedown_position_buffer.row(), start_column }, { m_left_mousedown_position_buffer.row(), end_column });
         } else {
-            m_selection.set(buffer_position_at(event.position()), {});
+            m_selection.set(m_left_mousedown_position_buffer, {});
         }
         if (m_alt_key_held)
             m_rectangle_selection = true;
@@ -823,11 +828,20 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
         if (m_active_href_id.is_null() || m_active_href_id == attribute.href_id) {
             m_hovered_href_id = attribute.href_id;
             m_hovered_href = attribute.href;
+
+            auto handlers = Desktop::Launcher::get_handlers_for_url(attribute.href);
+            if (!handlers.is_empty()) {
+                auto path = URL(attribute.href).path();
+                auto name = LexicalPath::basename(path);
+                if (path == handlers[0])
+                    set_tooltip(String::formatted("Execute {}", name));
+                else
+                    set_tooltip(String::formatted("Open {} with {}", name, LexicalPath::basename(handlers[0])));
+            }
         } else {
             m_hovered_href_id = {};
             m_hovered_href = {};
         }
-        set_tooltip(m_hovered_href);
         show_or_hide_tooltip();
         if (!m_hovered_href.is_empty())
             set_override_cursor(Gfx::StandardCursor::Arrow);
@@ -836,7 +850,7 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
         update();
     }
 
-    if (!(event.buttons() & GUI::MouseButton::Left))
+    if (!(event.buttons() & GUI::MouseButton::Primary))
         return;
 
     if (!m_active_href_id.is_null()) {
@@ -850,27 +864,40 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
         auto drag_operation = GUI::DragOperation::construct();
         drag_operation->set_text(m_active_href);
         drag_operation->set_data("text/uri-list", m_active_href);
-        drag_operation->exec();
 
         m_active_href = {};
         m_active_href_id = {};
         m_hovered_href = {};
         m_hovered_href_id = {};
+        drag_operation->exec();
         update();
         return;
     }
 
     auto adjusted_position = event.position().translated(-(frame_thickness() + m_inset), -(frame_thickness() + m_inset));
     if (adjusted_position.y() < 0)
-        m_auto_scroll_direction = AutoScrollDirection::Up;
+        set_auto_scroll_direction(AutoScrollDirection::Up);
     else if (adjusted_position.y() > m_terminal.rows() * m_line_height)
-        m_auto_scroll_direction = AutoScrollDirection::Down;
+        set_auto_scroll_direction(AutoScrollDirection::Down);
     else
-        m_auto_scroll_direction = AutoScrollDirection::None;
+        set_auto_scroll_direction(AutoScrollDirection::None);
 
     VT::Position old_selection_end = m_selection.end();
-    m_selection.set_end(position);
-    if (old_selection_end != m_selection.end()) {
+    VT::Position old_selection_start = m_selection.start();
+
+    if (m_triple_click_timer.is_valid()) {
+        int start_column = 0;
+        int end_column = m_terminal.columns() - 1;
+
+        if (position.row() < m_left_mousedown_position_buffer.row())
+            m_selection.set({ position.row(), start_column }, { m_left_mousedown_position_buffer.row(), end_column });
+        else
+            m_selection.set({ m_left_mousedown_position_buffer.row(), start_column }, { position.row(), end_column });
+    } else {
+        m_selection.set_end(position);
+    }
+
+    if (old_selection_end != m_selection.end() || old_selection_start != m_selection.start()) {
         update_copy_action();
         update();
     }
@@ -891,8 +918,8 @@ void TerminalWidget::mousewheel_event(GUI::MouseEvent& event)
 {
     if (!is_scrollable())
         return;
-    m_auto_scroll_direction = AutoScrollDirection::None;
-    m_scrollbar->set_value(m_scrollbar->value() + event.wheel_delta() * scroll_length());
+    set_auto_scroll_direction(AutoScrollDirection::None);
+    m_scrollbar->increase_slider_by(event.wheel_delta_y() * scroll_length());
     GUI::Frame::mousewheel_event(event);
 }
 
@@ -1058,7 +1085,7 @@ void TerminalWidget::context_menu_event(GUI::ContextMenuEvent& event)
         // Then add them to the context menu.
         // FIXME: Adapt this code when we actually support calling LaunchServer with a specific handler in mind.
         for (auto& handler : handlers) {
-            auto af = Desktop::AppFile::get_for_app(LexicalPath(handler).basename());
+            auto af = Desktop::AppFile::get_for_app(LexicalPath::basename(handler));
             if (!af->is_valid())
                 continue;
             auto action = GUI::Action::create(String::formatted("&Open in {}", af->name()), af->icon().bitmap_for_size(16), [this, handler](auto&) {
@@ -1078,7 +1105,7 @@ void TerminalWidget::context_menu_event(GUI::ContextMenuEvent& event)
             // file://courage/home/anon/something -> /home/anon/something
             auto path = URL(m_context_menu_href).path();
             // /home/anon/something -> something
-            auto name = LexicalPath(path).basename();
+            auto name = LexicalPath::basename(path);
             GUI::Clipboard::the().set_plain_text(name);
         }));
         m_context_menu_for_hyperlink->add_separator();
@@ -1091,11 +1118,7 @@ void TerminalWidget::context_menu_event(GUI::ContextMenuEvent& event)
 
 void TerminalWidget::drop_event(GUI::DropEvent& event)
 {
-    if (event.mime_data().has_text()) {
-        event.accept();
-        auto text = event.mime_data().text();
-        send_non_user_input(text.bytes());
-    } else if (event.mime_data().has_urls()) {
+    if (event.mime_data().has_urls()) {
         event.accept();
         auto urls = event.mime_data().urls();
         bool first = true;
@@ -1110,6 +1133,10 @@ void TerminalWidget::drop_event(GUI::DropEvent& event)
 
             first = false;
         }
+    } else if (event.mime_data().has_text()) {
+        event.accept();
+        auto text = event.mime_data().text();
+        send_non_user_input(text.bytes());
     }
 }
 
@@ -1143,10 +1170,11 @@ void TerminalWidget::update_copy_action()
 
 void TerminalWidget::update_paste_action()
 {
-    m_paste_action->set_enabled(GUI::Clipboard::the().mime_type().starts_with("text/") && !GUI::Clipboard::the().data().is_empty());
+    auto [data, mime_type, _] = GUI::Clipboard::the().fetch_data_and_type();
+    m_paste_action->set_enabled(mime_type.starts_with("text/") && !data.is_empty());
 }
 
-void TerminalWidget::set_color_scheme(const StringView& name)
+void TerminalWidget::set_color_scheme(StringView name)
 {
     if (name.contains('/')) {
         dbgln("Shenanigans! Color scheme names can't contain slashes.");
@@ -1166,7 +1194,13 @@ void TerminalWidget::set_color_scheme(const StringView& name)
         "White"
     };
 
-    auto color_config = Core::ConfigFile::open(String::formatted("/res/terminal-colors/{}.ini", name));
+    auto path = String::formatted("/res/terminal-colors/{}.ini", name);
+    auto color_config_or_error = Core::ConfigFile::open(path);
+    if (color_config_or_error.is_error()) {
+        dbgln("Unable to read color scheme file '{}': {}", path, color_config_or_error.error());
+        return;
+    }
+    auto color_config = color_config_or_error.release_value();
 
     m_show_bold_text_as_bright = color_config->read_bool_entry("Options", "ShowBoldTextAsBright", true);
 
@@ -1235,7 +1269,7 @@ void TerminalWidget::set_font_and_resize_to_fit(const Gfx::Font& font)
 
 // Used for sending data that was not directly typed by the user.
 // This basically wraps the code that handles sending the escape sequence in bracketed paste mode.
-void TerminalWidget::send_non_user_input(const ReadonlyBytes& bytes)
+void TerminalWidget::send_non_user_input(ReadonlyBytes bytes)
 {
     constexpr StringView leading_control_sequence = "\e[200~";
     constexpr StringView trailing_control_sequence = "\e[201~";
@@ -1261,4 +1295,11 @@ void TerminalWidget::send_non_user_input(const ReadonlyBytes& bytes)
         VERIFY_NOT_REACHED();
     }
 }
+
+void TerminalWidget::set_auto_scroll_direction(AutoScrollDirection direction)
+{
+    m_auto_scroll_direction = direction;
+    m_auto_scroll_timer->set_active(direction != AutoScrollDirection::None);
+}
+
 }

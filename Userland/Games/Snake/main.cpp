@@ -5,7 +5,10 @@
  */
 
 #include "SnakeGame.h"
-#include <LibCore/ConfigFile.h>
+#include <AK/URL.h>
+#include <LibConfig/Client.h>
+#include <LibCore/System.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
@@ -14,66 +17,51 @@
 #include <LibGUI/Menu.h>
 #include <LibGUI/Menubar.h>
 #include <LibGUI/Window.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath wpath cpath recvfd sendfd unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath recvfd sendfd unix"));
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    if (pledge("stdio rpath wpath cpath recvfd sendfd", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    Config::pledge_domain("Snake");
 
-    auto config = Core::ConfigFile::get_for_app("Snake");
+    TRY(Desktop::Launcher::add_allowed_handler_with_only_specific_urls("/bin/Help", { URL::create_with_file_protocol("/usr/share/man/man6/Snake.md") }));
+    TRY(Desktop::Launcher::seal_allowlist());
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath recvfd sendfd"));
 
-    if (unveil(config->filename().characters(), "crw") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/tmp/portal/launch", "rw"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-snake"));
 
-    auto app_icon = GUI::Icon::default_icon("app-snake");
-
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
 
     window->set_double_buffering_enabled(false);
     window->set_title("Snake");
     window->resize(324, 344);
 
-    auto& game = window->set_main_widget<SnakeGame>();
+    auto game = TRY(window->try_set_main_widget<SnakeGame>());
 
-    auto menubar = GUI::Menubar::construct();
+    auto game_menu = TRY(window->try_add_menu("&Game"));
 
-    auto& game_menu = menubar->add_menu("&Game");
-
-    game_menu.add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
-        game.reset();
-    }));
-    game_menu.add_separator();
-    game_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
+    TRY(game_menu->try_add_action(GUI::Action::create("&New Game", { Mod_None, Key_F2 }, [&](auto&) {
+        game->reset();
+    })));
+    TRY(game_menu->try_add_separator());
+    TRY(game_menu->try_add_action(GUI::CommonActions::make_quit_action([](auto&) {
         GUI::Application::the()->quit();
-    }));
+    })));
 
-    auto& help_menu = menubar->add_menu("&Help");
-    help_menu.add_action(GUI::CommonActions::make_about_action("Snake", app_icon, window));
-
-    window->set_menubar(move(menubar));
+    auto help_menu = TRY(window->try_add_menu("&Help"));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_help_action([](auto&) {
+        Desktop::Launcher::open(URL::create_with_file_protocol("/usr/share/man/man6/Snake.md"), "/bin/Help");
+    })));
+    TRY(help_menu->try_add_action(GUI::CommonActions::make_about_action("Snake", app_icon, window)));
 
     window->show();
 

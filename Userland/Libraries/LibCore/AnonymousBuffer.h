@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/Noncopyable.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
@@ -16,7 +17,7 @@ namespace Core {
 
 class AnonymousBufferImpl final : public RefCounted<AnonymousBufferImpl> {
 public:
-    static RefPtr<AnonymousBufferImpl> create(int fd, size_t);
+    static ErrorOr<NonnullRefPtr<AnonymousBufferImpl>> create(int fd, size_t);
     ~AnonymousBufferImpl();
 
     int fd() const { return m_fd; }
@@ -34,11 +35,10 @@ private:
 
 class AnonymousBuffer {
 public:
-    static AnonymousBuffer create_with_size(size_t);
-    static AnonymousBuffer create_from_anon_fd(int fd, size_t);
+    static ErrorOr<AnonymousBuffer> create_with_size(size_t);
+    static ErrorOr<AnonymousBuffer> create_from_anon_fd(int fd, size_t);
 
     AnonymousBuffer() { }
-    ~AnonymousBuffer();
 
     bool is_valid() const { return m_impl; }
 
@@ -74,6 +74,6 @@ private:
 namespace IPC {
 
 bool encode(Encoder&, const Core::AnonymousBuffer&);
-bool decode(Decoder&, Core::AnonymousBuffer&);
+ErrorOr<void> decode(Decoder&, Core::AnonymousBuffer&);
 
 }

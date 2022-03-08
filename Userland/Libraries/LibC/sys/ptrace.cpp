@@ -10,29 +10,35 @@
 
 extern "C" {
 
-int ptrace(int request, pid_t tid, void* addr, int data)
+long ptrace(int request, pid_t tid, void* addr, void* data)
 {
+    if (request == PT_PEEKBUF) {
+        // PT_PEEKBUF cannot easily be correctly used through this function signature:
+        // The amount of data to be copied is not available.
+        // We could VERIFY() here, but to safeguard against ports that attempt to use
+        // the same number, let's claim that the Kernel just doesn't know the command.
+        // Use Core::System::ptrace_peekbuf instead.
+        return EINVAL;
+    }
+
     // PT_PEEK needs special handling since the syscall wrapper
     // returns the peeked value as an int, which can be negative because of the cast.
     // When using PT_PEEK, the user can check if an error occurred
     // by looking at errno rather than the return value.
 
-    u32 out_data;
-    Syscall::SC_ptrace_peek_params peek_params;
+    FlatPtr out_data;
     auto is_peek_type = request == PT_PEEK || request == PT_PEEKDEBUG;
     if (is_peek_type) {
-        peek_params.address = reinterpret_cast<u32*>(addr);
-        peek_params.out_data = &out_data;
-        addr = &peek_params;
+        data = &out_data;
     }
 
     Syscall::SC_ptrace_params params {
         request,
         tid,
-        reinterpret_cast<u8*>(addr),
-        data
+        addr,
+        (FlatPtr)data
     };
-    int rc = syscall(SC_ptrace, &params);
+    long rc = syscall(SC_ptrace, &params);
 
     if (is_peek_type) {
         if (rc < 0) {
@@ -40,7 +46,7 @@ int ptrace(int request, pid_t tid, void* addr, int data)
             return -1;
         }
         errno = 0;
-        return static_cast<int>(out_data);
+        return static_cast<long>(out_data);
     }
 
     __RETURN_WITH_ERRNO(rc, rc, -1);

@@ -14,21 +14,21 @@ namespace JS::Bytecode {
 class Label {
 public:
     explicit Label(BasicBlock const& block)
-        : m_block(block)
+        : m_block(&block)
     {
     }
 
-    auto& block() const { return m_block; }
+    auto& block() const { return *m_block; }
 
 private:
-    BasicBlock const& m_block;
+    BasicBlock const* m_block { nullptr };
 };
 
 }
 
 template<>
 struct AK::Formatter<JS::Bytecode::Label> : AK::Formatter<FormatString> {
-    void format(FormatBuilder& builder, JS::Bytecode::Label const& value)
+    ErrorOr<void> format(FormatBuilder& builder, JS::Bytecode::Label const& value)
     {
         return AK::Formatter<FormatString>::format(builder, "@{}", value.block().name());
     }

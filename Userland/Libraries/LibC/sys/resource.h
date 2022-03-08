@@ -44,6 +44,8 @@ int getrusage(int who, struct rusage* usage);
 #define RLIMIT_STACK 6
 #define RLIMIT_AS 7
 
+#define RLIM_NLIMITS 8
+
 #define RLIM_INFINITY SIZE_MAX
 
 typedef size_t rlim_t;
@@ -55,5 +57,12 @@ struct rlimit {
 
 int getrlimit(int, struct rlimit*);
 int setrlimit(int, struct rlimit const*);
+
+#define PRIO_PROCESS 0
+#define PRIO_PGRP 1
+#define PRIO_USER 2
+
+int getpriority(int, id_t);
+int setpriority(int, id_t, int);
 
 __END_DECLS

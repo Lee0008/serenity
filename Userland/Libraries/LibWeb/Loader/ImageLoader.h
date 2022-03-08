@@ -16,7 +16,7 @@ class ImageLoader : public ImageResourceClient {
 public:
     ImageLoader(DOM::Element& owner_element);
 
-    void load(const URL&);
+    void load(const AK::URL&);
 
     const Gfx::Bitmap* bitmap(size_t index) const;
     size_t current_frame_index() const { return m_current_frame_index; }
@@ -35,6 +35,8 @@ public:
     Function<void()> on_animate;
 
 private:
+    void load_without_resetting_redirect_counter(AK::URL const&);
+
     // ^ImageResourceClient
     virtual void resource_did_load() override;
     virtual void resource_did_fail() override;
@@ -57,6 +59,7 @@ private:
     size_t m_loops_completed { 0 };
     LoadingState m_loading_state { LoadingState::Loading };
     NonnullRefPtr<Core::Timer> m_timer;
+    size_t m_redirects_count { 0 };
 };
 
 }

@@ -32,7 +32,7 @@ String char_for_piece(Chess::Type type)
     }
 }
 
-Chess::Type piece_for_char_promotion(const StringView& str)
+Chess::Type piece_for_char_promotion(StringView str)
 {
     String string = String(str).to_lowercase();
     if (string == "")
@@ -56,7 +56,7 @@ Color opposing_color(Color color)
     return (color == Color::White) ? Color::Black : Color::White;
 }
 
-Square::Square(const StringView& name)
+Square::Square(StringView name)
 {
     VERIFY(name.length() == 2);
     char filec = name[0];
@@ -85,7 +85,7 @@ String Square::to_algebraic() const
     return builder.build();
 }
 
-Move::Move(const StringView& long_algebraic)
+Move::Move(StringView long_algebraic)
     : from(long_algebraic.substring_view(0, 2))
     , to(long_algebraic.substring_view(2, 2))
     , promote_to(piece_for_char_promotion((long_algebraic.length() >= 5) ? long_algebraic.substring_view(4, 1) : ""))
@@ -101,7 +101,7 @@ String Move::to_long_algebraic() const
     return builder.build();
 }
 
-Move Move::from_algebraic(const StringView& algebraic, const Color turn, const Board& board)
+Move Move::from_algebraic(StringView algebraic, const Color turn, const Board& board)
 {
     String move_string = algebraic;
     Move move({ 50, 50 }, { 50, 50 });
@@ -421,6 +421,27 @@ bool Board::is_legal_no_check(const Move& move, Color color) const
         // attempted move outside of board
         return false;
 
+    // Check castling first to allow dragging king onto the rook.
+    if (piece.type == Type::King) {
+        if (color == Color::White) {
+            if ((move.to == Square("a1") || move.to == Square("c1")) && m_white_can_castle_queenside && get_piece(Square("b1")).type == Type::None && get_piece(Square("c1")).type == Type::None && get_piece(Square("d1")).type == Type::None) {
+                return true;
+            } else if ((move.to == Square("h1") || move.to == Square("g1")) && m_white_can_castle_kingside && get_piece(Square("f1")).type == Type::None && get_piece(Square("g1")).type == Type::None) {
+                return true;
+            }
+        } else {
+            if ((move.to == Square("a8") || move.to == Square("c8")) && m_black_can_castle_queenside && get_piece(Square("b8")).type == Type::None && get_piece(Square("c8")).type == Type::None && get_piece(Square("d8")).type == Type::None) {
+                return true;
+            } else if ((move.to == Square("h8") || move.to == Square("g8")) && m_black_can_castle_kingside && get_piece(Square("f8")).type == Type::None && get_piece(Square("g8")).type == Type::None) {
+                return true;
+            }
+        }
+    }
+
+    if (piece.color == get_piece(move.to).color)
+        // Attempted move to a square occupied by a piece of the same color.
+        return false;
+
     if (piece.type == Type::Pawn) {
         int dir = (color == Color::White) ? +1 : -1;
         int start_rank = (color == Color::White) ? 1 : 6;
@@ -459,7 +480,7 @@ bool Board::is_legal_no_check(const Move& move, Color color) const
     } else if (piece.type == Type::Knight) {
         int rank_delta = abs(move.to.rank - move.from.rank);
         int file_delta = abs(move.to.file - move.from.file);
-        if (get_piece(move.to).color != color && max(rank_delta, file_delta) == 2 && min(rank_delta, file_delta) == 1) {
+        if (max(rank_delta, file_delta) == 2 && min(rank_delta, file_delta) == 1) {
             return true;
         }
     } else if (piece.type == Type::Bishop) {
@@ -473,10 +494,7 @@ bool Board::is_legal_no_check(const Move& move, Color color) const
                     return false;
                 }
             }
-
-            if (get_piece(move.to).color != color) {
-                return true;
-            }
+            return true;
         }
     } else if (piece.type == Type::Rook) {
         int rank_delta = move.to.rank - move.from.rank;
@@ -489,10 +507,7 @@ bool Board::is_legal_no_check(const Move& move, Color color) const
                     return false;
                 }
             }
-
-            if (get_piece(move.to).color != color) {
-                return true;
-            }
+            return true;
         }
     } else if (piece.type == Type::Queen) {
         int rank_delta = move.to.rank - move.from.rank;
@@ -505,36 +520,13 @@ bool Board::is_legal_no_check(const Move& move, Color color) const
                     return false;
                 }
             }
-
-            if (get_piece(move.to).color != color) {
-                return true;
-            }
+            return true;
         }
     } else if (piece.type == Type::King) {
         int rank_delta = move.to.rank - move.from.rank;
         int file_delta = move.to.file - move.from.file;
         if (abs(rank_delta) <= 1 && abs(file_delta) <= 1) {
-            if (get_piece(move.to).color != color) {
-                return true;
-            }
-        }
-
-        if (color == Color::White) {
-            if ((move.to == Square("a1") || move.to == Square("c1")) && m_white_can_castle_queenside && get_piece(Square("b1")).type == Type::None && get_piece(Square("c1")).type == Type::None && get_piece(Square("d1")).type == Type::None) {
-
-                return true;
-            } else if ((move.to == Square("h1") || move.to == Square("g1")) && m_white_can_castle_kingside && get_piece(Square("f1")).type == Type::None && get_piece(Square("g1")).type == Type::None) {
-
-                return true;
-            }
-        } else {
-            if ((move.to == Square("a8") || move.to == Square("c8")) && m_black_can_castle_queenside && get_piece(Square("b8")).type == Type::None && get_piece(Square("c8")).type == Type::None && get_piece(Square("d8")).type == Type::None) {
-
-                return true;
-            } else if ((move.to == Square("h8") || move.to == Square("g8")) && m_black_can_castle_kingside && get_piece(Square("f8")).type == Type::None && get_piece(Square("g8")).type == Type::None) {
-
-                return true;
-            }
+            return true;
         }
     }
 
@@ -579,14 +571,12 @@ bool Board::apply_move(const Move& move, Color color)
 
 bool Board::apply_illegal_move(const Move& move, Color color)
 {
-    Board clone = *this;
-    clone.m_previous_states = {};
-    clone.m_moves = {};
+    auto state = Traits<Board>::hash(*this);
     auto state_count = 0;
-    if (m_previous_states.contains(clone))
-        state_count = m_previous_states.get(clone).value();
+    if (m_previous_states.contains(state))
+        state_count = m_previous_states.get(state).value();
 
-    m_previous_states.set(clone, state_count + 1);
+    m_previous_states.set(state, state_count + 1);
     m_moves.append(move);
 
     m_turn = opposing_color(color);
@@ -758,7 +748,7 @@ Board::Result Board::game_result() const
         if (m_moves_since_capture == 50 * 2)
             return Result::FiftyMoveRule;
 
-        auto repeats = m_previous_states.get(*this);
+        auto repeats = m_previous_states.get(Traits<Board>::hash(*this));
         if (repeats.has_value()) {
             if (repeats.value() == 3)
                 return Result::ThreeFoldRepetition;

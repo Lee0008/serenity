@@ -11,13 +11,24 @@
 #include <AK/StringView.h>
 #include <AK/Types.h>
 
+#ifdef KERNEL
+#    include <Kernel/KString.h>
+#else
+#    include <AK/String.h>
+#endif
+
 namespace AK {
 
 class UUID {
 public:
-    UUID();
+    enum class Endianness {
+        Mixed,
+        Little
+    };
+
+    UUID() = default;
     UUID(Array<u8, 16> uuid_buffer);
-    UUID(const StringView&);
+    UUID(StringView, Endianness endianness = Endianness::Little);
     ~UUID() = default;
 
     bool operator==(const UUID&) const;
@@ -27,12 +38,16 @@ public:
     bool operator<(const UUID&) const = delete;
     bool operator>(const UUID&) const = delete;
 
+#ifdef KERNEL
+    ErrorOr<NonnullOwnPtr<Kernel::KString>> to_string() const;
+#else
     String to_string() const;
+#endif
     bool is_zero() const;
 
 private:
-    void convert_string_view_to_uuid(const StringView&);
-    void fill_buffer(ByteBuffer);
+    void convert_string_view_to_little_endian_uuid(StringView);
+    void convert_string_view_to_mixed_endian_uuid(StringView);
 
     Array<u8, 16> m_uuid_buffer {};
 };

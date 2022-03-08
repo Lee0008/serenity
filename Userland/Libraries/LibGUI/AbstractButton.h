@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibGUI/Widget.h>
+#include <LibGfx/TextWrapping.h>
 
 namespace GUI {
 
@@ -25,7 +26,7 @@ public:
     void set_exclusive(bool b) { m_exclusive = b; }
 
     bool is_checked() const { return m_checked; }
-    void set_checked(bool);
+    void set_checked(bool, AllowCallback = AllowCallback::Yes);
 
     bool is_checkable() const { return m_checkable; }
     void set_checkable(bool);
@@ -49,9 +50,10 @@ protected:
     virtual void keyup_event(KeyEvent&) override;
     virtual void enter_event(Core::Event&) override;
     virtual void leave_event(Core::Event&) override;
+    virtual void focusout_event(GUI::FocusEvent&) override;
     virtual void change_event(Event&) override;
 
-    void paint_text(Painter&, const Gfx::IntRect&, const Gfx::Font&, Gfx::TextAlignment);
+    void paint_text(Painter&, const Gfx::IntRect&, const Gfx::Font&, Gfx::TextAlignment, Gfx::TextWrapping = Gfx::TextWrapping::DontWrap);
 
 private:
     String m_text;
@@ -59,6 +61,7 @@ private:
     bool m_checkable { false };
     bool m_hovered { false };
     bool m_being_pressed { false };
+    bool m_being_keyboard_pressed { false };
     bool m_exclusive { false };
 
     int m_auto_repeat_interval { 0 };

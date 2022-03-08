@@ -6,17 +6,18 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "VirtualConsole.h"
 #include <AK/StdLibExtras.h>
-#include <AK/String.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/CommandLine.h>
 #include <Kernel/Debug.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
+#include <Kernel/Devices/PCSpeaker.h>
 #include <Kernel/Graphics/GraphicsManagement.h>
 #include <Kernel/Heap/kmalloc.h>
-#include <Kernel/IO.h>
+#include <Kernel/Sections.h>
 #include <Kernel/StdLib.h>
 #include <Kernel/TTY/ConsoleManagement.h>
+#include <Kernel/TTY/VirtualConsole.h>
 #include <LibVT/Color.h>
 
 namespace Kernel {
@@ -103,30 +104,40 @@ void VirtualConsole::set_graphical(bool graphical)
 
 UNMAP_AFTER_INIT NonnullRefPtr<VirtualConsole> VirtualConsole::create(size_t index)
 {
-    return adopt_ref(*new VirtualConsole(index));
+    auto pts_name = MUST(KString::formatted("/dev/tty/{}", index));
+
+    auto virtual_console_or_error = DeviceManagement::try_create_device<VirtualConsole>(index, move(pts_name));
+    // FIXME: Find a way to propagate errors
+    VERIFY(!virtual_console_or_error.is_error());
+    return virtual_console_or_error.release_value();
 }
 
 UNMAP_AFTER_INIT NonnullRefPtr<VirtualConsole> VirtualConsole::create_with_preset_log(size_t index, const CircularQueue<char, 16384>& log)
 {
-    return adopt_ref(*new VirtualConsole(index, log));
+    auto virtual_console = VirtualConsole::create(index);
+    // HACK: We have to go through the TTY layer for correct newline handling.
+    // It would be nice to not have to make all these calls, but we can't get the underlying data pointer
+    // and head index. If we did that, we could reduce this to at most 2 calls.
+    for (auto ch : log) {
+        virtual_console->emit_char(ch);
+    }
+    return virtual_console;
 }
 
 UNMAP_AFTER_INIT void VirtualConsole::initialize()
 {
-    m_tty_name = String::formatted("/dev/tty{}", m_index);
     VERIFY(GraphicsManagement::the().console());
     set_size(GraphicsManagement::the().console()->max_column(), GraphicsManagement::the().console()->max_row());
     m_console_impl.set_size(GraphicsManagement::the().console()->max_column(), GraphicsManagement::the().console()->max_row());
 
     // Allocate twice of the max row * max column * sizeof(Cell) to ensure we can have some sort of history mechanism...
     auto size = GraphicsManagement::the().console()->max_column() * GraphicsManagement::the().console()->max_row() * sizeof(Cell) * 2;
-    m_cells = MM.allocate_kernel_region(page_round_up(size), "Virtual Console Cells", Region::Access::Read | Region::Access::Write, AllocationStrategy::AllocateNow);
+    m_cells = MM.allocate_kernel_region(Memory::page_round_up(size).release_value_but_fixme_should_propagate_errors(), "Virtual Console Cells", Memory::Region::Access::ReadWrite, AllocationStrategy::AllocateNow).release_value();
 
     // Add the lines, so we also ensure they will be flushed now
     for (size_t row = 0; row < rows(); row++) {
         m_lines.append({ true, 0 });
     }
-    clear();
     VERIFY(m_cells);
 }
 
@@ -140,7 +151,7 @@ void VirtualConsole::refresh_after_resolution_change()
     // Note: From now on, columns() and rows() are updated with the new settings.
 
     auto size = GraphicsManagement::the().console()->max_column() * GraphicsManagement::the().console()->max_row() * sizeof(Cell) * 2;
-    auto new_cells = MM.allocate_kernel_region(page_round_up(size), "Virtual Console Cells", Region::Access::Read | Region::Access::Write, AllocationStrategy::AllocateNow);
+    auto new_cells = MM.allocate_kernel_region(Memory::page_round_up(size).release_value_but_fixme_should_propagate_errors(), "Virtual Console Cells", Memory::Region::Access::ReadWrite, AllocationStrategy::AllocateNow).release_value();
 
     if (rows() < old_rows_count) {
         m_lines.shrink(rows());
@@ -151,19 +162,12 @@ void VirtualConsole::refresh_after_resolution_change()
     }
 
     // Note: A potential loss of displayed data occur when resolution width shrinks.
-    if (columns() < old_columns_count) {
-        for (size_t row = 0; row < rows(); row++) {
-            auto& line = m_lines[row];
-            memcpy(new_cells->vaddr().offset((row)*columns() * sizeof(Cell)).as_ptr(), m_cells->vaddr().offset((row) * (old_columns_count) * sizeof(Cell)).as_ptr(), columns() * sizeof(Cell));
-            line.dirty = true;
-        }
-    } else {
-        // Handle Growth of resolution
-        for (size_t row = 0; row < rows(); row++) {
-            auto& line = m_lines[row];
-            memcpy(new_cells->vaddr().offset((row)*columns() * sizeof(Cell)).as_ptr(), m_cells->vaddr().offset((row) * (old_columns_count) * sizeof(Cell)).as_ptr(), old_columns_count * sizeof(Cell));
-            line.dirty = true;
-        }
+    auto common_rows_count = min(old_rows_count, rows());
+    auto common_columns_count = min(old_columns_count, columns());
+    for (size_t row = 0; row < common_rows_count; row++) {
+        auto& line = m_lines[row];
+        memcpy(new_cells->vaddr().offset(row * columns() * sizeof(Cell)).as_ptr(), m_cells->vaddr().offset(row * old_columns_count * sizeof(Cell)).as_ptr(), common_columns_count * sizeof(Cell));
+        line.dirty = true;
     }
 
     // Update the new cells Region
@@ -172,26 +176,13 @@ void VirtualConsole::refresh_after_resolution_change()
     flush_dirty_lines();
 }
 
-UNMAP_AFTER_INIT VirtualConsole::VirtualConsole(const unsigned index)
+UNMAP_AFTER_INIT VirtualConsole::VirtualConsole(const unsigned index, NonnullOwnPtr<KString> tty_name)
     : TTY(4, index)
     , m_index(index)
+    , m_tty_name(move(tty_name))
     , m_console_impl(*this)
 {
     initialize();
-}
-
-UNMAP_AFTER_INIT VirtualConsole::VirtualConsole(const unsigned index, const CircularQueue<char, 16384>& log)
-    : TTY(4, index)
-    , m_index(index)
-    , m_console_impl(*this)
-{
-    initialize();
-    // HACK: We have to go through the TTY layer for correct newline handling.
-    // It would be nice to not have to make all these calls, but we can't get the underlying data pointer
-    // and head index. If we did that, we could reduce this to at most 2 calls.
-    for (auto ch : log) {
-        emit_char(ch);
-    }
 }
 
 UNMAP_AFTER_INIT VirtualConsole::~VirtualConsole()
@@ -265,20 +256,17 @@ void VirtualConsole::on_key_pressed(KeyEvent event)
     });
 }
 
-ssize_t VirtualConsole::on_tty_write(const UserOrKernelBuffer& data, ssize_t size)
+ErrorOr<size_t> VirtualConsole::on_tty_write(const UserOrKernelBuffer& data, size_t size)
 {
-    ScopedSpinLock global_lock(ConsoleManagement::the().tty_write_lock());
-    ScopedSpinLock lock(m_lock);
-    auto result = data.read_buffered<512>((size_t)size, [&](u8 const* buffer, size_t buffer_bytes) {
-        for (size_t i = 0; i < buffer_bytes; ++i)
-            m_console_impl.on_input(buffer[i]);
-        return buffer_bytes;
+    SpinlockLocker global_lock(ConsoleManagement::the().tty_write_lock());
+    auto result = data.read_buffered<512>(size, [&](ReadonlyBytes buffer) {
+        for (const auto& byte : buffer)
+            m_console_impl.on_input(byte);
+        return buffer.size();
     });
     if (m_active)
         flush_dirty_lines();
-    if (result.is_error())
-        return result.error();
-    return (ssize_t)result.value();
+    return result;
 }
 
 void VirtualConsole::set_active(bool active)
@@ -334,11 +322,14 @@ void VirtualConsole::flush_dirty_lines()
 
 void VirtualConsole::beep()
 {
-    // TODO
-    dbgln("Beep!1");
+    if (!kernel_command_line().is_pc_speaker_enabled())
+        return;
+    PCSpeaker::tone_on(440);
+    IO::delay(10000);
+    PCSpeaker::tone_off();
 }
 
-void VirtualConsole::set_window_title(const StringView&)
+void VirtualConsole::set_window_title(StringView)
 {
     // Do nothing.
 }
@@ -368,11 +359,6 @@ void VirtualConsole::emit(const u8* data, size_t size)
 void VirtualConsole::set_cursor_style(VT::CursorStyle)
 {
     // Do nothing
-}
-
-String VirtualConsole::device_name() const
-{
-    return String::formatted("tty{}", minor());
 }
 
 void VirtualConsole::echo(u8 ch)

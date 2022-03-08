@@ -62,13 +62,13 @@ public:
     }
 
     template<typename CallableType>
-    Function(CallableType&& callable) requires((IsFunctionObject<CallableType> && IsCallableWithArguments<CallableType, In...>))
+    Function(CallableType&& callable) requires((IsFunctionObject<CallableType> && IsCallableWithArguments<CallableType, In...> && !IsSame<RemoveCVReference<CallableType>, Function>))
     {
         init_with_callable(forward<CallableType>(callable));
     }
 
     template<typename FunctionType>
-    Function(FunctionType f) requires((IsFunctionPointer<FunctionType> && IsCallableWithArguments<RemovePointer<FunctionType>, In...>))
+    Function(FunctionType f) requires((IsFunctionPointer<FunctionType> && IsCallableWithArguments<RemovePointer<FunctionType>, In...> && !IsSame<RemoveCVReference<FunctionType>, Function>))
     {
         init_with_callable(move(f));
     }
@@ -156,6 +156,7 @@ private:
             delete this;
         }
 
+        // NOLINTNEXTLINE(readability-non-const-parameter) False positive; destination is used in a placement new expression
         void init_and_swap(u8* destination, size_t size) final override
         {
             VERIFY(size >= sizeof(CallableWrapper));
@@ -189,6 +190,7 @@ private:
     void clear(bool may_defer = true)
     {
         bool called_from_inside_function = m_call_nesting_level > 0;
+        // NOTE: This VERIFY could fail because a Function is destroyed from within itself.
         VERIFY(may_defer || !called_from_inside_function);
         if (called_from_inside_function && may_defer) {
             m_deferred_clear = true;

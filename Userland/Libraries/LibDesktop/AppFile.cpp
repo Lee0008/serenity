@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021, Spencer Dixon <spencercdixon@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,22 +9,23 @@
 #include <AK/Vector.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/DirIterator.h>
+#include <LibCore/Process.h>
 #include <LibDesktop/AppFile.h>
 
 namespace Desktop {
 
-NonnullRefPtr<AppFile> AppFile::get_for_app(const StringView& app_name)
+NonnullRefPtr<AppFile> AppFile::get_for_app(StringView app_name)
 {
     auto path = String::formatted("{}/{}.af", APP_FILES_DIRECTORY, app_name);
     return open(path);
 }
 
-NonnullRefPtr<AppFile> AppFile::open(const StringView& path)
+NonnullRefPtr<AppFile> AppFile::open(StringView path)
 {
     return adopt_ref(*new AppFile(path));
 }
 
-void AppFile::for_each(Function<void(NonnullRefPtr<AppFile>)> callback, const StringView& directory)
+void AppFile::for_each(Function<void(NonnullRefPtr<AppFile>)> callback, StringView directory)
 {
     Core::DirIterator di(directory, Core::DirIterator::SkipDots);
     if (di.has_error())
@@ -40,8 +42,8 @@ void AppFile::for_each(Function<void(NonnullRefPtr<AppFile>)> callback, const St
     }
 }
 
-AppFile::AppFile(const StringView& path)
-    : m_config(Core::ConfigFile::open(path))
+AppFile::AppFile(StringView path)
+    : m_config(Core::ConfigFile::open(path).release_value_but_fixme_should_propagate_errors())
     , m_valid(validate())
 {
 }
@@ -73,9 +75,34 @@ String AppFile::executable() const
     return executable;
 }
 
+String AppFile::description() const
+{
+    return m_config->read_entry("App", "Description").trim_whitespace();
+}
+
 String AppFile::category() const
 {
     return m_config->read_entry("App", "Category").trim_whitespace();
+}
+
+String AppFile::icon_path() const
+{
+    return m_config->read_entry("App", "IconPath").trim_whitespace();
+}
+
+GUI::Icon AppFile::icon() const
+{
+    auto override_icon = icon_path();
+    // FIXME: support pointing to actual .ico files
+    if (!override_icon.is_empty())
+        return GUI::FileIconProvider::icon_for_path(override_icon);
+
+    return GUI::FileIconProvider::icon_for_path(executable());
+}
+
+bool AppFile::run_in_terminal() const
+{
+    return m_config->read_bool_entry("App", "RunInTerminal", false);
 }
 
 Vector<String> AppFile::launcher_file_types() const
@@ -98,6 +125,18 @@ Vector<String> AppFile::launcher_protocols() const
             protocols.append(entry);
     }
     return protocols;
+}
+
+bool AppFile::spawn() const
+{
+    if (!is_valid())
+        return false;
+
+    auto pid = Core::Process::spawn(executable());
+    if (pid < 0)
+        return false;
+
+    return true;
 }
 
 }

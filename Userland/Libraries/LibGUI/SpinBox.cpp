@@ -33,12 +33,14 @@ SpinBox::SpinBox()
     };
 
     m_increment_button = add<Button>();
-    m_increment_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/upward-triangle.png"));
+    m_increment_button->set_button_style(Gfx::ButtonStyle::ThickCap);
+    m_increment_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/upward-triangle.png").release_value_but_fixme_should_propagate_errors());
     m_increment_button->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_increment_button->on_click = [this](auto) { set_value(m_value + 1); };
     m_increment_button->set_auto_repeat_interval(150);
     m_decrement_button = add<Button>();
-    m_decrement_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/downward-triangle.png"));
+    m_decrement_button->set_button_style(Gfx::ButtonStyle::ThickCap);
+    m_decrement_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/downward-triangle.png").release_value_but_fixme_should_propagate_errors());
     m_decrement_button->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_decrement_button->on_click = [this](auto) { set_value(m_value - 1); };
     m_decrement_button->set_auto_repeat_interval(150);
@@ -51,7 +53,7 @@ SpinBox::~SpinBox()
 {
 }
 
-void SpinBox::set_value(int value)
+void SpinBox::set_value(int value, AllowCallback allow_callback)
 {
     value = clamp(value, m_min, m_max);
     if (m_value == value)
@@ -59,11 +61,11 @@ void SpinBox::set_value(int value)
     m_value = value;
     m_editor->set_text(String::number(value));
     update();
-    if (on_change)
+    if (on_change && allow_callback == AllowCallback::Yes)
         on_change(value);
 }
 
-void SpinBox::set_range(int min, int max, bool change)
+void SpinBox::set_range(int min, int max, AllowCallback allow_callback)
 {
     VERIFY(min <= max);
     if (m_min == min && m_max == max)
@@ -76,7 +78,7 @@ void SpinBox::set_range(int min, int max, bool change)
     m_value = clamp(m_value, m_min, m_max);
     if (m_value != old_value) {
         m_editor->set_text(String::number(m_value));
-        if (change && on_change)
+        if (on_change && allow_callback == AllowCallback::Yes)
             on_change(m_value);
     }
 
@@ -85,7 +87,7 @@ void SpinBox::set_range(int min, int max, bool change)
 
 void SpinBox::mousewheel_event(MouseEvent& event)
 {
-    auto wheel_delta = event.wheel_delta() / abs(event.wheel_delta());
+    auto wheel_delta = event.wheel_delta_y() / abs(event.wheel_delta_y());
     if (event.modifiers() == KeyModifier::Mod_Ctrl)
         wheel_delta *= 6;
     set_value(m_value - wheel_delta);

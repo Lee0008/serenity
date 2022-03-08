@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, Filiph Sandström <filiph.sandstrom@filfatstudios.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -46,6 +47,16 @@ const char* to_string(Variant::Type type)
         return "Font";
     case Variant::Type::TextAlignment:
         return "TextAlignment";
+    case Variant::Type::ColorRole:
+        return "ColorRole";
+    case Variant::Type::AlignmentRole:
+        return "AlignmentRole";
+    case Variant::Type::FlagRole:
+        return "FlagRole";
+    case Variant::Type::MetricRole:
+        return "MetricRole";
+    case Variant::Type::PathRole:
+        return "PathRole";
     }
     VERIFY_NOT_REACHED();
 }
@@ -83,6 +94,36 @@ Variant::Variant(Gfx::TextAlignment value)
     : m_type(Type::TextAlignment)
 {
     m_value.as_text_alignment = value;
+}
+
+Variant::Variant(Gfx::ColorRole value)
+    : m_type(Type::ColorRole)
+{
+    m_value.as_color_role = value;
+}
+
+Variant::Variant(Gfx::AlignmentRole value)
+    : m_type(Type::AlignmentRole)
+{
+    m_value.as_alignment_role = value;
+}
+
+Variant::Variant(Gfx::FlagRole value)
+    : m_type(Type::FlagRole)
+{
+    m_value.as_flag_role = value;
+}
+
+Variant::Variant(Gfx::MetricRole value)
+    : m_type(Type::MetricRole)
+{
+    m_value.as_metric_role = value;
+}
+
+Variant::Variant(Gfx::PathRole value)
+    : m_type(Type::PathRole)
+{
+    m_value.as_path_role = value;
 }
 
 Variant::Variant(i32 value)
@@ -131,7 +172,7 @@ Variant::Variant(const FlyString& value)
 {
 }
 
-Variant::Variant(const StringView& value)
+Variant::Variant(StringView value)
     : Variant(value.to_string())
 {
 }
@@ -320,6 +361,21 @@ void Variant::copy_from(const Variant& other)
     case Type::TextAlignment:
         m_value.as_text_alignment = other.m_value.as_text_alignment;
         break;
+    case Type::ColorRole:
+        m_value.as_color_role = other.m_value.as_color_role;
+        break;
+    case Type::AlignmentRole:
+        m_value.as_alignment_role = other.m_value.as_alignment_role;
+        break;
+    case Type::FlagRole:
+        m_value.as_flag_role = other.m_value.as_flag_role;
+        break;
+    case Type::MetricRole:
+        m_value.as_metric_role = other.m_value.as_metric_role;
+        break;
+    case Type::PathRole:
+        m_value.as_path_role = other.m_value.as_path_role;
+        break;
     case Type::Invalid:
         break;
     }
@@ -360,6 +416,16 @@ bool Variant::operator==(const Variant& other) const
         return &as_font() == &other.as_font();
     case Type::TextAlignment:
         return m_value.as_text_alignment == other.m_value.as_text_alignment;
+    case Type::ColorRole:
+        return m_value.as_color_role == other.m_value.as_color_role;
+    case Type::AlignmentRole:
+        return m_value.as_alignment_role == other.m_value.as_alignment_role;
+    case Type::FlagRole:
+        return m_value.as_flag_role == other.m_value.as_flag_role;
+    case Type::MetricRole:
+        return m_value.as_metric_role == other.m_value.as_metric_role;
+    case Type::PathRole:
+        return m_value.as_path_role == other.m_value.as_path_role;
     case Type::Invalid:
         return true;
     }
@@ -398,6 +464,11 @@ bool Variant::operator<(const Variant& other) const
     case Type::Rect:
     case Type::Font:
     case Type::TextAlignment:
+    case Type::ColorRole:
+    case Type::AlignmentRole:
+    case Type::FlagRole:
+    case Type::MetricRole:
+    case Type::PathRole:
         // FIXME: Figure out how to compare these.
         VERIFY_NOT_REACHED();
     case Type::Invalid:
@@ -454,6 +525,16 @@ String Variant::to_string() const
         }
         return "";
     }
+    case Type::ColorRole:
+        return String::formatted("Gfx::ColorRole::{}", Gfx::to_string(m_value.as_color_role));
+    case Type::AlignmentRole:
+        return String::formatted("Gfx::AlignmentRole::{}", Gfx::to_string(m_value.as_alignment_role));
+    case Type::FlagRole:
+        return String::formatted("Gfx::FlagRole::{}", Gfx::to_string(m_value.as_flag_role));
+    case Type::MetricRole:
+        return String::formatted("Gfx::MetricRole::{}", Gfx::to_string(m_value.as_metric_role));
+    case Type::PathRole:
+        return String::formatted("Gfx::PathRole::{}", Gfx::to_string(m_value.as_path_role));
     case Type::Invalid:
         return "[null]";
     }
